@@ -7,27 +7,31 @@ import {
   UnauthorizedException,
   UnprocessableEntityException,
 } from '@nestjs/common';
+import { InjectRepository } from '@nestjs/typeorm';
+import { Repository } from 'typeorm';
 import { UserInterface } from '../../models/interfaces/user.iterface';
 import { RegisterUserDto } from './dto/register-user.dto';
 import { EncryptService } from 'src/services/bcrypt.service';
 import { LoginUserDto } from './dto/login-user.dto';
 import { JwtService } from '@nestjs/jwt';
 import { JwtPayload } from '../../utils/jwt-payload.interface';
-import { UserRepository } from 'src/repositories/user.repository';
+// import { UserRepository } from 'src/repositories/user.repository';
 import { v4 } from 'uuid';
 import { ActivateUserDTO } from './dto/activate-user.dto';
 import { RequestResetPasswordDto } from './dto/request-reset-password.dto';
 import { ResetPasswordDto } from './dto/reset-password.dto';
 import { ChangePasswordDto } from './dto/change-password.dto';
+import { User } from 'src/entities/user.entity';
 @Injectable()
 export class AuthService {
   constructor(
-    private userRepository: UserRepository,
+    @InjectRepository(User) private readonly userRepository: Repository<User>,
+    // private userRepository: UserRepository,
     private encryptService: EncryptService,
     private jwtService: JwtService,
   ) {}
 
-  async createUser(registerUserDTO: RegisterUserDto): Promise<UserInterface> {
+  async createUser(registerUserDTO: RegisterUserDto): Promise<User> {
     const { name, lastName, email, password } = registerUserDTO;
     try {
       const passEncrypted = await this.encryptService.encryptedData(password);
