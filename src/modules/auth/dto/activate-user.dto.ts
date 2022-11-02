@@ -2,7 +2,7 @@ import { IsNotEmpty } from 'class-validator';
 
 export class ActivateUserDTO {
   @IsNotEmpty()
-  _id: string;
+  id: string;
 
   @IsNotEmpty()
   token: string;

@@ -15,7 +15,6 @@ import { EncryptService } from 'src/services/bcrypt.service';
 import { LoginUserDto } from './dto/login-user.dto';
 import { JwtService } from '@nestjs/jwt';
 import { JwtPayload } from '../../utils/jwt-payload.interface';
-// import { UserRepository } from 'src/repositories/user.repository';
 import { v4 } from 'uuid';
 import { ActivateUserDTO } from './dto/activate-user.dto';
 import { RequestResetPasswordDto } from './dto/request-reset-password.dto';
@@ -26,25 +25,27 @@ import { User } from 'src/entities/user.entity';
 export class AuthService {
   constructor(
     @InjectRepository(User) private readonly userRepository: Repository<User>,
-    // private userRepository: UserRepository,
     private encryptService: EncryptService,
     private jwtService: JwtService,
   ) {}
 
   async createUser(registerUserDTO: RegisterUserDto): Promise<User> {
+    console.log(registerUserDTO);
     const { name, lastName, email, password } = registerUserDTO;
     try {
       const passEncrypted = await this.encryptService.encryptedData(password);
       const activeToken = v4();
-      return await this.userRepository.createUser(
+      const userToSave = {
         name,
         lastName,
         email,
-        passEncrypted,
+        password: passEncrypted,
         activeToken,
-      );
+      }
+      return await this.userRepository.save(userToSave);
     } catch (error) {
-      if (error.code === 11000) {
+      console.error(error);
+      if (error.code === 'ER_DUP_ENTRY') {
         throw new ConflictException('This email is already registered.');
       }
       throw new InternalServerErrorException();
@@ -53,7 +54,7 @@ export class AuthService {
 
   async login(loginUserDTO: LoginUserDto): Promise<string> {
     const { email, password } = loginUserDTO;
-    const userFound = await this.userRepository.findOneByEmail(email);
+    const userFound = await this.userRepository.findOne({where: {email: email}});
     if (
       !userFound ||
       !(await this.encryptService.compareData(password, userFound.password))
@@ -64,7 +65,7 @@ export class AuthService {
       throw new UnauthorizedException('Please active your account');
     }
     const payload: JwtPayload = {
-      id: userFound._id,
+      id: userFound.id,
       email,
       isActive: userFound.isActive,
     };
@@ -78,83 +79,74 @@ export class AuthService {
       throw new NotFoundException('User not found in google');
     }
     try {
-      const userFound = await this.userRepository.findOneByEmail(email);
+      const userFound = await this.userRepository.findOne({where: {email: email}});
       if (!userFound) {
-        const pass = await this.encryptService.encryptedData(id);
-        const newUser = await this.userRepository.createUser(
-          firstName,
+        const password = await this.encryptService.encryptedData(id);
+        const newUser = await this.userRepository.save({
+          name: firstName,
           lastName,
           email,
-          pass,
-          null,
-          verified,
-        );
+          password,
+          isActive: verified,
+        });
         const payload: JwtPayload = {
-          id: newUser._id,
+          id: newUser.id,
           email,
           isActive: newUser.isActive,
         };
-        const token = this.jwtService.sign(payload);
-        return token;
+        return this.jwtService.sign(payload);
       }
       const payload: JwtPayload = {
-        id: userFound._id,
+        id: userFound.id,
         email,
         isActive: userFound.isActive,
       };
-      const token = this.jwtService.sign(payload);
-      return token;
+      return this.jwtService.sign(payload);
     } catch (error) {
-      if (error.code === 11000) {
+      if (error.code === 'ER_DUP_ENTRY') {
         throw new ConflictException('This email is already registered.');
       }
       throw new InternalServerErrorException();
     }
   }
 
-  async activateUser(activateUserDto: ActivateUserDTO): Promise<UserInterface> {
-    const { _id, token } = activateUserDto;
-    const isActive = true;
-    const user = await this.userRepository.findOneInactiveAndUpdate(
-      _id,
-      token,
-      isActive,
-    );
+  async activateUser(activateUserDto: ActivateUserDTO): Promise<User> {
+    const { id, token } = activateUserDto;
+    const user = await this.userRepository.findOne({where: {id: id, activeToken: token, isActive: false}});
     if (!user) {
       throw new UnprocessableEntityException(
         'User not found or is already active',
       );
     }
-    return user;
+    user.isActive = true;
+    return await this.userRepository.save(user);
   }
 
   async resetPasswordRequest(
     resetPasswordDto: RequestResetPasswordDto,
-  ): Promise<UserInterface> {
+  ): Promise<User> {
     const { email } = resetPasswordDto;
     const resetPasswordToken = v4();
-    const user = await this.userRepository.findOneUpdate(email, {
-      resetPasswordToken,
-    });
+    const user = await this.userRepository.findOne({where:{email:email}});
     if (!user) {
       throw new NotFoundException('User not found');
     }
-    return user;
+    user.resetPasswordToken = resetPasswordToken;
+    return await this.userRepository.save(user);
   }
 
   async resetPassword(
     resetPasswordDto: ResetPasswordDto,
-  ): Promise<UserInterface> {
+  ): Promise<User> {
     const { resetPasswordToken, password } = resetPasswordDto;
     const passEncrypted = await this.encryptService.encryptedData(password);
-    const user = await this.userRepository.findOneByResetPassToken(
-      resetPasswordToken,
-      passEncrypted,
-    );
+    const user = await this.userRepository.findOne({where: {resetPasswordToken: resetPasswordToken}});
     if (!user) {
       throw new NotFoundException('User not found');
     }
-    return user;
+    user.resetPasswordToken = null;
+    user.password = passEncrypted;
+    return await this.userRepository.save(user);
   }
 
   async changePassword(
@@ -168,10 +160,9 @@ export class AuthService {
     );
     if (checkPass) {
       const newPass = await this.encryptService.encryptedData(newPassword);
-      const userUpdate = await this.userRepository.findOneUpdate(user.email, {
-        password: newPass,
-      });
-      return userUpdate;
+      const userUpdate = await this.userRepository.findOne({where: {email: user.email}});
+      userUpdate.password =newPass;
+      return await this.userRepository.save(user);
     } else {
       throw new BadRequestException('The password does not mach');
     }

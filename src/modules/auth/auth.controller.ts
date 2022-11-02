@@ -22,6 +22,7 @@ import { ResetPasswordDto } from './dto/reset-password.dto';
 import { ChangePasswordDto } from './dto/change-password.dto';
 import { GetUser } from './get-user.decorator';
 import { AuthGuard } from '@nestjs/passport';
+import { User } from 'src/entities/user.entity';
 
 @Controller('auth')
 export class AuthController {
@@ -33,7 +34,7 @@ export class AuthController {
   @Post('/register')
   async createUser(@Res() res, @Body() registerUserDTO: RegisterUserDto) {
     const user = await this.authService.createUser(registerUserDTO);
-    const url = `${process.env.HOST}${process.env.PORT}/auth/activate-account?_id=${user._id}&token=${user.activeToken}`;
+    const url = `${process.env.HOST}${process.env.PORT}/auth/activate-account?_id=${user.id}&token=${user.activeToken}`;
     const mail = registerEmail(
       user.email,
       url,
@@ -62,7 +63,7 @@ export class AuthController {
   @Get('/activate-account')
   async activateAccount(
     @Query() activateUserDto: ActivateUserDTO,
-  ): Promise<UserInterface> {
+  ): Promise<User> {
     return this.authService.activateUser(activateUserDto);
   }
 
@@ -103,7 +104,7 @@ export class AuthController {
   @Patch('/reset-password')
   async resetPassword(
     @Body() resertPasswordDto: ResetPasswordDto,
-  ): Promise<UserInterface> {
+  ): Promise<User> {
     return this.authService.resetPassword(resertPasswordDto);
   }
 

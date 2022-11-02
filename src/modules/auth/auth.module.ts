@@ -9,7 +9,7 @@ import { EncryptService } from 'src/services/bcrypt.service';
 import { PassportModule } from '@nestjs/passport';
 import { JwtModule } from '@nestjs/jwt';
 import { JwtStrategy } from '../../utils/jwt-strategy';
-import { UserRepository } from 'src/repositories/user.repository';
+// import { UserRepository } from 'src/repositories/user.repository';
 import { SendgridService } from 'src/services/sendgrid.service';
 import { ConfigModule, ConfigService } from '@nestjs/config';
 import { GoogleStrategy } from 'src/utils/google.strategy';
@@ -33,7 +33,7 @@ import { GoogleStrategy } from 'src/utils/google.strategy';
     // MongooseModule.forFeature([{ name: 'User', schema: UserSchema }]),
   ],
   controllers: [AuthController],
-  providers: [UserRepository, AuthService, EncryptService, JwtStrategy, SendgridService, GoogleStrategy],
+  providers: [AuthService, EncryptService, JwtStrategy, SendgridService, GoogleStrategy],
   exports: [JwtStrategy, PassportModule]
 })
 export class AuthModule {}
