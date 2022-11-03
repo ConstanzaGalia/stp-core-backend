@@ -26,7 +26,7 @@ export class User {
 
   @ApiProperty()
   @Column({type: 'enum', enum: UserRole, default: UserRole.TRAINER})
-  role: string;
+  role: UserRole;
 
   @ApiProperty()
   @Column({name: 'phone_number'})

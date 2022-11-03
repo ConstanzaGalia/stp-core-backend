@@ -34,7 +34,7 @@ export class AuthController {
   @Post('/register')
   async createUser(@Res() res, @Body() registerUserDTO: RegisterUserDto) {
     const user = await this.authService.createUser(registerUserDTO);
-    const url = `${process.env.HOST}${process.env.PORT}/auth/activate-account?_id=${user.id}&token=${user.activeToken}`;
+    const url = `${process.env.HOST}${process.env.PORT}/auth/activate-account?id=${user.id}&token=${user.activeToken}`;
     const mail = registerEmail(
       user.email,
       url,
@@ -113,7 +113,7 @@ export class AuthController {
   async changePassword(
     @Res() res,
     @Body() changePasswordDto: ChangePasswordDto,
-    @GetUser() user: UserInterface,
+    @GetUser() user: User,
   ): Promise<void> {
     await this.authService.changePassword(changePasswordDto, user);
     return res.status(HttpStatus.OK).json({

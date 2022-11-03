@@ -9,7 +9,6 @@ import {
 } from '@nestjs/common';
 import { InjectRepository } from '@nestjs/typeorm';
 import { Repository } from 'typeorm';
-import { UserInterface } from '../../models/interfaces/user.iterface';
 import { RegisterUserDto } from './dto/register-user.dto';
 import { EncryptService } from 'src/services/bcrypt.service';
 import { LoginUserDto } from './dto/login-user.dto';
@@ -30,7 +29,6 @@ export class AuthService {
   ) {}
 
   async createUser(registerUserDTO: RegisterUserDto): Promise<User> {
-    console.log(registerUserDTO);
     const { name, lastName, email, password } = registerUserDTO;
     try {
       const passEncrypted = await this.encryptService.encryptedData(password);
@@ -44,8 +42,7 @@ export class AuthService {
       }
       return await this.userRepository.save(userToSave);
     } catch (error) {
-      console.error(error);
-      if (error.code === 'ER_DUP_ENTRY') {
+      if (error.code === '23505') {
         throw new ConflictException('This email is already registered.');
       }
       throw new InternalServerErrorException();
@@ -151,8 +148,8 @@ export class AuthService {
 
   async changePassword(
     changePasswordDto: ChangePasswordDto,
-    user: UserInterface,
-  ): Promise<UserInterface> {
+    user: User,
+  ): Promise<User> {
     const { oldPassword, newPassword } = changePasswordDto;
     const checkPass = await this.encryptService.compareData(
       oldPassword,
@@ -161,8 +158,8 @@ export class AuthService {
     if (checkPass) {
       const newPass = await this.encryptService.encryptedData(newPassword);
       const userUpdate = await this.userRepository.findOne({where: {email: user.email}});
-      userUpdate.password =newPass;
-      return await this.userRepository.save(user);
+      userUpdate.password = newPass;
+      return await this.userRepository.save(userUpdate);
     } else {
       throw new BadRequestException('The password does not mach');
     }
