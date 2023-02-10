@@ -1,6 +1,6 @@
 export enum UserRole {
-  STP_ADMIN = 'stpAdmin',
-  TRAINER = 'trainer',
-  SUB_TRAINER = 'subTrainer',
-  ATHLETE = 'athlete',
+  STP_ADMIN = 'STP_ADMIN',
+  TRAINER = 'TRAINER',
+  SUB_TRAINER = 'SUB_TRAINER',
+  ATHLETE = 'ATHLETE',
 }

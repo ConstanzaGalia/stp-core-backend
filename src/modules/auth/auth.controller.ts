@@ -42,9 +42,9 @@ export class AuthController {
       process.env.EMAIL_SENDGRID,
     );
     const resMail = await this.sendgridService.send(mail);
+
     res.status(HttpStatus.OK).json({
       message: `The user was created successfully and ${resMail}`,
-      user,
     });
   }
 
