@@ -16,7 +16,7 @@ export class RegisterUserDto {
 
   @IsNotEmpty()
   @IsEnum(UserRole)
-  role: string;
+  role: UserRole;
 
   @IsNotEmpty()
   @MinLength(8)

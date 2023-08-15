@@ -29,7 +29,7 @@ export class AuthService {
   ) {}
 
   async createUser(registerUserDTO: RegisterUserDto): Promise<User> {
-    const { name, lastName, email, password } = registerUserDTO;
+    const { name, lastName, email, password, role } = registerUserDTO;
     try {
       const passEncrypted = await this.encryptService.encryptedData(password);
       const activeToken = v4();
@@ -39,11 +39,12 @@ export class AuthService {
         email,
         password: passEncrypted,
         activeToken,
+        role,
       }
       return await this.userRepository.save(userToSave);
     } catch (error) {
       if (error.code === '23505') {
-        throw new ConflictException('This email is already registered.');
+        throw new ConflictException('USER_HAS_BEEN_REGISTERED');
       }
       throw new InternalServerErrorException();
     }
