@@ -4,6 +4,8 @@ import { TypeOrmModule } from '@nestjs/typeorm';
 import { ConfigModule, ConfigService } from '@nestjs/config';
 import { MongooseModule } from '@nestjs/mongoose';
 import { AuthModule } from './modules/auth/auth.module';
+import { MailingModule } from './modules/mailer/mailing.module';
+import { MailerModule } from '@nestjs-modules/mailer';
 // import { TYPEORM_CONFIG } from './common/config/typeorm-config';
 @Module({
   imports: [
@@ -22,7 +24,18 @@ import { AuthModule } from './modules/auth/auth.module';
       },
     }),
     MongooseModule.forRoot(process.env.MONGO_DB),
-    AuthModule
+    MailerModule.forRoot({
+      transport: 'smtps://user@domain.com:pass@smtp.domain.com',
+      template: {
+        dir: process.cwd() + '/templates/',
+        // adapter: new HandlebarsAdapter(),
+        options: {
+          strict: true,
+        },
+      },
+    }),
+    AuthModule,
+    MailingModule,
   ],
   controllers: [],
   providers: [],

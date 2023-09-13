@@ -13,6 +13,7 @@ import { JwtStrategy } from '../../utils/jwt-strategy';
 import { SendgridService } from 'src/services/sendgrid.service';
 import { ConfigModule, ConfigService } from '@nestjs/config';
 import { GoogleStrategy } from 'src/utils/google.strategy';
+import { MailingService } from '../mailer/mailing.service';
 
 // import { MongooseModule } from '@nestjs/mongoose';
 // import { UserSchema } from '../../models/user.model';
@@ -33,7 +34,7 @@ import { GoogleStrategy } from 'src/utils/google.strategy';
     // MongooseModule.forFeature([{ name: 'User', schema: UserSchema }]),
   ],
   controllers: [AuthController],
-  providers: [AuthService, EncryptService, JwtStrategy, SendgridService, GoogleStrategy],
+  providers: [AuthService, EncryptService, JwtStrategy, SendgridService, GoogleStrategy, MailingService],
   exports: [JwtStrategy, PassportModule]
 })
 export class AuthModule {}

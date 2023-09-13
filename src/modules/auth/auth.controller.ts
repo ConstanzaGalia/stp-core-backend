@@ -23,12 +23,14 @@ import { ChangePasswordDto } from './dto/change-password.dto';
 import { GetUser } from './get-user.decorator';
 import { AuthGuard } from '@nestjs/passport';
 import { User } from 'src/entities/user.entity';
+import { MailingService } from '../mailer/mailing.service';
 
 @Controller('auth')
 export class AuthController {
   constructor(
     private authService: AuthService,
     private sendgridService: SendgridService,
+    private mailingService: MailingService,
   ) {}
 
   @Post('/register')
@@ -42,7 +44,8 @@ export class AuthController {
       process.env.EMAIL_SENDGRID,
     );
     const resMail = await this.sendgridService.send(mail);
-
+    const response = await this.mailingService.sendMail(mail);
+    console.log('RESPONSE MAIL', response);
     res.status(HttpStatus.OK).json({
       message: `The user was created successfully and ${resMail}`,
     });
