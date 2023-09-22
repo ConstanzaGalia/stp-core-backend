@@ -1,13 +1,16 @@
-import { Injectable } from '@nestjs/common';
+import { Injectable, Logger } from '@nestjs/common';
 import { ConfigService } from '@nestjs/config';
 import { MailerService } from '@nestjs-modules/mailer';
 import { google } from 'googleapis';
 import { Options } from 'nodemailer/lib/smtp-transport';
+import { MailRepository } from 'src/repositories/mail.repository';
+import { EmailStatus } from 'src/common/enums/enums';
 @Injectable()
 export class MailingService {
   constructor(
     private readonly configService: ConfigService,
     private readonly mailerService: MailerService,
+    private readonly mailRepository: MailRepository,
   ) {}
 
   private async setTransport() {
@@ -22,10 +25,10 @@ export class MailingService {
       refresh_token: process.env.NODEMAILER_REFESH_TOKEN,
     });
 
-    const accessToken: string = await new Promise((resolve, reject) => {
+    const accessToken: string = await new Promise((resolve) => {
       oauth2Client.getAccessToken((err, token) => {
         if (err) {
-          reject('Failed to create access token');
+          Logger.log(`Failed to create access token nodemailer-auth2Client`, err)
         }
         resolve(token);
       });
@@ -45,8 +48,9 @@ export class MailingService {
   }
 
   public async sendMail(configEmail: any) {
-    await this.setTransport();
-    this.mailerService
+    try {
+      await this.setTransport();
+      await this.mailerService
       .sendMail({
         transporterName: 'gmail',
         template: 'action',
@@ -56,14 +60,11 @@ export class MailingService {
           code: '38320',
         },
       })
-      .then((success) => {
-        console.log(success);
-      })
-      .catch((err) => {
-        console.log(err);
-      });
+      await this.mailRepository.saveMail(configEmail.to, configEmail.subject, EmailStatus.SUCCESS);
+    } catch (error) {
+      await this.mailRepository.saveMail(configEmail.to, configEmail.subject, EmailStatus.ERROR, error.message);
+      Logger.log(`Error to send email to ${configEmail.email}`, error);
+    }
   }
-
-
 }
 

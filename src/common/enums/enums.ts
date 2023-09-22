@@ -4,3 +4,8 @@ export enum UserRole {
   SUB_TRAINER = 'SUB_TRAINER',
   ATHLETE = 'ATHLETE',
 }
+
+export enum EmailStatus {
+  ERROR = 'ERROR',
+  SUCCESS = 'SUCCESS',
+}

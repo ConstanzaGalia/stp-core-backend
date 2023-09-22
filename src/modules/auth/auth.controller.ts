@@ -16,7 +16,6 @@ import { LoginUserDto } from './dto/login-user.dto';
 import { RegisterUserDto } from './dto/register-user.dto';
 import { registerEmail, resetPassEmail } from '../../utils/emailTemplates';
 import { ActivateUserDTO } from './dto/activate-user.dto';
-import { UserInterface } from 'src/models/interfaces/user.iterface';
 import { RequestResetPasswordDto } from './dto/request-reset-password.dto';
 import { ResetPasswordDto } from './dto/reset-password.dto';
 import { ChangePasswordDto } from './dto/change-password.dto';
@@ -24,6 +23,7 @@ import { GetUser } from './get-user.decorator';
 import { AuthGuard } from '@nestjs/passport';
 import { User } from 'src/entities/user.entity';
 import { MailingService } from '../mailer/mailing.service';
+import { UserInterface } from 'src/models/interfaces/user.iterface';
 
 @Controller('auth')
 export class AuthController {
@@ -43,11 +43,10 @@ export class AuthController {
       user.name,
       process.env.EMAIL_SENDGRID,
     );
-    const resMail = await this.sendgridService.send(mail);
-    const response = await this.mailingService.sendMail(mail);
-    console.log('RESPONSE MAIL', response);
+    await this.mailingService.sendMail(mail);
+
     res.status(HttpStatus.OK).json({
-      message: `The user was created successfully and ${resMail}`,
+      message: `The user was created successfully and send email to ${user.email}`,
     });
   }
 

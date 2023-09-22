@@ -28,7 +28,6 @@ import { MailerModule } from '@nestjs-modules/mailer';
       transport: 'smtps://user@domain.com:pass@smtp.domain.com',
       template: {
         dir: process.cwd() + '/templates/',
-        // adapter: new HandlebarsAdapter(),
         options: {
           strict: true,
         },
