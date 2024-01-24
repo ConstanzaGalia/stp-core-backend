@@ -16,34 +16,37 @@ import { LoginUserDto } from './dto/login-user.dto';
 import { RegisterUserDto } from './dto/register-user.dto';
 import { registerEmail, resetPassEmail } from '../../utils/emailTemplates';
 import { ActivateUserDTO } from './dto/activate-user.dto';
-import { UserInterface } from 'src/models/interfaces/user.iterface';
 import { RequestResetPasswordDto } from './dto/request-reset-password.dto';
 import { ResetPasswordDto } from './dto/reset-password.dto';
 import { ChangePasswordDto } from './dto/change-password.dto';
 import { GetUser } from './get-user.decorator';
 import { AuthGuard } from '@nestjs/passport';
+import { User } from 'src/entities/user.entity';
+import { MailingService } from '../mailer/mailing.service';
+import { UserInterface } from 'src/models/interfaces/user.iterface';
 
 @Controller('auth')
 export class AuthController {
   constructor(
     private authService: AuthService,
     private sendgridService: SendgridService,
+    private mailingService: MailingService,
   ) {}
 
   @Post('/register')
   async createUser(@Res() res, @Body() registerUserDTO: RegisterUserDto) {
     const user = await this.authService.createUser(registerUserDTO);
-    const url = `${process.env.HOST}${process.env.PORT}/auth/activate-account?_id=${user._id}&token=${user.activeToken}`;
+    const url = `${process.env.HOST}${process.env.PORT}/auth/activate-account?id=${user.id}&token=${user.activeToken}`;
     const mail = registerEmail(
       user.email,
       url,
       user.name,
       process.env.EMAIL_SENDGRID,
     );
-    const resMail = await this.sendgridService.send(mail);
+    await this.mailingService.sendMail(mail);
+
     res.status(HttpStatus.OK).json({
-      message: `The user was created successfully and ${resMail}`,
-      user,
+      message: `The user was created successfully and send email to ${user.email}`,
     });
   }
 
@@ -62,7 +65,7 @@ export class AuthController {
   @Get('/activate-account')
   async activateAccount(
     @Query() activateUserDto: ActivateUserDTO,
-  ): Promise<UserInterface> {
+  ): Promise<User> {
     return this.authService.activateUser(activateUserDto);
   }
 
@@ -103,7 +106,7 @@ export class AuthController {
   @Patch('/reset-password')
   async resetPassword(
     @Body() resertPasswordDto: ResetPasswordDto,
-  ): Promise<UserInterface> {
+  ): Promise<User> {
     return this.authService.resetPassword(resertPasswordDto);
   }
 
@@ -112,7 +115,7 @@ export class AuthController {
   async changePassword(
     @Res() res,
     @Body() changePasswordDto: ChangePasswordDto,
-    @GetUser() user: UserInterface,
+    @GetUser() user: User,
   ): Promise<void> {
     await this.authService.changePassword(changePasswordDto, user);
     return res.status(HttpStatus.OK).json({
