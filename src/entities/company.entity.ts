@@ -8,20 +8,20 @@ export class Company {
   id: string;
 
   @ApiProperty()
-  @Column({length: 50})
+  @Column({length: 50, unique: true})
   name: string;
 
   @ApiProperty()
   @Column({length: 400})
-  image: string;
+  image?: string;
 
   @ApiProperty()
   @Column({ length: 50})
-  primary_color: string;
+  primary_color?: string;
 
   @ApiProperty()
   @Column({ length: 50})
-  secondary_color: string;
+  secondary_color?: string;
 
   @ApiProperty()
   @Column({type: 'boolean', default: false, name: 'is_delete'})

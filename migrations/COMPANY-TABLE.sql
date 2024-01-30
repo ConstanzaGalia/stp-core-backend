@@ -10,7 +10,8 @@ CREATE TABLE IF NOT EXISTS public."company"
     deleted_at date,
     is_active boolean DEFAULT true,
     is_delete boolean DEFAULT false,
-    CONSTRAINT company_pkey PRIMARY KEY (id)
+    CONSTRAINT company_pkey PRIMARY KEY (id),
+    CONSTRAINT company_name UNIQUE (name)
 );
 
 CREATE OR REPLACE FUNCTION set_updatedAt() RETURNS trigger AS

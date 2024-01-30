@@ -43,11 +43,16 @@ export class AuthController {
       user.name,
       process.env.EMAIL_SENDGRID,
     );
-    await this.mailingService.sendMail(mail);
-
-    res.status(HttpStatus.OK).json({
-      message: `The user was created successfully and send email to ${user.email}`,
-    });
+    try {
+      await this.mailingService.sendMail(mail);
+      res.status(HttpStatus.OK).json({
+        message: `The user was created successfully and send email to ${user.email}`,
+      });
+    } catch (error) {
+      res.status(HttpStatus.CREATED).json({
+        message: `The user was created successfully but have an error send verify email to ${user.email}`,
+      });
+    }
   }
 
   @Post('/login')

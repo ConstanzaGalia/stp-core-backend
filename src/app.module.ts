@@ -7,6 +7,8 @@ import { AuthModule } from './modules/auth/auth.module';
 import { MailingModule } from './modules/mailer/mailing.module';
 import { MailerModule } from '@nestjs-modules/mailer';
 // import { TYPEORM_CONFIG } from './common/config/typeorm-config';
+import { CompanyModule } from './modules/company/company.module';
+import { Pagination } from './common/pagination/pagination';
 @Module({
   imports: [
     ConfigModule.forRoot({ envFilePath: 'dev.local.env', isGlobal: true }),
@@ -35,9 +37,10 @@ import { MailerModule } from '@nestjs-modules/mailer';
     }),
     AuthModule,
     MailingModule,
+    CompanyModule,
   ],
   controllers: [],
-  providers: [],
+  providers: [Pagination],
 })
 export class AppModule {
   static port: number;
