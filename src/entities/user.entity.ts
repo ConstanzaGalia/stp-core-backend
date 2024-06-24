@@ -1,6 +1,12 @@
-import { Column, CreateDateColumn, DeleteDateColumn, Entity, PrimaryGeneratedColumn, UpdateDateColumn } from 'typeorm';
+import { Column, CreateDateColumn, DeleteDateColumn, Entity, ManyToOne, OneToMany, PrimaryGeneratedColumn, UpdateDateColumn } from 'typeorm';
 import { ApiProperty } from '@nestjs/swagger';
 import { UserRole } from '../common/enums/enums';
+import { Company } from './company.entity';
+import { Payment } from './payment.entity';
+import { Slot } from './slot.entity';
+import { TrainingPlan } from './traininPlan.entity';
+import { UserPlan } from './userPlan.entity';
+import { Reservation } from './reservation.entity';
 
 @Entity('user')
 export class User {
@@ -59,6 +65,24 @@ export class User {
   @ApiProperty()
   @Column({type: 'boolean', default: false, name: 'is_delete'})
   isDelete?: boolean;
+
+  @ManyToOne(() => Company, company => company.users)
+  company: Company;
+
+  @OneToMany(() => Payment, payment => payment.user)
+  payments: Payment[];
+
+  @OneToMany(() => Slot, slot => slot.user)
+  slots: Slot[];
+
+  @OneToMany(() => TrainingPlan, trainingPlan => trainingPlan.user)
+  trainingPlans: TrainingPlan[];
+
+  @OneToMany(() => UserPlan, userPlan => userPlan.user)
+  userPlans: UserPlan[];
+
+  @OneToMany(() => Reservation, reservation => reservation.user)
+  reservations: Reservation[];
 
   @CreateDateColumn({ type: "timestamp", default: () => "CURRENT_TIMESTAMP(6)" })
   public created_at: Date;
