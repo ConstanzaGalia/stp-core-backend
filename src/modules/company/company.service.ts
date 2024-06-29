@@ -11,6 +11,7 @@ import { Company } from 'src/entities/company.entity';
 import { Repository } from 'typeorm';
 import { PaginatedListDto } from 'src/common/pagination/DTOs/paginated-list.dto';
 import { Pagination } from 'src/common/pagination/pagination';
+import { User } from 'src/entities/user.entity';
 
 @Injectable()
 export class CompanyService {
@@ -19,9 +20,11 @@ export class CompanyService {
     private readonly companyRepository: Repository<Company>,
     private pagination: Pagination,
   ) {}
-  public async create(createCompanyDto: CreateCompanyDto) {
+  public async create(createCompanyDto: CreateCompanyDto, user: User) {
     try {
-      return await this.companyRepository.save(createCompanyDto);
+      const newCompany = this.companyRepository.create(createCompanyDto);
+      newCompany.users = [user];
+      return await this.companyRepository.save(newCompany);
     } catch (error) {
       if (error.code === '23505') {
         throw new ConflictException('COMPANY_HAS_BEEN_REGISTERED');

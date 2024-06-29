@@ -16,6 +16,8 @@ import { UpdateCompanyDto } from './dto/update-company.dto';
 import { AuthGuard } from '@nestjs/passport';
 import { PaginationQueryDto } from 'src/common/pagination/DTOs/pagination-query.dto';
 import { PaginatedListDto } from 'src/common/pagination/DTOs/paginated-list.dto';
+import { GetUser } from '../auth/get-user.decorator';
+import { User } from 'src/entities/user.entity';
 
 @Controller('company')
 export class CompanyController {
@@ -23,8 +25,8 @@ export class CompanyController {
 
   @Post()
   @UseGuards(AuthGuard('jwt'))
-  public async create(@Body() createCompanyDto: CreateCompanyDto) {
-    return await this.companyService.create(createCompanyDto);
+  public async create(@Body() createCompanyDto: CreateCompanyDto, @GetUser() user: User) {
+    return await this.companyService.create(createCompanyDto, user);
   }
 
   @Get()

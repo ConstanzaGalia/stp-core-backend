@@ -9,6 +9,7 @@ import { MailerModule } from '@nestjs-modules/mailer';
 // import { TYPEORM_CONFIG } from './common/config/typeorm-config';
 import { CompanyModule } from './modules/company/company.module';
 import { Pagination } from './common/pagination/pagination';
+import { ExerciseModule } from './exercise/exercise.module';
 @Module({
   imports: [
     ConfigModule.forRoot({ envFilePath: 'dev.local.env', isGlobal: true }),
@@ -20,7 +21,7 @@ import { Pagination } from './common/pagination/pagination';
       password: process.env.DB_PASSWORD,
       database: process.env.DB_NAME,
       entities: ['dist/**/*.entity.{ts,js}'],
-      synchronize: false,
+      synchronize: true,
       extra: {
         connectionLimit: 15,
       },
@@ -38,6 +39,7 @@ import { Pagination } from './common/pagination/pagination';
     AuthModule,
     MailingModule,
     CompanyModule,
+    ExerciseModule,
   ],
   controllers: [],
   providers: [Pagination],
