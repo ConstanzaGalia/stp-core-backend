@@ -1,7 +1,7 @@
 import { Controller, Get, Post, Body, Put, Param, Delete } from '@nestjs/common';
 import { ExerciseService } from './exercise.service';
 import { CreateExerciseDto } from './dto/create-exercise.dto';
-import { UpdateExerciseDto } from './dto/update-exercise.dto';
+import { UpdateExerciseDto } from './dto/create-exercise.dto copy';
 
 @Controller('exercises')
 export class ExerciseController {
@@ -12,7 +12,7 @@ export class ExerciseController {
     return this.exerciseService.create(createExerciseDto);
   }
 
-  @Get()
+ /*  @Get()
   findAll() {
     return this.exerciseService.findAll({ relations: ['category', 'tags'] });
   }
@@ -20,7 +20,7 @@ export class ExerciseController {
   @Get(':id')
   findOne(@Param('id') id: string) {
     return this.exerciseService.findOne({ where: { id }, relations: ['category', 'tags'] });
-  }
+  } */
 
   @Put(':id')
   update(@Param('id') id: string, @Body() updateExerciseDto: UpdateExerciseDto) {

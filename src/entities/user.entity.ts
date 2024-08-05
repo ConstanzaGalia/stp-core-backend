@@ -35,7 +35,7 @@ export class User {
   role: UserRole;
 
   @ApiProperty()
-  @Column({name: 'phone_number'})
+  @Column({name: 'phone_number', nullable: true})
   phoneNumber?: number;
 
   @ApiProperty()

@@ -9,10 +9,11 @@ import { MailerModule } from '@nestjs-modules/mailer';
 // import { TYPEORM_CONFIG } from './common/config/typeorm-config';
 import { CompanyModule } from './modules/company/company.module';
 import { Pagination } from './common/pagination/pagination';
-import { ExerciseModule } from './exercise/exercise.module';
+import { ExerciseModule } from './modules/exercise/exercise.module';
+
 @Module({
   imports: [
-    ConfigModule.forRoot({ envFilePath: 'dev.local.env', isGlobal: true }),
+    ConfigModule.forRoot({ envFilePath: '.env', isGlobal: true }),
     TypeOrmModule.forRoot({
       type: 'postgres',
       host: process.env.DB_HOST,
@@ -21,7 +22,7 @@ import { ExerciseModule } from './exercise/exercise.module';
       password: process.env.DB_PASSWORD,
       database: process.env.DB_NAME,
       entities: ['dist/**/*.entity.{ts,js}'],
-      synchronize: true,
+      synchronize: false,
       extra: {
         connectionLimit: 15,
       },
