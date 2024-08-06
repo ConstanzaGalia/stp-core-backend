@@ -2,7 +2,6 @@ import 'dotenv/config'
 import { Module } from '@nestjs/common';
 import { TypeOrmModule } from '@nestjs/typeorm';
 import { ConfigModule, ConfigService } from '@nestjs/config';
-import { MongooseModule } from '@nestjs/mongoose';
 import { AuthModule } from './modules/auth/auth.module';
 import { MailingModule } from './modules/mailer/mailing.module';
 import { MailerModule } from '@nestjs-modules/mailer';
@@ -27,7 +26,6 @@ import { ExerciseModule } from './modules/exercise/exercise.module';
         connectionLimit: 15,
       },
     }),
-    MongooseModule.forRoot(process.env.MONGO_DB),
     MailerModule.forRoot({
       transport: 'smtps://user@domain.com:pass@smtp.domain.com',
       template: {

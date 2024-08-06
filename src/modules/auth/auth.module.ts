@@ -14,9 +14,7 @@ import { ConfigModule, ConfigService } from '@nestjs/config';
 import { GoogleStrategy } from 'src/utils/google.strategy';
 import { MailingModule } from '../mailer/mailing.module';
 import { MailingService } from '../mailer/mailing.service';
-import { MailRepository } from 'src/repositories/mail.repository';
-import { MongooseModule } from '@nestjs/mongoose';
-import { MailSchema } from 'src/models/mail.model';
+
 
 @Module({
   imports: [
@@ -32,16 +30,10 @@ import { MailSchema } from 'src/models/mail.model';
       inject: [ConfigService],
     }),
     TypeOrmModule.forFeature([User]),
-    MongooseModule.forFeature([
-      {
-        name: 'Mail',
-        schema: MailSchema,
-      }
-    ]),
     MailingModule,
   ],
   controllers: [AuthController],
-  providers: [AuthService, EncryptService, JwtStrategy, SendgridService, GoogleStrategy, MailingService, MailRepository],
+  providers: [AuthService, EncryptService, JwtStrategy, SendgridService, GoogleStrategy, MailingService],
   exports: [JwtStrategy, PassportModule]
 })
 export class AuthModule {}

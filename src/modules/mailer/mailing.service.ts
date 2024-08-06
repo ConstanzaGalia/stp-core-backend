@@ -3,14 +3,12 @@ import { ConfigService } from '@nestjs/config';
 import { MailerService } from '@nestjs-modules/mailer';
 import { google } from 'googleapis';
 import { Options } from 'nodemailer/lib/smtp-transport';
-import { MailRepository } from 'src/repositories/mail.repository';
-import { EmailStatus } from 'src/common/enums/enums';
+
 @Injectable()
 export class MailingService {
   constructor(
     private readonly configService: ConfigService,
     private readonly mailerService: MailerService,
-    private readonly mailRepository: MailRepository,
   ) {}
 
   private async setTransport() {
@@ -60,9 +58,7 @@ export class MailingService {
           code: '38320',
         },
       })
-      await this.mailRepository.saveMail(configEmail.to, configEmail.subject, EmailStatus.SUCCESS);
     } catch (error) {
-      await this.mailRepository.saveMail(configEmail.to, configEmail.subject, EmailStatus.ERROR, error.message);
       Logger.log(`Error to send email to ${configEmail.email}`, error);
     }
   }
