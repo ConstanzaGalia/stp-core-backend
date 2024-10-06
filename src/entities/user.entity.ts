@@ -55,7 +55,7 @@ export class User {
   isActive?: boolean;
 
   @ApiProperty()
-  @Column({unique: true, name: 'active_token'})
+  @Column({unique: true, name: 'active_token', nullable: true})
   activeToken?: string;
 
   @ApiProperty()

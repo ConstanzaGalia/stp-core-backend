@@ -10,6 +10,7 @@ import {
   UseGuards,
   Req,
   Request,
+  Logger,
 } from '@nestjs/common';
 import { SendgridService } from 'src/services/sendgrid.service';
 import { AuthService } from './auth.service';
@@ -62,10 +63,10 @@ export class AuthController {
     @Res() res,
     @Body() loginUserDTO: LoginUserDto,
   ): Promise<{ token: string }> {
-    const token = await this.authService.login(loginUserDTO);
+    const user = await this.authService.login(loginUserDTO);
     return res.status(HttpStatus.OK).json({
       message: 'Login successfully',
-      jwt: token,
+      user,
     });
   }
 
@@ -94,7 +95,11 @@ export class AuthController {
   @Get('/google/redirect')
   @UseGuards(AuthGuard('google'))
   googleAuthRedirect(@Req() req) {
-    return this.authService.loginGoogle(req)
+    try {
+      return this.authService.loginGoogle(req)
+    } catch (error) {
+      Logger.log('/redirect',error);
+    }
   }
 
   @Patch('/request-reset-password')

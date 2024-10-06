@@ -69,7 +69,7 @@ export class AuthService {
     }
   }
 
-  async login(loginUserDTO: LoginUserDto): Promise<string> {
+  async login(loginUserDTO: LoginUserDto): Promise<any> {
     const { email, password } = loginUserDTO;
     const userFound = await this.userRepository.findOne({where: {email: email}});
     if (
@@ -87,7 +87,12 @@ export class AuthService {
       isActive: userFound.isActive,
     };
     const token = this.jwtService.sign(payload);
-    return token;
+    return {
+      token,
+      isActive: userFound.isActive,
+      name: userFound.name,
+      lastName: userFound.lastName,
+    };
   }
 
   async loginGoogle(req: any) {
