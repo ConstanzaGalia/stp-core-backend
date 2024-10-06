@@ -3,6 +3,7 @@ import {
   ConflictException,
   Injectable,
   InternalServerErrorException,
+  Logger,
   NotFoundException,
   UnauthorizedException,
   UnprocessableEntityException,
@@ -20,6 +21,7 @@ import { RequestResetPasswordDto } from './dto/request-reset-password.dto';
 import { ResetPasswordDto } from './dto/reset-password.dto';
 import { ChangePasswordDto } from './dto/change-password.dto';
 import { User } from 'src/entities/user.entity';
+import { UserRegiter } from './dto/user-response.dto';
 @Injectable()
 export class AuthService {
   constructor(
@@ -28,11 +30,11 @@ export class AuthService {
     private jwtService: JwtService,
   ) {}
 
-  async createUser(registerUserDTO: RegisterUserDto): Promise<User> {
+  async createUser(registerUserDTO: RegisterUserDto): Promise<UserRegiter> {
     const { name, lastName, email, password, role } = registerUserDTO;
     try {
       const passEncrypted = await this.encryptService.encryptedData(password);
-      const activeToken = v4();
+      const activeToken = this.generateOTP();
       const userToSave = {
         name,
         lastName,
@@ -41,7 +43,24 @@ export class AuthService {
         activeToken,
         role,
       }
-      return await this.userRepository.save(userToSave);
+      const userSave = await this.userRepository.save(userToSave);
+      const payload: JwtPayload = {
+        id: userSave.id,
+        email,
+        isActive: userSave.isActive,
+      };
+
+      const token = this.jwtService.sign(payload);
+      return {
+        id: userSave.id,
+        name,
+        lastName,
+        email,
+        role,
+        isActive: userSave.isActive,
+        activeToken,
+        token,
+      }
     } catch (error) {
       if (error.code === '23505') {
         throw new ConflictException('USER_HAS_BEEN_REGISTERED');
@@ -108,16 +127,20 @@ export class AuthService {
     }
   }
 
-  async activateUser(activateUserDto: ActivateUserDTO): Promise<User> {
-    const { id, token } = activateUserDto;
-    const user = await this.userRepository.findOne({where: {id: id, activeToken: token, isActive: false}});
-    if (!user) {
-      throw new UnprocessableEntityException(
-        'User not found or is already active',
-      );
+  async activateUser(activateUserDto: ActivateUserDTO, id: string): Promise<User> {
+    try {
+      const { token } = activateUserDto;
+      const user = await this.userRepository.findOne({where: {id: id, activeToken: token, isActive: false}});
+      if (!user) {
+        throw new UnprocessableEntityException(
+          'User not found or is already active',
+        );
+      }
+      user.isActive = true;
+      return await this.userRepository.save(user);
+    } catch (error) {
+      Logger.log('Activate-User-Endpoint', error)
     }
-    user.isActive = true;
-    return await this.userRepository.save(user);
   }
 
   async resetPasswordRequest(
@@ -164,5 +187,10 @@ export class AuthService {
     } else {
       throw new BadRequestException('The password does not mach');
     }
+  }
+
+  private generateOTP(): string {
+    const otp = Math.floor(100000 + Math.random() * 900000);
+    return otp.toString();
   }
 }

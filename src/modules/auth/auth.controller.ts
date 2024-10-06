@@ -9,6 +9,7 @@ import {
   Patch,
   UseGuards,
   Req,
+  Request,
 } from '@nestjs/common';
 import { SendgridService } from 'src/services/sendgrid.service';
 import { AuthService } from './auth.service';
@@ -36,20 +37,21 @@ export class AuthController {
   @Post('/register')
   async createUser(@Res() res, @Body() registerUserDTO: RegisterUserDto) {
     const user = await this.authService.createUser(registerUserDTO);
-    const url = `${process.env.HOST}${process.env.PORT}/auth/activate-account?id=${user.id}&token=${user.activeToken}`;
-    const mail = registerEmail(
-      user.email,
-      url,
-      user.name,
-      process.env.EMAIL_SENDGRID,
-    );
+    // const url = `${process.env.HOST}${process.env.PORT}/auth/activate-account?id=${user.id}&token=${user.activeToken}`;
+    // const mail = registerEmail(
+    //   user.email,
+    //   url,
+    //   user.name,
+    //   process.env.EMAIL_SENDGRID,
+    // );
     try {
-      await this.mailingService.sendMail(mail);
+      // await this.mailingService.sendMail(mail);
       res.status(HttpStatus.OK).json({
         message: `The user was created successfully and send email to ${user.email}`,
+        user
       });
     } catch (error) {
-      res.status(HttpStatus.CREATED).json({
+      res(HttpStatus.CREATED).json({
         message: `The user was created successfully but have an error send verify email to ${user.email}`,
       });
     }
@@ -67,11 +69,20 @@ export class AuthController {
     });
   }
 
-  @Get('/activate-account')
+  @UseGuards(AuthGuard('jwt'))
+  @Post('/activate-account')
   async activateAccount(
-    @Query() activateUserDto: ActivateUserDTO,
+    @Request() req,
+    @Res() res,
+    @Body() activateUserDto: ActivateUserDTO,
   ): Promise<User> {
-    return this.authService.activateUser(activateUserDto);
+    const user = await this.authService.activateUser(activateUserDto, req.user.id);
+    return res.status(HttpStatus.OK).json({
+      isActive: user.isActive,
+      name: user.name,
+      lastName: user.lastName,
+      role: user.role,
+    });
   }
 
   @Get('/google')

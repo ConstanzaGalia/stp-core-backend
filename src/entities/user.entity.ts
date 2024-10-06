@@ -39,15 +39,15 @@ export class User {
   phoneNumber?: number;
 
   @ApiProperty()
-  @Column()
+  @Column({nullable: true})
   country?: string;
 
   @ApiProperty()
-  @Column()
+  @Column({nullable: true})
   city?: string;
 
   @ApiProperty()
-  @Column({name: 'image_profile'})
+  @Column({name: 'image_profile', nullable: true})
   imageProfile?: string;
 
   @ApiProperty()

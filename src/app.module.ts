@@ -21,7 +21,7 @@ import { ExerciseModule } from './modules/exercise/exercise.module';
       password: process.env.DB_PASSWORD,
       database: process.env.DB_NAME,
       entities: ['dist/**/*.entity.{ts,js}'],
-      synchronize: false,
+      synchronize: true,
       extra: {
         connectionLimit: 15,
       },
