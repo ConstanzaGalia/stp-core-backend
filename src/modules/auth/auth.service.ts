@@ -48,6 +48,9 @@ export class AuthService {
         id: userSave.id,
         email,
         isActive: userSave.isActive,
+        role: [userSave.role],
+        name: userSave.name,
+        lastName: userSave.lastName,
       };
 
       const token = this.jwtService.sign(payload);
@@ -85,6 +88,9 @@ export class AuthService {
       id: userFound.id,
       email,
       isActive: userFound.isActive,
+      role: [userFound.role],
+      name: userFound.name,
+      lastName: userFound.lastName,
     };
     const token = this.jwtService.sign(payload);
     return {
@@ -110,11 +116,15 @@ export class AuthService {
           email,
           password,
           isActive: verified,
+          roles: userFound.role,
         });
         const payload: JwtPayload = {
           id: newUser.id,
           email,
           isActive: newUser.isActive,
+          role: [userFound.role],
+          name: userFound.name,
+          lastName: userFound.lastName,
         };
         return this.jwtService.sign(payload);
       }
@@ -122,6 +132,9 @@ export class AuthService {
         id: userFound.id,
         email,
         isActive: userFound.isActive,
+        role: [userFound.role],
+        name: userFound.name,
+        lastName: userFound.lastName,
       };
       return this.jwtService.sign(payload);
     } catch (error) {

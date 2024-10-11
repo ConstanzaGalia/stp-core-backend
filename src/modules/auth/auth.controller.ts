@@ -5,7 +5,6 @@ import {
   Post,
   Res,
   Get,
-  Query,
   Patch,
   UseGuards,
   Req,
@@ -94,9 +93,11 @@ export class AuthController {
 
   @Get('/google/redirect')
   @UseGuards(AuthGuard('google'))
-  googleAuthRedirect(@Req() req) {
+  async googleAuthRedirect(@Req() req, @Res() res) {
     try {
-      return this.authService.loginGoogle(req)
+      const token = await this.authService.loginGoogle(req)
+      const redirectUrl = `${process.env.FRONTEND_URL}/login?token=${token}`;
+      return res.redirect(redirectUrl);
     } catch (error) {
       Logger.log('/redirect',error);
     }
