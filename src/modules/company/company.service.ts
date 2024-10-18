@@ -12,6 +12,7 @@ import { Repository } from 'typeorm';
 import { PaginatedListDto } from 'src/common/pagination/DTOs/paginated-list.dto';
 import { Pagination } from 'src/common/pagination/pagination';
 import { User } from 'src/entities/user.entity';
+import { UserRole } from 'src/common/enums/enums';
 
 @Injectable()
 export class CompanyService {
@@ -53,6 +54,22 @@ export class CompanyService {
 
   public async findOne(id: string): Promise<Company> {
     return await this.companyRepository.findOneBy({ id });
+  }
+
+  public async findCompaniesByUser(userId: string): Promise<Company[]> {
+    try {
+      return await this.companyRepository.find({
+        where: {
+          users: {
+            id: userId,
+            role: UserRole.TRAINER,
+          },
+        },
+        relations: ['users'],
+      });
+    } catch (error) {
+      Logger.log('Have an error in get all companies by user', error)
+    }
   }
 
   public async update(id: string, updateCompanyDto: UpdateCompanyDto) {

@@ -48,6 +48,11 @@ export class CompanyController {
     return await this.companyService.findOne(id);
   }
 
+  @Get('/trainer/:userId')
+  public async getCompaniesByUser(@Param('userId') userId: string) {
+    return this.companyService.findCompaniesByUser(userId);
+  }
+
   @Patch(':id')
   @UseGuards(AuthGuard('jwt'))
   public async update(@Param('id') id: string, @Body() updateCompanyDto: UpdateCompanyDto) {

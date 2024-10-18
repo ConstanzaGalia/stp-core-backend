@@ -1,4 +1,4 @@
-import { Column, CreateDateColumn, DeleteDateColumn, Entity, ManyToOne, OneToMany, PrimaryGeneratedColumn, UpdateDateColumn } from 'typeorm';
+import { Column, CreateDateColumn, DeleteDateColumn, Entity, ManyToMany, ManyToOne, OneToMany, PrimaryGeneratedColumn, UpdateDateColumn } from 'typeorm';
 import { ApiProperty } from '@nestjs/swagger';
 import { UserRole } from '../common/enums/enums';
 import { Company } from './company.entity';
@@ -66,8 +66,8 @@ export class User {
   @Column({type: 'boolean', default: false, name: 'is_delete'})
   isDelete?: boolean;
 
-  @ManyToOne(() => Company, company => company.users)
-  company: Company;
+  @ManyToMany(() => Company, company => company.users)
+  company: Company[];
 
   @OneToMany(() => Payment, payment => payment.user)
   payments: Payment[];
