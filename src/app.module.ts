@@ -9,6 +9,7 @@ import { MailerModule } from '@nestjs-modules/mailer';
 import { CompanyModule } from './modules/company/company.module';
 import { Pagination } from './common/pagination/pagination';
 import { ExerciseModule } from './modules/exercise/exercise.module';
+import { ReservationModule } from './modules/reservation/reservation.module';
 
 @Module({
   imports: [
@@ -39,6 +40,7 @@ import { ExerciseModule } from './modules/exercise/exercise.module';
     MailingModule,
     CompanyModule,
     ExerciseModule,
+    ReservationModule,
   ],
   controllers: [],
   providers: [Pagination],

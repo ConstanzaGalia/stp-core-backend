@@ -19,9 +19,16 @@ export class TimeSlot {
   @Column()
   capacity: number;
 
+  @Column({ type: 'int', default: 0 })
+  reservedCount: number;
+
   @ManyToOne(() => Company, company => company.timeSlots)
   company: Company;
 
   @OneToMany(() => Reservation, reservation => reservation.timeSlot)
   reservations: Reservation[];
+
+  isAvailable() {
+    return this.reservedCount < this.capacity;
+  }
 }
