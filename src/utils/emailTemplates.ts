@@ -1,4 +1,4 @@
-export const registerEmail = (email: string, url: string, name: string, from: string) => {
+export const registerEmail = (email: string, code: string, name: string, from: string) => {
   const mail = {
     to: email,
     subject:'¡Bienvenido a STP!, Confirmá tu email.',
@@ -6,8 +6,8 @@ export const registerEmail = (email: string, url: string, name: string, from: st
     text: `Gracias por registrarte en Entrenamiento STP`,
     html: `<h2>${name} estás a un solo paso</h2>
     <h3>De formar parte de la mejor comunidad de entrenadores</h3>
-    <p>Al hacer click en el siguiente enlace, está confirmando su dirección de correo electrónico</p>
-      <a href=${url}><button>Confirmar correo</button></a>
+    <p>Ingresá el siguiente código para confirmar tu dirección de correo electrónico</p>
+    <button>${code}</button>
     `,
   }
   return mail;

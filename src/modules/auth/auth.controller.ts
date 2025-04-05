@@ -25,6 +25,8 @@ import { AuthGuard } from '@nestjs/passport';
 import { User } from 'src/entities/user.entity';
 import { MailingService } from '../mailer/mailing.service';
 import { UserInterface } from 'src/models/interfaces/user.iterface';
+import { JwtPayload } from 'src/utils/jwt-payload.interface';
+import { JwtService } from '@nestjs/jwt';
 
 @Controller('auth')
 export class AuthController {
@@ -32,20 +34,20 @@ export class AuthController {
     private authService: AuthService,
     private sendgridService: SendgridService,
     private mailingService: MailingService,
+    private jwtService: JwtService,
   ) {}
 
   @Post('/register')
   async createUser(@Res() res, @Body() registerUserDTO: RegisterUserDto) {
-    const user = await this.authService.createUser(registerUserDTO);
-    // const url = `${process.env.HOST}${process.env.PORT}/auth/activate-account?id=${user.id}&token=${user.activeToken}`;
-    // const mail = registerEmail(
-    //   user.email,
-    //   url,
-    //   user.name,
-    //   process.env.EMAIL_SENDGRID,
-    // );
+    const user = await this.authService.createUser(registerUserDTO);;
+    const mail = registerEmail(
+      user.email,
+      user.activeToken,
+      user.name,
+      process.env.EMAIL_SENDGRID,
+    );
     try {
-      // await this.mailingService.sendMail(mail);
+      await this.mailingService.sendMail(mail);
       res.status(HttpStatus.OK).json({
         message: `The user was created successfully and send email to ${user.email}`,
         user
@@ -77,11 +79,22 @@ export class AuthController {
     @Body() activateUserDto: ActivateUserDTO,
   ): Promise<User> {
     const user = await this.authService.activateUser(activateUserDto, req.user.id);
+    const payload: JwtPayload = {
+      id: user.id,
+      email: user.email,
+      isActive: user.isActive,
+      role: [user.role],
+      name: user.name,
+      lastName: user.lastName,
+    };
+
+    const jwToken = this.jwtService.sign(payload);
     return res.status(HttpStatus.OK).json({
       isActive: user.isActive,
       name: user.name,
       lastName: user.lastName,
       role: user.role,
+      token: jwToken
     });
   }
 

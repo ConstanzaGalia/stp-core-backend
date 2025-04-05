@@ -81,9 +81,6 @@ export class AuthService {
     ) {
       throw new UnauthorizedException('Please check your credentials');
     }
-    if (!userFound.isActive) {
-      throw new UnauthorizedException('Please active your account');
-    }
     const payload: JwtPayload = {
       id: userFound.id,
       email,
@@ -155,7 +152,8 @@ export class AuthService {
         );
       }
       user.isActive = true;
-      return await this.userRepository.save(user);
+      const activeUser = await this.userRepository.save(user);
+      return activeUser
     } catch (error) {
       Logger.log('Activate-User-Endpoint', error)
     }

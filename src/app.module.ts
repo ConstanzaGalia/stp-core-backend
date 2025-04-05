@@ -9,7 +9,8 @@ import { MailerModule } from '@nestjs-modules/mailer';
 import { CompanyModule } from './modules/company/company.module';
 import { Pagination } from './common/pagination/pagination';
 import { ExerciseModule } from './modules/exercise/exercise.module';
-import { ReservationModule } from './modules/reservation/reservation.module';
+import { ReservationsModule } from './modules/reservation/reservation.module';
+
 
 @Module({
   imports: [
@@ -26,6 +27,9 @@ import { ReservationModule } from './modules/reservation/reservation.module';
       extra: {
         connectionLimit: 15,
       },
+      ssl: {
+        rejectUnauthorized: false,
+      },
     }),
     MailerModule.forRoot({
       transport: 'smtps://user@domain.com:pass@smtp.domain.com',
@@ -40,7 +44,7 @@ import { ReservationModule } from './modules/reservation/reservation.module';
     MailingModule,
     CompanyModule,
     ExerciseModule,
-    ReservationModule,
+    ReservationsModule,
   ],
   controllers: [],
   providers: [Pagination],
