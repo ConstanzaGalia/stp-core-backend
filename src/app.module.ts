@@ -4,7 +4,7 @@ import { TypeOrmModule } from '@nestjs/typeorm';
 import { ConfigModule, ConfigService } from '@nestjs/config';
 import { AuthModule } from './modules/auth/auth.module';
 import { MailingModule } from './modules/mailer/mailing.module';
-import { MailerModule } from '@nestjs-modules/mailer';
+
 // import { TYPEORM_CONFIG } from './common/config/typeorm-config';
 import { CompanyModule } from './modules/company/company.module';
 import { Pagination } from './common/pagination/pagination';
@@ -31,15 +31,7 @@ import { ReservationsModule } from './modules/reservation/reservation.module';
         rejectUnauthorized: false,
       },
     }),
-    MailerModule.forRoot({
-      transport: 'smtps://user@domain.com:pass@smtp.domain.com',
-      template: {
-        dir: process.cwd() + '/templates/',
-        options: {
-          strict: true,
-        },
-      },
-    }),
+
     AuthModule,
     MailingModule,
     CompanyModule,

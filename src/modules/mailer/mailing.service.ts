@@ -1,66 +1,54 @@
 import { Injectable, Logger } from '@nestjs/common';
 import { ConfigService } from '@nestjs/config';
-import { MailerService } from '@nestjs-modules/mailer';
-import { google } from 'googleapis';
-import { Options } from 'nodemailer/lib/smtp-transport';
+import { ResendService } from '../../services/resend.service';
 
 @Injectable()
 export class MailingService {
   constructor(
     private readonly configService: ConfigService,
-    private readonly mailerService: MailerService,
+    private readonly resendService: ResendService,
   ) {}
-
-  private async setTransport() {
-    const OAuth2 = google.auth.OAuth2;
-    const oauth2Client = new OAuth2(
-      this.configService.get('NODEMAILER_GOOGLE_CLIENT_ID'),
-      this.configService.get('NODEMAILER_GOOGLE_SECRET_CLIENT'),
-      this.configService.get('GOOGLE_DEV_OAUTH_PLAYGROUND_URL'),
-    );
-
-    oauth2Client.setCredentials({
-      refresh_token: process.env.NODEMAILER_REFESH_TOKEN,
-    });
-
-    const accessToken: string = await new Promise((resolve) => {
-      oauth2Client.getAccessToken((err, token) => {
-        if (err) {
-          Logger.log(`Failed to create access token nodemailer-auth2Client`, err)
-        }
-        resolve(token);
-      });
-    });
-
-    const config: Options = {
-      service: 'gmail',
-      auth: {
-        type: 'OAuth2',
-        user: this.configService.get('NODEMAILER_USER'),
-        clientId: this.configService.get('NODEMAILER_GOOGLE_CLIENT_ID'),
-        clientSecret: this.configService.get('NODEMAILER_GOOGLE_SECRET_CLIENT'),
-        accessToken,
-      },
-    };
-    this.mailerService.addTransporter('gmail', config);
-  }
 
   public async sendMail(configEmail: any) {
     try {
-      await this.setTransport();
-      await this.mailerService
-      .sendMail({
-        transporterName: 'gmail',
-        template: 'action',
-        ...configEmail,
-        context: {
-          // Data to be sent to template engine..
-          code: '38320',
-        },
-      })
+      const htmlContent = this.generateEmailTemplate(configEmail);
+      
+      await this.resendService.sendEmail(
+        configEmail.email,
+        configEmail.subject || 'Notificación STP',
+        htmlContent
+      );
+      
+      Logger.log(`Email sent successfully to ${configEmail.email}`);
     } catch (error) {
-      Logger.log(`Error to send email to ${configEmail.email}`, error);
+      Logger.error(`Error sending email to ${configEmail.email}`, error);
+      throw error;
     }
+  }
+
+  private generateEmailTemplate(configEmail: any): string {
+    // Aquí puedes generar el HTML del email basado en el contexto
+    // Por ahora, un template básico
+    return `
+      <!DOCTYPE html>
+      <html>
+        <head>
+          <meta charset="utf-8">
+          <title>${configEmail.subject || 'Notificación STP'}</title>
+        </head>
+        <body>
+          <div style="font-family: Arial, sans-serif; max-width: 600px; margin: 0 auto; padding: 20px;">
+            <h2 style="color: #333;">${configEmail.subject || 'Notificación STP'}</h2>
+            <div style="background-color: #f9f9f9; padding: 15px; border-radius: 5px;">
+              ${configEmail.message || 'Este es un mensaje automático del sistema STP.'}
+            </div>
+            <p style="color: #666; font-size: 12px; margin-top: 20px;">
+              Este es un email automático, por favor no respondas a este mensaje.
+            </p>
+          </div>
+        </body>
+      </html>
+    `;
   }
 }
 

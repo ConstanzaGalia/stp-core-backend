@@ -9,7 +9,7 @@ import { EncryptService } from 'src/services/bcrypt.service';
 import { PassportModule } from '@nestjs/passport';
 import { JwtModule } from '@nestjs/jwt';
 import { JwtStrategy } from '../../utils/jwt-strategy';
-import { SendgridService } from 'src/services/sendgrid.service';
+import { ResendService } from 'src/services/resend.service';
 import { ConfigModule, ConfigService } from '@nestjs/config';
 import { GoogleStrategy } from 'src/utils/google.strategy';
 import { MailingModule } from '../mailer/mailing.module';
@@ -30,7 +30,7 @@ import { MailingService } from '../mailer/mailing.service';
     MailingModule,
   ],
   controllers: [AuthController],
-  providers: [AuthService, EncryptService, JwtStrategy, SendgridService, GoogleStrategy, MailingService],
+  providers: [AuthService, EncryptService, JwtStrategy, ResendService, GoogleStrategy, MailingService],
   exports: [JwtStrategy, PassportModule]
 })
 export class AuthModule {}

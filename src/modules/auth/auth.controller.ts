@@ -11,7 +11,7 @@ import {
   Request,
   Logger,
 } from '@nestjs/common';
-import { SendgridService } from 'src/services/sendgrid.service';
+import { ResendService } from 'src/services/resend.service';
 import { AuthService } from './auth.service';
 import { LoginUserDto } from './dto/login-user.dto';
 import { RegisterUserDto } from './dto/register-user.dto';
@@ -32,7 +32,7 @@ import { JwtService } from '@nestjs/jwt';
 export class AuthController {
   constructor(
     private authService: AuthService,
-    private sendgridService: SendgridService,
+    private resendService: ResendService,
     private mailingService: MailingService,
     private jwtService: JwtService,
   ) {}
@@ -131,7 +131,7 @@ export class AuthController {
       user.name,
       process.env.EMAIL_SENDGRID,
     );
-    await this.sendgridService.send(mail);
+    await this.resendService.sendEmail(mail.to, mail.subject, mail.html, mail.from);
     return res.status(HttpStatus.OK).json({
       message: `Send the email to ${user.email}, for reset password`,
       user,
