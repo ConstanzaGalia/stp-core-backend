@@ -22,6 +22,8 @@ import { ResetPasswordDto } from './dto/reset-password.dto';
 import { ChangePasswordDto } from './dto/change-password.dto';
 import { User } from 'src/entities/user.entity';
 import { UserRegiter } from './dto/user-response.dto';
+import { LoginResponseDto } from './dto/login-response.dto';
+import { UserRole } from 'src/common/enums/enums';
 @Injectable()
 export class AuthService {
   constructor(
@@ -72,7 +74,7 @@ export class AuthService {
     }
   }
 
-  async login(loginUserDTO: LoginUserDto): Promise<any> {
+  async login(loginUserDTO: LoginUserDto): Promise<LoginResponseDto> {
     const { email, password } = loginUserDTO;
     const userFound = await this.userRepository.findOne({where: {email: email}});
     if (
@@ -91,10 +93,12 @@ export class AuthService {
     };
     const token = this.jwtService.sign(payload);
     return {
+      id: userFound.id,
       token,
       isActive: userFound.isActive,
       name: userFound.name,
       lastName: userFound.lastName,
+      role: userFound.role,
     };
   }
 
@@ -113,15 +117,15 @@ export class AuthService {
           email,
           password,
           isActive: verified,
-          roles: userFound.role,
+          role: UserRole.ATHLETE, // Asignar rol por defecto para nuevos usuarios
         });
         const payload: JwtPayload = {
           id: newUser.id,
           email,
           isActive: newUser.isActive,
-          role: [userFound.role],
-          name: userFound.name,
-          lastName: userFound.lastName,
+          role: [newUser.role],
+          name: newUser.name,
+          lastName: newUser.lastName,
         };
         return this.jwtService.sign(payload);
       }

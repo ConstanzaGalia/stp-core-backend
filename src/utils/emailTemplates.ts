@@ -1,6 +1,11 @@
 export const registerEmail = (email: string, code: string, name: string, from: string) => {
+  // Validar que el email no sea null o undefined
+  if (!email || email.trim() === '') {
+    throw new Error('Email is required for registration email');
+  }
+
   const mail = {
-    to: email,
+    to: email.trim(),
     subject: '¡Bienvenido a STP!, Confirmá tu email.',
     from,
     html: `
@@ -39,8 +44,13 @@ export const registerEmail = (email: string, code: string, name: string, from: s
 };
 
 export const resetPassEmail = (email: string, url: string, name: string, from: string) => {
+  // Validar que el email no sea null o undefined
+  if (!email || email.trim() === '') {
+    throw new Error('Email is required for reset password email');
+  }
+
   const mail = {
-    to: email,
+    to: email.trim(),
     subject: '¡Restablecé tu contraseña!',
     from,
     html: `

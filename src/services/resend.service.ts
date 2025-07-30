@@ -11,6 +11,19 @@ export class ResendService {
 
   async sendEmail(to: string, subject: string, html: string, from?: string) {
     try {
+      // Validar que el email no sea null, undefined o vacío
+      if (!to || to.trim() === '') {
+        throw new Error('Email address is required and cannot be empty');
+      }
+
+      // Validar formato básico de email
+      const emailRegex = /^[^\s@]+@[^\s@]+\.[^\s@]+$/;
+      if (!emailRegex.test(to)) {
+        throw new Error(`Invalid email format: ${to}`);
+      }
+
+      Logger.log(`Attempting to send email to: ${to}`);
+
       const { data, error } = await this.resend.emails.send({
         from: from || process.env.RESEND_FROM_EMAIL || 'noreply@yourdomain.com',
         to: [to],

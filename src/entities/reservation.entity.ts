@@ -1,4 +1,4 @@
-import { Entity, PrimaryGeneratedColumn, ManyToOne } from 'typeorm';
+import { Entity, PrimaryGeneratedColumn, ManyToOne, CreateDateColumn } from 'typeorm';
 import { User } from './user.entity';
 import { TimeSlot } from './timeSlot.entity';
 
@@ -14,4 +14,7 @@ export class Reservation {
     onDelete: 'CASCADE'
   })
   timeSlot: TimeSlot;
+
+  @CreateDateColumn()
+  createdAt: Date;
 }

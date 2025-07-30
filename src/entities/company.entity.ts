@@ -5,6 +5,7 @@ import { Payment } from './payment.entity';
 import { Slot } from './slot.entity';
 import { TrainingPlan } from './traininPlan.entity';
 import { TimeSlot } from './timeSlot.entity';
+import { ScheduleConfig } from './schedule-config.entity';
 
 @Entity('company')
 export class Company {
@@ -47,6 +48,9 @@ export class Company {
 
   @OneToMany(() => TimeSlot, timeSlot => timeSlot.company)
   timeSlots: TimeSlot[];
+
+  @OneToMany(() => ScheduleConfig, scheduleConfig => scheduleConfig.company)
+  scheduleConfigs: ScheduleConfig[];
 
   @CreateDateColumn({ type: "timestamp", default: () => "CURRENT_TIMESTAMP(6)" })
   public created_at: Date;

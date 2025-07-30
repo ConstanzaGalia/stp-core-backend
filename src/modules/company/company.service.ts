@@ -8,7 +8,7 @@ import { CreateCompanyDto } from './dto/create-company.dto';
 import { UpdateCompanyDto } from './dto/update-company.dto';
 import { InjectRepository } from '@nestjs/typeorm';
 import { Company } from 'src/entities/company.entity';
-import { Repository } from 'typeorm';
+import { Repository, In } from 'typeorm';
 import { PaginatedListDto } from 'src/common/pagination/DTOs/paginated-list.dto';
 import { Pagination } from 'src/common/pagination/pagination';
 import { User } from 'src/entities/user.entity';
@@ -62,7 +62,7 @@ export class CompanyService {
         where: {
           users: {
             id: userId,
-            role: UserRole.TRAINER,
+            role: In([UserRole.TRAINER, UserRole.DIRECTOR]),
           },
         },
         relations: ['users'],

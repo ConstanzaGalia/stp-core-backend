@@ -27,6 +27,7 @@ import { MailingService } from '../mailer/mailing.service';
 import { UserInterface } from 'src/models/interfaces/user.iterface';
 import { JwtPayload } from 'src/utils/jwt-payload.interface';
 import { JwtService } from '@nestjs/jwt';
+import { ActivateResponseDto } from './dto/activate-response.dto';
 
 @Controller('auth')
 export class AuthController {
@@ -39,13 +40,23 @@ export class AuthController {
 
   @Post('/register')
   async createUser(@Res() res, @Body() registerUserDTO: RegisterUserDto) {
-    const user = await this.authService.createUser(registerUserDTO);;
+    const user = await this.authService.createUser(registerUserDTO);
+    
+    // Validar que el usuario tenga email
+    if (!user.email) {
+      return res.status(HttpStatus.BAD_REQUEST).json({
+        message: 'User email is required',
+        error: 'EMAIL_REQUIRED'
+      });
+    }
+
     const mail = registerEmail(
       user.email,
       user.activeToken,
       user.name,
-      process.env.EMAIL_SENDGRID,
+      process.env.RESEND_FROM_EMAIL || 'noreply@stp.com',
     );
+
     try {
       await this.mailingService.sendMail(mail);
       res.status(HttpStatus.OK).json({
@@ -53,8 +64,10 @@ export class AuthController {
         user
       });
     } catch (error) {
-      res(HttpStatus.CREATED).json({
+      console.error('Error sending email:', error);
+      res.status(HttpStatus.CREATED).json({
         message: `The user was created successfully but have an error send verify email to ${user.email}`,
+        error: error.message
       });
     }
   }
@@ -77,7 +90,7 @@ export class AuthController {
     @Request() req,
     @Res() res,
     @Body() activateUserDto: ActivateUserDTO,
-  ): Promise<User> {
+  ): Promise<ActivateResponseDto> {
     const user = await this.authService.activateUser(activateUserDto, req.user.id);
     const payload: JwtPayload = {
       id: user.id,
@@ -90,6 +103,7 @@ export class AuthController {
 
     const jwToken = this.jwtService.sign(payload);
     return res.status(HttpStatus.OK).json({
+      id: user.id,
       isActive: user.isActive,
       name: user.name,
       lastName: user.lastName,
@@ -129,7 +143,7 @@ export class AuthController {
       user.email,
       url,
       user.name,
-      process.env.EMAIL_SENDGRID,
+      process.env.RESEND_FROM_EMAIL || 'noreply@stp.com',
     );
     await this.resendService.sendEmail(mail.to, mail.subject, mail.html, mail.from);
     return res.status(HttpStatus.OK).json({

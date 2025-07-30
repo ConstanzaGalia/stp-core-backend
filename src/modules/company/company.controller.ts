@@ -48,7 +48,7 @@ export class CompanyController {
     return await this.companyService.findOne(id);
   }
 
-  @Get('/trainer/:userId')
+  @Get('/user/:userId')
   public async getCompaniesByUser(@Param('userId') userId: string) {
     return this.companyService.findCompaniesByUser(userId);
   }

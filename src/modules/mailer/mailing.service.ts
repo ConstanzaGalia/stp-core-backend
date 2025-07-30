@@ -11,17 +11,29 @@ export class MailingService {
 
   public async sendMail(configEmail: any) {
     try {
-      const htmlContent = this.generateEmailTemplate(configEmail);
+      // Si el email ya tiene HTML, usarlo directamente
+      if (configEmail.html) {
+        await this.resendService.sendEmail(
+          configEmail.to,
+          configEmail.subject,
+          configEmail.html,
+          configEmail.from
+        );
+      } else {
+        // Si no tiene HTML, generar un template básico
+        const htmlContent = this.generateEmailTemplate(configEmail);
+        
+        await this.resendService.sendEmail(
+          configEmail.email || configEmail.to,
+          configEmail.subject || 'Notificación STP',
+          htmlContent,
+          configEmail.from
+        );
+      }
       
-      await this.resendService.sendEmail(
-        configEmail.email,
-        configEmail.subject || 'Notificación STP',
-        htmlContent
-      );
-      
-      Logger.log(`Email sent successfully to ${configEmail.email}`);
+      Logger.log(`Email sent successfully to ${configEmail.to || configEmail.email}`);
     } catch (error) {
-      Logger.error(`Error sending email to ${configEmail.email}`, error);
+      Logger.error(`Error sending email to ${configEmail.to || configEmail.email}`, error);
       throw error;
     }
   }
