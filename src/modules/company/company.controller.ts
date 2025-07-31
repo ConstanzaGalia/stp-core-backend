@@ -13,6 +13,8 @@ import {
 import { CompanyService } from './company.service';
 import { CreateCompanyDto } from './dto/create-company.dto';
 import { UpdateCompanyDto } from './dto/update-company.dto';
+import { AssociateTrainerDto } from './dto/associate-trainer.dto';
+import { JoinCompanyDto } from './dto/join-company.dto';
 import { AuthGuard } from '@nestjs/passport';
 import { PaginationQueryDto } from 'src/common/pagination/DTOs/pagination-query.dto';
 import { PaginatedListDto } from 'src/common/pagination/DTOs/paginated-list.dto';
@@ -63,5 +65,60 @@ export class CompanyController {
   @UseGuards(AuthGuard('jwt'))
   public async remove(@Param('id') id: string): Promise<string> {
     return await this.companyService.remove(id);
+  }
+
+  // Endpoints para gestión de entrenadores
+  @Post(':companyId/associate-trainer')
+  @UseGuards(AuthGuard('jwt'))
+  public async associateTrainer(
+    @Param('companyId') companyId: string,
+    @Body() associateTrainerDto: AssociateTrainerDto,
+    @GetUser() director: User,
+  ) {
+    return await this.companyService.associateTrainer(
+      companyId,
+      director.id,
+      associateTrainerDto,
+    );
+  }
+
+  @Get(':companyId/trainers')
+  @UseGuards(AuthGuard('jwt'))
+  public async getCompanyTrainers(
+    @Param('companyId') companyId: string,
+    @GetUser() director: User,
+  ) {
+    return await this.companyService.getCompanyTrainers(companyId, director.id);
+  }
+
+  @Delete(':companyId/trainers/:trainerId')
+  @UseGuards(AuthGuard('jwt'))
+  public async removeTrainerFromCompany(
+    @Param('companyId') companyId: string,
+    @Param('trainerId') trainerId: string,
+    @GetUser() director: User,
+  ) {
+    await this.companyService.removeTrainerFromCompany(companyId, director.id, trainerId);
+    return { message: 'Trainer removed from company successfully' };
+  }
+
+  @Get('search-available-trainers')
+  @UseGuards(AuthGuard('jwt'))
+  public async searchAvailableTrainers(@Query('search') searchTerm: string) {
+    return await this.companyService.searchAvailableTrainers(searchTerm);
+  }
+
+  // Endpoints públicos para que entrenadores se unan a centros
+  @Get('public/:companyId')
+  public async getCompanyPublicInfo(@Param('companyId') companyId: string) {
+    return await this.companyService.getCompanyPublicInfo(companyId);
+  }
+
+  @Post('join/:companyId')
+  public async joinCompanyAsTrainer(
+    @Param('companyId') companyId: string,
+    @Body() joinCompanyDto: JoinCompanyDto,
+  ) {
+    return await this.companyService.joinCompanyAsTrainer(companyId, joinCompanyDto);
   }
 }
