@@ -15,6 +15,8 @@ import { CreateCompanyDto } from './dto/create-company.dto';
 import { UpdateCompanyDto } from './dto/update-company.dto';
 import { AssociateTrainerDto } from './dto/associate-trainer.dto';
 import { JoinCompanyDto } from './dto/join-company.dto';
+import { TrainerResponseDto } from './dto/trainer-response.dto';
+import { TrainerDetailResponseDto } from './dto/trainer-detail-response.dto';
 import { AuthGuard } from '@nestjs/passport';
 import { PaginationQueryDto } from 'src/common/pagination/DTOs/pagination-query.dto';
 import { PaginatedListDto } from 'src/common/pagination/DTOs/paginated-list.dto';
@@ -120,5 +122,47 @@ export class CompanyController {
     @Body() joinCompanyDto: JoinCompanyDto,
   ) {
     return await this.companyService.joinCompanyAsTrainer(companyId, joinCompanyDto);
+  }
+
+  // Endpoints para obtener entrenadores del centro
+  @Get(':companyId/trainers/all')
+  @UseGuards(AuthGuard('jwt'))
+  public async getAllCompanyTrainers(@Param('companyId') companyId: string) {
+    return await this.companyService.getAllCompanyTrainers(companyId);
+  }
+
+  @Get(':companyId/trainers')
+  @UseGuards(AuthGuard('jwt'))
+  public async getCompanyTrainersPaginated(
+    @Param('companyId') companyId: string,
+    @Query('page') page: number = 1,
+    @Query('limit') limit: number = 10,
+  ) {
+    return await this.companyService.getCompanyTrainersPaginated(companyId, page, limit);
+  }
+
+  @Get(':companyId/trainers/search')
+  @UseGuards(AuthGuard('jwt'))
+  public async searchCompanyTrainers(
+    @Param('companyId') companyId: string,
+    @Query('q') searchTerm: string,
+  ) {
+    return await this.companyService.searchCompanyTrainers(companyId, searchTerm);
+  }
+
+  // Endpoints para obtener información detallada de entrenadores
+  @Get(':companyId/trainers/:trainerId')
+  @UseGuards(AuthGuard('jwt'))
+  public async getTrainerDetail(
+    @Param('companyId') companyId: string,
+    @Param('trainerId') trainerId: string,
+  ) {
+    return await this.companyService.getTrainerDetail(companyId, trainerId);
+  }
+
+  @Get('trainers/:trainerId')
+  @UseGuards(AuthGuard('jwt'))
+  public async getAnyTrainerDetail(@Param('trainerId') trainerId: string) {
+    return await this.companyService.getAnyTrainerDetail(trainerId);
   }
 }

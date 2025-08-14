@@ -35,7 +35,7 @@ export class User {
   role: UserRole;
 
   @ApiProperty()
-  @Column({name: 'phone_number', nullable: true})
+  @Column({name: 'phone_number', nullable: true, type: 'bigint'})
   phoneNumber?: number;
 
   @ApiProperty()
@@ -49,6 +49,18 @@ export class User {
   @ApiProperty()
   @Column({name: 'image_profile', nullable: true})
   imageProfile?: string;
+
+  @ApiProperty()
+  @Column({name: 'specialty', nullable: true, length: 200})
+  specialty?: string;
+
+  @ApiProperty()
+  @Column({name: 'biography', nullable: true, type: 'text'})
+  biography?: string;
+
+  @ApiProperty()
+  @Column({name: 'experience_years', nullable: true})
+  experienceYears?: number;
 
   @ApiProperty()
   @Column({type: 'boolean', default: false, name: 'is_active'})

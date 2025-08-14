@@ -10,6 +10,7 @@ import {
   Req,
   Request,
   Logger,
+  Param,
 } from '@nestjs/common';
 import { ResendService } from 'src/services/resend.service';
 import { AuthService } from './auth.service';
@@ -28,6 +29,8 @@ import { UserInterface } from 'src/models/interfaces/user.iterface';
 import { JwtPayload } from 'src/utils/jwt-payload.interface';
 import { JwtService } from '@nestjs/jwt';
 import { ActivateResponseDto } from './dto/activate-response.dto';
+import { UpdateUserRoleDto } from './dto/update-user-role.dto';
+import { UpdateTrainerProfileDto } from './dto/update-trainer-profile.dto';
 
 @Controller('auth')
 export class AuthController {
@@ -171,5 +174,102 @@ export class AuthController {
       message: 'The password was changed successfully',
       user,
     });
+  }
+
+  // Endpoints para actualizar roles
+  @Patch('/users/:userId/role')
+  @UseGuards(AuthGuard('jwt'))
+  async updateUserRole(
+    @Param('userId') userId: string,
+    @Body() updateUserRoleDto: UpdateUserRoleDto,
+    @GetUser() admin: User,
+  ) {
+    const updatedUser = await this.authService.updateUserRole(
+      userId,
+      admin.id,
+      updateUserRoleDto,
+    );
+    return {
+      message: 'User role updated successfully',
+      user: {
+        id: updatedUser.id,
+        email: updatedUser.email,
+        name: updatedUser.name,
+        lastName: updatedUser.lastName,
+        role: updatedUser.role,
+        isActive: updatedUser.isActive,
+      },
+    };
+  }
+
+  @Patch('/users/own-role')
+  @UseGuards(AuthGuard('jwt'))
+  async updateOwnRole(
+    @Body() updateUserRoleDto: UpdateUserRoleDto,
+    @GetUser() user: User,
+  ) {
+    const updatedUser = await this.authService.updateOwnRole(
+      user.id,
+      updateUserRoleDto,
+    );
+    return {
+      message: 'Your role has been updated successfully',
+      user: {
+        id: updatedUser.id,
+        email: updatedUser.email,
+        name: updatedUser.name,
+        lastName: updatedUser.lastName,
+        role: updatedUser.role,
+        isActive: updatedUser.isActive,
+      },
+    };
+  }
+
+  // Endpoints para obtener información de usuarios
+  @Get('/users/:userId')
+  @UseGuards(AuthGuard('jwt'))
+  async getUserInfo(@Param('userId') userId: string) {
+    const userInfo = await this.authService.getUserInfo(userId);
+    return {
+      message: 'User information retrieved successfully',
+      user: userInfo,
+    };
+  }
+
+  @Get('/trainers/:trainerId')
+  @UseGuards(AuthGuard('jwt'))
+  async getTrainerInfo(@Param('trainerId') trainerId: string) {
+    const trainerInfo = await this.authService.getTrainerInfo(trainerId);
+    return {
+      message: 'Trainer information retrieved successfully',
+      trainer: trainerInfo,
+    };
+  }
+
+  // Endpoints para perfil completo del entrenador
+  @Get('/trainers/:trainerId/profile')
+  @UseGuards(AuthGuard('jwt'))
+  async getTrainerProfile(@Param('trainerId') trainerId: string) {
+    const trainerProfile = await this.authService.getTrainerProfile(trainerId);
+    return {
+      message: 'Trainer profile retrieved successfully',
+      trainer: trainerProfile,
+    };
+  }
+
+  @Patch('/trainers/:trainerId/profile')
+  @UseGuards(AuthGuard('jwt'))
+  async updateTrainerProfile(
+    @Param('trainerId') trainerId: string,
+    @Body() updateTrainerProfileDto: UpdateTrainerProfileDto,
+  ) {
+    const updatedProfile = await this.authService.updateTrainerProfile(
+      trainerId,
+      updateTrainerProfileDto,
+    );
+    return {
+      message: 'Trainer profile updated successfully',
+      trainer: updatedProfile,
+    };
   }
 }

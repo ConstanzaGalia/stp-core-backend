@@ -18,6 +18,8 @@ import { User } from 'src/entities/user.entity';
 import { UserRole } from 'src/common/enums/enums';
 import { AssociateTrainerDto } from './dto/associate-trainer.dto';
 import { JoinCompanyDto } from './dto/join-company.dto';
+import { TrainerResponseDto } from './dto/trainer-response.dto';
+import { TrainerDetailResponseDto } from './dto/trainer-detail-response.dto';
 
 @Injectable()
 export class CompanyService {
@@ -372,6 +374,231 @@ export class CompanyService {
       trainersCount,
       directorsCount,
       isActive: !company.isDelete,
+    };
+  }
+
+  // Método para obtener todos los entrenadores de un centro
+  public async getAllCompanyTrainers(companyId: string): Promise<TrainerResponseDto[]> {
+    // Verificar que la empresa existe
+    const company = await this.companyRepository.findOne({
+      where: { id: companyId },
+      relations: ['users'],
+    });
+
+    if (!company) {
+      throw new NotFoundException('Company not found');
+    }
+
+    // Verificar que la empresa está activa
+    if (company.isDelete) {
+      throw new BadRequestException('Company is not active');
+    }
+
+    // Filtrar solo entrenadores (TRAINER y SUB_TRAINER)
+    const trainers = company.users.filter(user => 
+      user.role === UserRole.TRAINER || user.role === UserRole.SUB_TRAINER
+    );
+
+    // Mapear a DTO de respuesta
+    return trainers.map(trainer => ({
+      id: trainer.id,
+      email: trainer.email,
+      name: trainer.name,
+      lastName: trainer.lastName,
+      role: trainer.role,
+      isActive: trainer.isActive,
+      phoneNumber: trainer.phoneNumber,
+      country: trainer.country,
+      city: trainer.city,
+      imageProfile: trainer.imageProfile,
+      associationDate: trainer.created_at, // Usar fecha de creación como aproximación
+    }));
+  }
+
+  // Método para obtener entrenadores con paginación
+  public async getCompanyTrainersPaginated(
+    companyId: string,
+    page: number = 1,
+    limit: number = 10,
+  ): Promise<{ trainers: TrainerResponseDto[]; total: number; page: number; totalPages: number }> {
+    // Verificar que la empresa existe
+    const company = await this.companyRepository.findOne({
+      where: { id: companyId },
+      relations: ['users'],
+    });
+
+    if (!company) {
+      throw new NotFoundException('Company not found');
+    }
+
+    // Verificar que la empresa está activa
+    if (company.isDelete) {
+      throw new BadRequestException('Company is not active');
+    }
+
+    // Filtrar solo entrenadores
+    const allTrainers = company.users.filter(user => 
+      user.role === UserRole.TRAINER || user.role === UserRole.SUB_TRAINER
+    );
+
+    // Calcular paginación
+    const total = allTrainers.length;
+    const totalPages = Math.ceil(total / limit);
+    const startIndex = (page - 1) * limit;
+    const endIndex = startIndex + limit;
+    const paginatedTrainers = allTrainers.slice(startIndex, endIndex);
+
+    // Mapear a DTO de respuesta
+    const trainers = paginatedTrainers.map(trainer => ({
+      id: trainer.id,
+      email: trainer.email,
+      name: trainer.name,
+      lastName: trainer.lastName,
+      role: trainer.role,
+      isActive: trainer.isActive,
+      phoneNumber: trainer.phoneNumber,
+      country: trainer.country,
+      city: trainer.city,
+      imageProfile: trainer.imageProfile,
+      associationDate: trainer.created_at,
+    }));
+
+    return {
+      trainers,
+      total,
+      page,
+      totalPages,
+    };
+  }
+
+  // Método para buscar entrenadores dentro del centro
+  public async searchCompanyTrainers(
+    companyId: string,
+    searchTerm: string,
+  ): Promise<TrainerResponseDto[]> {
+    // Verificar que la empresa existe
+    const company = await this.companyRepository.findOne({
+      where: { id: companyId },
+      relations: ['users'],
+    });
+
+    if (!company) {
+      throw new NotFoundException('Company not found');
+    }
+
+    // Verificar que la empresa está activa
+    if (company.isDelete) {
+      throw new BadRequestException('Company is not active');
+    }
+
+    // Filtrar entrenadores y aplicar búsqueda
+    const trainers = company.users.filter(user => {
+      const isTrainer = user.role === UserRole.TRAINER || user.role === UserRole.SUB_TRAINER;
+      if (!isTrainer) return false;
+
+      // Búsqueda por nombre, apellido o email
+      const searchLower = searchTerm.toLowerCase();
+      return (
+        user.name.toLowerCase().includes(searchLower) ||
+        user.lastName.toLowerCase().includes(searchLower) ||
+        user.email.toLowerCase().includes(searchLower)
+      );
+    });
+
+    // Mapear a DTO de respuesta
+    return trainers.map(trainer => ({
+      id: trainer.id,
+      email: trainer.email,
+      name: trainer.name,
+      lastName: trainer.lastName,
+      role: trainer.role,
+      isActive: trainer.isActive,
+      phoneNumber: trainer.phoneNumber,
+      country: trainer.country,
+      city: trainer.city,
+      imageProfile: trainer.imageProfile,
+      associationDate: trainer.created_at,
+    }));
+  }
+
+  // Método para obtener información detallada de un entrenador específico
+  public async getTrainerDetail(
+    companyId: string,
+    trainerId: string,
+  ): Promise<TrainerDetailResponseDto> {
+    // Verificar que la empresa existe
+    const company = await this.companyRepository.findOne({
+      where: { id: companyId },
+      relations: ['users'],
+    });
+
+    if (!company) {
+      throw new NotFoundException('Company not found');
+    }
+
+    // Verificar que la empresa está activa
+    if (company.isDelete) {
+      throw new BadRequestException('Company is not active');
+    }
+
+    // Buscar el entrenador específico en la empresa
+    const trainer = company.users.find(user => 
+      user.id === trainerId && 
+      (user.role === UserRole.TRAINER || user.role === UserRole.SUB_TRAINER)
+    );
+
+    if (!trainer) {
+      throw new NotFoundException('Trainer not found in this company');
+    }
+
+    // Retornar información detallada del entrenador
+    return {
+      id: trainer.id,
+      email: trainer.email,
+      name: trainer.name,
+      lastName: trainer.lastName,
+      role: trainer.role,
+      isActive: trainer.isActive,
+      phoneNumber: trainer.phoneNumber,
+      country: trainer.country,
+      city: trainer.city,
+      imageProfile: trainer.imageProfile,
+      associationDate: trainer.created_at,
+      companyId: company.id,
+      companyName: company.name,
+      createdAt: trainer.created_at,
+      updatedAt: trainer.updated_at,
+    };
+  }
+
+  // Método para obtener información de cualquier entrenador (sin restricción de empresa)
+  public async getAnyTrainerDetail(trainerId: string): Promise<any> {
+    const trainer = await this.userRepository.findOne({
+      where: { 
+        id: trainerId,
+        role: In([UserRole.TRAINER, UserRole.SUB_TRAINER])
+      },
+      relations: ['company'],
+    });
+
+    if (!trainer) {
+      throw new NotFoundException('Trainer not found');
+    }
+
+    return {
+      id: trainer.id,
+      email: trainer.email,
+      name: trainer.name,
+      lastName: trainer.lastName,
+      role: trainer.role,
+      isActive: trainer.isActive,
+      phoneNumber: trainer.phoneNumber,
+      country: trainer.country,
+      city: trainer.city,
+      imageProfile: trainer.imageProfile,
+      createdAt: trainer.created_at,
+      updatedAt: trainer.updated_at,
+      companies: trainer.company || [],
     };
   }
 }
