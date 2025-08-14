@@ -7,6 +7,7 @@ import { TrainingPlan } from './traininPlan.entity';
 import { TimeSlot } from './timeSlot.entity';
 import { ScheduleConfig } from './schedule-config.entity';
 import { ScheduleException } from './schedule-exception.entity';
+import { TimeSlotGeneration } from './time-slot-generation.entity';
 
 @Entity('company')
 export class Company {
@@ -55,6 +56,9 @@ export class Company {
 
   @OneToMany(() => ScheduleException, scheduleException => scheduleException.company)
   scheduleExceptions: ScheduleException[];
+
+  @OneToMany(() => TimeSlotGeneration, timeSlotGeneration => timeSlotGeneration.company)
+  timeSlotGenerations: TimeSlotGeneration[];
 
   @CreateDateColumn({ type: "timestamp", default: () => "CURRENT_TIMESTAMP(6)" })
   public created_at: Date;

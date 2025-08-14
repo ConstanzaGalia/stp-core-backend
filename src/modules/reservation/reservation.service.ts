@@ -5,7 +5,8 @@ import { Reservation } from 'src/entities/reservation.entity';
 import { TimeSlot } from 'src/entities/timeSlot.entity';
 import { ScheduleConfig } from 'src/entities/schedule-config.entity';
 import { ScheduleException } from 'src/entities/schedule-exception.entity';
-import { Repository } from 'typeorm';
+import { TimeSlotGeneration } from 'src/entities/time-slot-generation.entity';
+import { Repository, Between } from 'typeorm';
 
 
 @Injectable()
@@ -21,6 +22,8 @@ export class ReservationsService {
     private readonly scheduleConfigRepository: Repository<ScheduleConfig>,
     @InjectRepository(ScheduleException)
     private readonly scheduleExceptionRepository: Repository<ScheduleException>,
+    @InjectRepository(TimeSlotGeneration)
+    private readonly timeSlotGenerationRepository: Repository<TimeSlotGeneration>,
   ) {}
 
   async createReservation(userId: string, timeSlotId: string): Promise<Reservation> {
@@ -172,25 +175,44 @@ export class ReservationsService {
   }
 
   async generateTimeSlotsFromConfig(companyId: string, startDate: Date, endDate: Date): Promise<TimeSlot[]> {
+    console.log(`Generando turnos para compañía: ${companyId}`);
+    console.log(`Rango de fechas: ${startDate} - ${endDate}`);
+    
     const scheduleConfigs = await this.getScheduleConfigs(companyId);
+    console.log(`Configuraciones encontradas: ${scheduleConfigs.length}`, scheduleConfigs);
+    
     const company = await this.companyRepository.findOne({ where: { id: companyId } });
     
     if (!company) {
       throw new BadRequestException('Company not found');
     }
 
+    if (scheduleConfigs.length === 0) {
+      throw new BadRequestException('No hay configuraciones de horarios para esta compañía. Primero debes configurar los horarios.');
+    }
+
     const timeSlots: TimeSlot[] = [];
     let currentDate = new Date(startDate);
+    let totalDaysProcessed = 0;
+    let totalSlotsCreated = 0;
+
+    console.log(`Procesando desde: ${currentDate.toISOString()} hasta: ${endDate.toISOString()}`);
 
     while (currentDate <= endDate) {
       const dayOfWeek = currentDate.getDay();
+      console.log(`Procesando: ${currentDate.toISOString()} (${this.getDayName(dayOfWeek)})`);
+      
       const configForDay = scheduleConfigs.find(config => 
         config.dayOfWeek === dayOfWeek && config.isActive
       );
 
       if (configForDay) {
-        let currentTime = new Date(`${currentDate.toISOString().split('T')[0]}T${configForDay.startTime}`);
-        const endTimeDate = new Date(`${currentDate.toISOString().split('T')[0]}T${configForDay.endTime}`);
+        console.log(`✅ Configuración encontrada para ${this.getDayName(dayOfWeek)}`);
+        
+        // Crear fechas de tiempo para este día
+        const dateString = currentDate.toISOString().split('T')[0];
+        let currentTime = new Date(`${dateString}T${configForDay.startTime}:00`);
+        const endTimeDate = new Date(`${dateString}T${configForDay.endTime}:00`);
 
         while (currentTime < endTimeDate) {
           const slot = this.timeSlotRepository.create({
@@ -202,13 +224,210 @@ export class ReservationsService {
           });
 
           timeSlots.push(slot);
+          totalSlotsCreated++;
           currentTime = new Date(currentTime.getTime() + 60 * 60 * 1000);
         }
+      } else {
+        console.log(`❌ Sin configuración para ${this.getDayName(dayOfWeek)}`);
       }
+      
+      totalDaysProcessed++;
       currentDate.setDate(currentDate.getDate() + 1);
     }
 
-    return await this.timeSlotRepository.save(timeSlots);
+    console.log(`Días procesados: ${totalDaysProcessed}`);
+    console.log(`Turnos creados: ${totalSlotsCreated}`);
+
+    if (timeSlots.length === 0) {
+      throw new BadRequestException('No se pudieron generar turnos. Verifica que las configuraciones de horarios estén activas y cubran los días en el rango de fechas.');
+    }
+
+    const savedTimeSlots = await this.timeSlotRepository.save(timeSlots);
+    console.log(`Turnos guardados en BD: ${savedTimeSlots.length}`);
+    
+    // Guardar el historial de generación - extraer solo la fecha (sin hora)
+    const startDateOnly = new Date(startDate.getFullYear(), startDate.getMonth(), startDate.getDate());
+    const endDateForHistory = new Date(endDate.getFullYear(), endDate.getMonth(), endDate.getDate());
+    
+    const generationRecord = this.timeSlotGenerationRepository.create({
+      startDate: startDateOnly,
+      endDate: endDateForHistory,
+      totalDays: totalDaysProcessed,
+      totalTimeSlots: totalSlotsCreated,
+      daysWithConfig: scheduleConfigs.filter(config => config.isActive).length,
+      daysWithoutConfig: totalDaysProcessed - totalSlotsCreated,
+      company: company,
+    });
+    
+    await this.timeSlotGenerationRepository.save(generationRecord);
+    console.log(`Historial de generación guardado: ${generationRecord.id}`);
+    
+    return savedTimeSlots;
+  }
+
+  async getTimeSlots(companyId: string, startDate?: Date, endDate?: Date): Promise<TimeSlot[]> {
+    const queryBuilder = this.timeSlotRepository
+      .createQueryBuilder('timeSlot')
+      .leftJoinAndSelect('timeSlot.company', 'company')
+      .leftJoinAndSelect('timeSlot.reservations', 'reservations')
+      .where('company.id = :companyId', { companyId })
+      .orderBy('timeSlot.date', 'ASC')
+      .addOrderBy('timeSlot.startTime', 'ASC');
+
+    if (startDate) {
+      queryBuilder.andWhere('timeSlot.date >= :startDate', { startDate });
+    }
+
+    if (endDate) {
+      queryBuilder.andWhere('timeSlot.date <= :endDate', { endDate });
+    }
+
+    return await queryBuilder.getMany();
+  }
+
+  async getAvailableTimeSlots(companyId: string, startDate?: Date, endDate?: Date): Promise<any[]> {
+    const timeSlots = await this.getTimeSlots(companyId, startDate, endDate);
+    
+    return timeSlots.map(slot => ({
+      id: slot.id,
+      date: slot.date,
+      startTime: slot.startTime,
+      endTime: slot.endTime,
+      capacity: slot.capacity,
+      reservedCount: slot.reservations?.length || 0,
+      availableSpots: slot.capacity - (slot.reservations?.length || 0),
+      isAvailable: (slot.reservations?.length || 0) < slot.capacity,
+      dayOfWeek: new Date(slot.date).getDay(),
+      dayName: this.getDayName(new Date(slot.date).getDay()),
+    }));
+  }
+
+  getDayName(dayOfWeek: number): string {
+    const days = ['Domingo', 'Lunes', 'Martes', 'Miércoles', 'Jueves', 'Viernes', 'Sábado'];
+    return days[dayOfWeek];
+  }
+
+  private formatDateToUTC(date: any): string {
+    try {
+      // Si es null o undefined
+      if (!date) {
+        return 'Fecha no disponible';
+      }
+      
+      // Si ya es un string en formato YYYY-MM-DD, convertirlo directamente
+      if (typeof date === 'string' && date.match(/^\d{4}-\d{2}-\d{2}$/)) {
+        const [year, month, day] = date.split('-');
+        return `${day}/${month}/${year}`;
+      }
+      
+      // Si es un objeto Date o string que necesita conversión
+      const dateObj = typeof date === 'string' ? new Date(date) : date;
+      
+      // Verificar que la fecha es válida
+      if (isNaN(dateObj.getTime())) {
+        console.log('Fecha inválida recibida:', date, typeof date);
+        return 'Fecha inválida';
+      }
+      
+      // Convertir la fecha a string en formato DD/MM/YYYY
+      const year = dateObj.getFullYear();
+      const month = String(dateObj.getMonth() + 1).padStart(2, '0');
+      const day = String(dateObj.getDate()).padStart(2, '0');
+      return `${day}/${month}/${year}`;
+    } catch (error) {
+      console.log('Error formateando fecha:', date, typeof date, error);
+      return 'Error en fecha';
+    }
+  }
+
+  async getTimeSlotGenerations(companyId: string, page: number = 1, limit: number = 10): Promise<any> {
+    const skip = (page - 1) * limit;
+    
+    // Obtener el total de registros
+    const total = await this.timeSlotGenerationRepository.count({
+      where: { company: { id: companyId } },
+    });
+
+    // Obtener los registros paginados
+    const generations = await this.timeSlotGenerationRepository.find({
+      where: { company: { id: companyId } },
+      order: { createdAt: 'DESC' },
+      skip,
+      take: limit,
+    });
+
+    const data = generations.map(generation => {
+      console.log('Generation data:', {
+        id: generation.id,
+        startDate: generation.startDate,
+        startDateType: typeof generation.startDate,
+        endDate: generation.endDate,
+        endDateType: typeof generation.endDate,
+      });
+      
+      return {
+        id: generation.id,
+        startDate: generation.startDate,
+        endDate: generation.endDate,
+        totalDays: generation.totalDays,
+        totalTimeSlots: generation.totalTimeSlots,
+        daysWithConfig: generation.daysWithConfig,
+        daysWithoutConfig: generation.daysWithoutConfig,
+        createdAt: generation.createdAt,
+        // Información adicional calculada - usando UTC para evitar problemas de zona horaria
+        dateRange: `${this.formatDateToUTC(generation.startDate)} - ${this.formatDateToUTC(generation.endDate)}`,
+        averageSlotsPerDay: generation.totalDays > 0 ? Math.round(generation.totalTimeSlots / generation.totalDays) : 0,
+        successRate: generation.totalDays > 0 ? Math.round((generation.daysWithConfig / generation.totalDays) * 100) : 0,
+      };
+    });
+
+    const totalPages = Math.ceil(total / limit);
+    const hasNextPage = page < totalPages;
+    const hasPreviousPage = page > 1;
+
+    return {
+      data,
+      pagination: {
+        page,
+        limit,
+        total,
+        totalPages,
+        hasNextPage,
+        hasPreviousPage,
+        nextPage: hasNextPage ? page + 1 : null,
+        previousPage: hasPreviousPage ? page - 1 : null,
+      },
+    };
+  }
+
+  async deleteTimeSlotGeneration(generationId: string, companyId: string): Promise<any> {
+    // Verificar que la generación existe y pertenece a la compañía
+    const generation = await this.timeSlotGenerationRepository.findOne({
+      where: { id: generationId, company: { id: companyId } },
+    });
+
+    if (!generation) {
+      throw new BadRequestException('Generación no encontrada o no pertenece a esta compañía');
+    }
+
+    // Eliminar todos los turnos generados en ese rango de fechas
+    const deletedTimeSlots = await this.timeSlotRepository.delete({
+      company: { id: companyId },
+      date: Between(generation.startDate, generation.endDate),
+    });
+
+    // Eliminar el registro de generación
+    await this.timeSlotGenerationRepository.remove(generation);
+
+    return {
+      message: 'Lote de turnos eliminado correctamente',
+      deletedGeneration: {
+        id: generation.id,
+        dateRange: `${this.formatDateToUTC(generation.startDate)} - ${this.formatDateToUTC(generation.endDate)}`,
+        totalTimeSlots: generation.totalTimeSlots,
+      },
+      deletedTimeSlots: deletedTimeSlots.affected || 0,
+    };
   }
 
   async getUserReservations(userId: string): Promise<any[]> {
