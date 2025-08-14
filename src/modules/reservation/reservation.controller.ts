@@ -81,14 +81,7 @@ export class ReservationsController {
     // Si la fecha viene como "2025-08-01T00:00:00.000Z", queremos que sea 1 de agosto, no 31 de julio
     const adjustedStartDate = new Date(startDate.getTime() + (startDate.getTimezoneOffset() * 60000));
     const adjustedEndDate = new Date(endDate.getTime() + (endDate.getTimezoneOffset() * 60000));
-    
-    console.log('Fechas ajustadas:', {
-      originalStart: body.startDate,
-      originalEnd: body.endDate,
-      adjustedStart: adjustedStartDate.toISOString(),
-      adjustedEnd: adjustedEndDate.toISOString(),
-    });
-    
+
     return this.reservationsService.generateTimeSlotsFromConfig(
       companyId,
       adjustedStartDate,

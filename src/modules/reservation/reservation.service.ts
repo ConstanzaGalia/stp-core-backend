@@ -175,11 +175,8 @@ export class ReservationsService {
   }
 
   async generateTimeSlotsFromConfig(companyId: string, startDate: Date, endDate: Date): Promise<TimeSlot[]> {
-    console.log(`Generando turnos para compañía: ${companyId}`);
-    console.log(`Rango de fechas: ${startDate} - ${endDate}`);
     
     const scheduleConfigs = await this.getScheduleConfigs(companyId);
-    console.log(`Configuraciones encontradas: ${scheduleConfigs.length}`, scheduleConfigs);
     
     const company = await this.companyRepository.findOne({ where: { id: companyId } });
     
@@ -194,20 +191,16 @@ export class ReservationsService {
     const timeSlots: TimeSlot[] = [];
     let currentDate = new Date(startDate);
     let totalDaysProcessed = 0;
-    let totalSlotsCreated = 0;
-
-    console.log(`Procesando desde: ${currentDate.toISOString()} hasta: ${endDate.toISOString()}`);
+    let totalSlotsCreated = 0;     
 
     while (currentDate <= endDate) {
       const dayOfWeek = currentDate.getDay();
-      console.log(`Procesando: ${currentDate.toISOString()} (${this.getDayName(dayOfWeek)})`);
       
       const configForDay = scheduleConfigs.find(config => 
         config.dayOfWeek === dayOfWeek && config.isActive
       );
 
       if (configForDay) {
-        console.log(`✅ Configuración encontrada para ${this.getDayName(dayOfWeek)}`);
         
         // Crear fechas de tiempo para este día
         const dateString = currentDate.toISOString().split('T')[0];
@@ -228,22 +221,17 @@ export class ReservationsService {
           currentTime = new Date(currentTime.getTime() + 60 * 60 * 1000);
         }
       } else {
-        console.log(`❌ Sin configuración para ${this.getDayName(dayOfWeek)}`);
       }
       
       totalDaysProcessed++;
       currentDate.setDate(currentDate.getDate() + 1);
     }
 
-    console.log(`Días procesados: ${totalDaysProcessed}`);
-    console.log(`Turnos creados: ${totalSlotsCreated}`);
-
     if (timeSlots.length === 0) {
       throw new BadRequestException('No se pudieron generar turnos. Verifica que las configuraciones de horarios estén activas y cubran los días en el rango de fechas.');
     }
 
     const savedTimeSlots = await this.timeSlotRepository.save(timeSlots);
-    console.log(`Turnos guardados en BD: ${savedTimeSlots.length}`);
     
     // Guardar el historial de generación - extraer solo la fecha (sin hora)
     const startDateOnly = new Date(startDate.getFullYear(), startDate.getMonth(), startDate.getDate());
@@ -260,7 +248,6 @@ export class ReservationsService {
     });
     
     await this.timeSlotGenerationRepository.save(generationRecord);
-    console.log(`Historial de generación guardado: ${generationRecord.id}`);
     
     return savedTimeSlots;
   }
@@ -325,7 +312,6 @@ export class ReservationsService {
       
       // Verificar que la fecha es válida
       if (isNaN(dateObj.getTime())) {
-        console.log('Fecha inválida recibida:', date, typeof date);
         return 'Fecha inválida';
       }
       
@@ -335,7 +321,6 @@ export class ReservationsService {
       const day = String(dateObj.getDate()).padStart(2, '0');
       return `${day}/${month}/${year}`;
     } catch (error) {
-      console.log('Error formateando fecha:', date, typeof date, error);
       return 'Error en fecha';
     }
   }
@@ -357,13 +342,6 @@ export class ReservationsService {
     });
 
     const data = generations.map(generation => {
-      console.log('Generation data:', {
-        id: generation.id,
-        startDate: generation.startDate,
-        startDateType: typeof generation.startDate,
-        endDate: generation.endDate,
-        endDateType: typeof generation.endDate,
-      });
       
       return {
         id: generation.id,
