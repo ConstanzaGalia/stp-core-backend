@@ -341,8 +341,27 @@ export class ReservationsService {
       take: limit,
     });
 
+    // Obtener todas las excepciones para el rango de fechas
+    const allExceptions = await this.scheduleExceptionRepository.find({
+      where: { company: { id: companyId } },
+      order: { exceptionDate: 'ASC' },
+    });
+
     const data = generations.map(generation => {
-      
+      // Filtrar excepciones que están dentro del rango de esta generación
+      const exceptionsInRange = allExceptions.filter(exception => {
+        const exceptionDate = new Date(exception.exceptionDate);
+        const startDate = new Date(generation.startDate);
+        const endDate = new Date(generation.endDate);
+        return exceptionDate >= startDate && exceptionDate <= endDate;
+      });
+
+      // Calcular estadísticas de excepciones
+      const totalExceptions = exceptionsInRange.length;
+      const closedDays = exceptionsInRange.filter(ex => ex.isClosed).length;
+      const reducedHoursDays = exceptionsInRange.filter(ex => !ex.isClosed && (ex.startTime || ex.endTime)).length;
+      const capacityChanges = exceptionsInRange.filter(ex => ex.capacity > 0).length;
+
       return {
         id: generation.id,
         startDate: generation.startDate,
@@ -352,10 +371,141 @@ export class ReservationsService {
         daysWithConfig: generation.daysWithConfig,
         daysWithoutConfig: generation.daysWithoutConfig,
         createdAt: generation.createdAt,
-        // Información adicional calculada - usando UTC para evitar problemas de zona horaria
+        // Información adicional calculada
         dateRange: `${this.formatDateToUTC(generation.startDate)} - ${this.formatDateToUTC(generation.endDate)}`,
         averageSlotsPerDay: generation.totalDays > 0 ? Math.round(generation.totalTimeSlots / generation.totalDays) : 0,
         successRate: generation.totalDays > 0 ? Math.round((generation.daysWithConfig / generation.totalDays) * 100) : 0,
+        // Información de excepciones
+        exceptions: {
+          total: totalExceptions,
+          closedDays,
+          reducedHoursDays,
+          capacityChanges,
+          details: exceptionsInRange.map(exception => ({
+            id: exception.id,
+            date: this.formatDateToUTC(exception.exceptionDate),
+            reason: exception.reason,
+            isClosed: exception.isClosed,
+            startTime: exception.startTime,
+            endTime: exception.endTime,
+            capacity: exception.capacity,
+            isActive: exception.isActive,
+          })),
+        },
+      };
+    });
+
+    const totalPages = Math.ceil(total / limit);
+    const hasNextPage = page < totalPages;
+    const hasPreviousPage = page > 1;
+
+    return {
+      data,
+      pagination: {
+        page,
+        limit,
+        total,
+        totalPages,
+        hasNextPage,
+        hasPreviousPage,
+        nextPage: hasNextPage ? page + 1 : null,
+        previousPage: hasPreviousPage ? page - 1 : null,
+      },
+    };
+  }
+
+  async getTimeSlotGenerationsDetailed(companyId: string, page: number = 1, limit: number = 10): Promise<any> {
+    const skip = (page - 1) * limit;
+    
+    // Obtener el total de registros
+    const total = await this.timeSlotGenerationRepository.count({
+      where: { company: { id: companyId } },
+    });
+
+    // Obtener los registros paginados
+    const generations = await this.timeSlotGenerationRepository.find({
+      where: { company: { id: companyId } },
+      order: { createdAt: 'DESC' },
+      skip,
+      take: limit,
+    });
+
+    // Obtener todas las excepciones
+    const allExceptions = await this.scheduleExceptionRepository.find({
+      where: { company: { id: companyId } },
+      order: { exceptionDate: 'ASC' },
+    });
+
+    // Obtener estadísticas de turnos actuales
+    const currentTimeSlots = await this.timeSlotRepository.find({
+      where: { company: { id: companyId } },
+      relations: ['reservations'],
+    });
+
+    const data = generations.map(generation => {
+      // Filtrar excepciones que están dentro del rango de esta generación
+      const exceptionsInRange = allExceptions.filter(exception => {
+        const exceptionDate = new Date(exception.exceptionDate);
+        const startDate = new Date(generation.startDate);
+        const endDate = new Date(generation.endDate);
+        return exceptionDate >= startDate && exceptionDate <= endDate;
+      });
+
+      // Filtrar turnos que están dentro del rango de esta generación
+      const timeSlotsInRange = currentTimeSlots.filter(slot => {
+        const slotDate = new Date(slot.date);
+        const startDate = new Date(generation.startDate);
+        const endDate = new Date(generation.endDate);
+        return slotDate >= startDate && slotDate <= endDate;
+      });
+
+      // Calcular estadísticas detalladas
+      const totalExceptions = exceptionsInRange.length;
+      const closedDays = exceptionsInRange.filter(ex => ex.isClosed).length;
+      const reducedHoursDays = exceptionsInRange.filter(ex => !ex.isClosed && (ex.startTime || ex.endTime)).length;
+      const capacityChanges = exceptionsInRange.filter(ex => ex.capacity > 0).length;
+
+      const totalCurrentSlots = timeSlotsInRange.length;
+      const totalReservations = timeSlotsInRange.reduce((sum, slot) => sum + (slot.reservations?.length || 0), 0);
+      const availableSlots = timeSlotsInRange.reduce((sum, slot) => sum + (slot.capacity - (slot.reservations?.length || 0)), 0);
+
+      return {
+        id: generation.id,
+        startDate: generation.startDate,
+        endDate: generation.endDate,
+        totalDays: generation.totalDays,
+        totalTimeSlots: generation.totalTimeSlots,
+        daysWithConfig: generation.daysWithConfig,
+        daysWithoutConfig: generation.daysWithoutConfig,
+        createdAt: generation.createdAt,
+        // Información adicional calculada
+        dateRange: `${this.formatDateToUTC(generation.startDate)} - ${this.formatDateToUTC(generation.endDate)}`,
+        averageSlotsPerDay: generation.totalDays > 0 ? Math.round(generation.totalTimeSlots / generation.totalDays) : 0,
+        successRate: generation.totalDays > 0 ? Math.round((generation.daysWithConfig / generation.totalDays) * 100) : 0,
+        // Estadísticas actuales
+        currentStats: {
+          totalSlots: totalCurrentSlots,
+          totalReservations,
+          availableSlots,
+          occupancyRate: totalCurrentSlots > 0 ? Math.round((totalReservations / (totalCurrentSlots * 10)) * 100) : 0, // Asumiendo capacidad promedio de 10
+        },
+        // Información de excepciones
+        exceptions: {
+          total: totalExceptions,
+          closedDays,
+          reducedHoursDays,
+          capacityChanges,
+          details: exceptionsInRange.map(exception => ({
+            id: exception.id,
+            date: this.formatDateToUTC(exception.exceptionDate),
+            reason: exception.reason,
+            isClosed: exception.isClosed,
+            startTime: exception.startTime,
+            endTime: exception.endTime,
+            capacity: exception.capacity,
+            isActive: exception.isActive,
+          })),
+        },
       };
     });
 
@@ -450,18 +600,133 @@ export class ReservationsService {
       throw new BadRequestException('Company not found');
     }
 
+    // Crear la excepción
     const result = await this.scheduleExceptionRepository.insert({
       ...createScheduleExceptionDto,
       company: { id: companyId },
     });
 
-    return await this.scheduleExceptionRepository.findOne({ where: { id: result.identifiers[0].id } });
+    const exception = await this.scheduleExceptionRepository.findOne({ where: { id: result.identifiers[0].id } });
+
+    // Aplicar la excepción a los turnos existentes
+    await this.applyExceptionToExistingTimeSlots(companyId, exception);
+
+    return exception;
+  }
+
+  async applyExceptionToExistingTimeSlots(companyId: string, exception: ScheduleException): Promise<any> {
+    console.log(`Aplicando excepción ${exception.id} a turnos existentes para ${exception.exceptionDate}`);
+
+    // Buscar todos los turnos existentes para esa fecha
+    const existingTimeSlots = await this.timeSlotRepository.find({
+      where: {
+        company: { id: companyId },
+        date: exception.exceptionDate,
+      },
+      relations: ['reservations'],
+    });
+
+    console.log(`Encontrados ${existingTimeSlots.length} turnos para la fecha ${exception.exceptionDate}`);
+
+    if (existingTimeSlots.length === 0) {
+      console.log('No hay turnos existentes para aplicar la excepción');
+      return { message: 'No hay turnos existentes para esta fecha' };
+    }
+
+    let updatedSlots = 0;
+    let deletedSlots = 0;
+
+    for (const timeSlot of existingTimeSlots) {
+      // Si el día está completamente cerrado
+      if (exception.isClosed) {
+        // Verificar si hay reservas
+        if (timeSlot.reservations && timeSlot.reservations.length > 0) {
+          console.log(`⚠️ No se puede cerrar el turno ${timeSlot.id} porque tiene ${timeSlot.reservations.length} reservas`);
+          continue;
+        }
+        
+        // Eliminar el turno
+        await this.timeSlotRepository.remove(timeSlot);
+        deletedSlots++;
+        console.log(`🗑️ Turno eliminado: ${timeSlot.startTime} - ${timeSlot.endTime}`);
+      } else {
+        // Modificar el turno según la excepción
+        const originalStartTime = timeSlot.startTime;
+        const originalEndTime = timeSlot.endTime;
+        const originalCapacity = timeSlot.capacity;
+
+        // Verificar si el turno está dentro del horario de la excepción
+        if (exception.startTime && exception.endTime) {
+          const slotStart = timeSlot.startTime;
+          const slotEnd = timeSlot.endTime;
+          const exceptionStart = exception.startTime;
+          const exceptionEnd = exception.endTime;
+
+          // Si el turno está completamente fuera del horario de la excepción
+          if (slotEnd <= exceptionStart || slotStart >= exceptionEnd) {
+            // Verificar si hay reservas
+            if (timeSlot.reservations && timeSlot.reservations.length > 0) {
+              console.log(`⚠️ No se puede eliminar el turno ${timeSlot.id} porque tiene reservas`);
+              continue;
+            }
+            
+            // Eliminar el turno
+            await this.timeSlotRepository.remove(timeSlot);
+            deletedSlots++;
+            console.log(`🗑️ Turno eliminado (fuera de horario): ${slotStart} - ${slotEnd}`);
+          } else {
+            // Ajustar el turno al horario de la excepción
+            const newStartTime = slotStart < exceptionStart ? exceptionStart : slotStart;
+            const newEndTime = slotEnd > exceptionEnd ? exceptionEnd : slotEnd;
+            
+            // Verificar que el turno tenga duración válida
+            if (newStartTime < newEndTime) {
+              timeSlot.startTime = newStartTime;
+              timeSlot.endTime = newEndTime;
+              timeSlot.capacity = exception.capacity || timeSlot.capacity;
+              
+              await this.timeSlotRepository.save(timeSlot);
+              updatedSlots++;
+              console.log(`✏️ Turno actualizado: ${originalStartTime}-${originalEndTime} → ${newStartTime}-${newEndTime}`);
+            } else {
+              // Turno sin duración válida, eliminarlo si no tiene reservas
+              if (!timeSlot.reservations || timeSlot.reservations.length === 0) {
+                await this.timeSlotRepository.remove(timeSlot);
+                deletedSlots++;
+                console.log(`🗑️ Turno eliminado (sin duración válida): ${slotStart} - ${slotEnd}`);
+              }
+            }
+          }
+        } else {
+          // Solo cambiar la capacidad
+          timeSlot.capacity = exception.capacity || timeSlot.capacity;
+          await this.timeSlotRepository.save(timeSlot);
+          updatedSlots++;
+          console.log(`✏️ Capacidad actualizada: ${originalCapacity} → ${timeSlot.capacity}`);
+        }
+      }
+    }
+
+    console.log(`✅ Excepción aplicada: ${updatedSlots} turnos actualizados, ${deletedSlots} turnos eliminados`);
+
+    return {
+      message: 'Excepción aplicada correctamente',
+      updatedSlots,
+      deletedSlots,
+      totalProcessed: existingTimeSlots.length,
+    };
   }
 
   async getScheduleExceptions(companyId: string): Promise<ScheduleException[]> {
     return this.scheduleExceptionRepository.find({
       where: { company: { id: companyId } },
       order: { exceptionDate: 'ASC' },
+    });
+  }
+
+  async getScheduleExceptionById(exceptionId: string): Promise<ScheduleException | null> {
+    return this.scheduleExceptionRepository.findOne({
+      where: { id: exceptionId },
     });
   }
 
@@ -475,8 +740,18 @@ export class ReservationsService {
       throw new BadRequestException('Schedule exception not found');
     }
 
+    // Guardar la fecha original para aplicar la excepción
+    const originalDate = scheduleException.exceptionDate;
+
     Object.assign(scheduleException, updateScheduleExceptionDto);
-    return await this.scheduleExceptionRepository.save(scheduleException);
+    const updatedException = await this.scheduleExceptionRepository.save(scheduleException);
+
+    // Si la fecha cambió, aplicar la excepción a la nueva fecha
+    if (originalDate !== updatedException.exceptionDate) {
+      await this.applyExceptionToExistingTimeSlots(scheduleException.company.id, updatedException);
+    }
+
+    return updatedException;
   }
 
   async deleteScheduleException(id: string): Promise<void> {
@@ -486,7 +761,65 @@ export class ReservationsService {
       throw new BadRequestException('Schedule exception not found');
     }
 
+    // Restaurar los turnos originales antes de eliminar la excepción
+    await this.restoreTimeSlotsFromException(scheduleException);
+
     await this.scheduleExceptionRepository.remove(scheduleException);
+  }
+
+  async restoreTimeSlotsFromException(exception: ScheduleException): Promise<any> {
+    console.log(`Restaurando turnos para la fecha ${exception.exceptionDate} después de eliminar excepción`);
+
+    // Regenerar turnos para esa fecha específica usando la configuración base
+    const companyId = exception.company.id;
+    const scheduleConfigs = await this.getScheduleConfigs(companyId);
+    const company = await this.companyRepository.findOne({ where: { id: companyId } });
+
+    if (!company || scheduleConfigs.length === 0) {
+      console.log('No se pueden restaurar turnos: configuración no encontrada');
+      return { message: 'No se pueden restaurar turnos' };
+    }
+
+    // Eliminar turnos existentes para esa fecha
+    await this.timeSlotRepository.delete({
+      company: { id: companyId },
+      date: exception.exceptionDate,
+    });
+
+    // Regenerar turnos usando la configuración base
+    const dayOfWeek = new Date(exception.exceptionDate).getDay();
+    const configForDay = scheduleConfigs.find(config => 
+      config.dayOfWeek === dayOfWeek && config.isActive
+    );
+
+    if (configForDay) {
+      const timeSlots: TimeSlot[] = [];
+      let currentTime = new Date(`${exception.exceptionDate}T${configForDay.startTime}`);
+      const endTimeDate = new Date(`${exception.exceptionDate}T${configForDay.endTime}`);
+
+      while (currentTime < endTimeDate) {
+        const slot = this.timeSlotRepository.create({
+          date: new Date(exception.exceptionDate),
+          startTime: currentTime.toISOString().split('T')[1].slice(0, 5),
+          endTime: new Date(currentTime.getTime() + 60 * 60 * 1000).toISOString().split('T')[1].slice(0, 5),
+          capacity: configForDay.capacity,
+          company: company,
+        });
+
+        timeSlots.push(slot);
+        currentTime = new Date(currentTime.getTime() + 60 * 60 * 1000);
+      }
+
+      await this.timeSlotRepository.save(timeSlots);
+      console.log(`✅ Restaurados ${timeSlots.length} turnos para ${exception.exceptionDate}`);
+      
+      return {
+        message: 'Turnos restaurados correctamente',
+        restoredSlots: timeSlots.length,
+      };
+    }
+
+    return { message: 'No hay configuración para restaurar turnos' };
   }
 
   // Método mejorado para generar turnos considerando excepciones

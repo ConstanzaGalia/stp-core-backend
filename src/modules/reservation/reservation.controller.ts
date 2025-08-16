@@ -131,6 +131,16 @@ export class ReservationsController {
     return this.reservationsService.getTimeSlotGenerations(companyId, page, limit);
   }
 
+  @Get('time-slot-generations-detailed/:companyId')
+  @UseGuards(AuthGuard('jwt'))
+  async getTimeSlotGenerationsDetailed(
+    @Param('companyId') companyId: string,
+    @Query() paginationQuery: PaginationQueryDto,
+  ) {
+    const { page = 1, limit = 10 } = paginationQuery;
+    return this.reservationsService.getTimeSlotGenerationsDetailed(companyId, page, limit);
+  }
+
   @Delete('time-slot-generations/:companyId/:generationId')
   @UseGuards(AuthGuard('jwt'))
   async deleteTimeSlotGeneration(
@@ -192,6 +202,20 @@ export class ReservationsController {
     @Body() createScheduleExceptionDto: CreateScheduleExceptionDto,
   ) {
     return await this.reservationsService.createScheduleException(companyId, createScheduleExceptionDto);
+  }
+
+  @Post('apply-exception/:companyId/:exceptionId')
+  @UseGuards(AuthGuard('jwt'))
+  async applyExceptionToTimeSlots(
+    @Param('companyId') companyId: string,
+    @Param('exceptionId') exceptionId: string,
+  ) {
+    const exception = await this.reservationsService.getScheduleExceptionById(exceptionId);
+    if (!exception) {
+      throw new BadRequestException('Excepción no encontrada');
+    }
+    
+    return await this.reservationsService.applyExceptionToExistingTimeSlots(companyId, exception);
   }
 
   @Get('schedule-exception/:companyId')
