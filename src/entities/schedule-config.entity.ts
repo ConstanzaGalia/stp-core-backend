@@ -18,6 +18,18 @@ export class ScheduleConfig {
   @Column({ type: 'int', default: 1 })
   capacity: number; // Capacidad por hora
 
+  @Column({ type: 'boolean', default: false })
+  allowIntermediateSlots: boolean; // Permite turnos intermedios/superpuestos
+
+  @Column({ type: 'int', nullable: true })
+  intermediateCapacity: number; // Capacidad para turnos intermedios (ej: 30 min)
+
+  @Column({ type: 'int', default: 60 })
+  slotDurationMinutes: number; // Duración de cada turno principal en minutos
+
+  @Column({ type: 'int', default: 30, nullable: true })
+  intermediateSlotDurationMinutes: number; // Duración de turnos intermedios en minutos
+
   @Column({ type: 'boolean', default: true })
   isActive: boolean;
 

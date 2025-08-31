@@ -18,5 +18,26 @@ export class CreateScheduleConfigDto {
 
   @IsBoolean()
   @IsOptional()
+  allowIntermediateSlots?: boolean; // Permite turnos intermedios/superpuestos
+
+  @IsInt()
+  @Min(1)
+  @IsOptional()
+  intermediateCapacity?: number; // Capacidad para turnos intermedios
+
+  @IsInt()
+  @Min(15)
+  @Max(180)
+  @IsOptional()
+  slotDurationMinutes?: number; // Duración de cada turno principal (default: 60 min)
+
+  @IsInt()
+  @Min(15)
+  @Max(120)
+  @IsOptional()
+  intermediateSlotDurationMinutes?: number; // Duración de turnos intermedios (default: 30 min)
+
+  @IsBoolean()
+  @IsOptional()
   isActive?: boolean;
 } 

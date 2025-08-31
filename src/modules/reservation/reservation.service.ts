@@ -202,23 +202,79 @@ export class ReservationsService {
 
       if (configForDay) {
         
-        // Crear fechas de tiempo para este día
-        const dateString = currentDate.toISOString().split('T')[0];
-        let currentTime = new Date(`${dateString}T${configForDay.startTime}:00`);
-        const endTimeDate = new Date(`${dateString}T${configForDay.endTime}:00`);
+        // Crear fechas de tiempo para este día ajustadas a zona horaria local
+        const year = currentDate.getFullYear();
+        const month = currentDate.getMonth();
+        const day = currentDate.getDate();
+        
+        // Parsear horarios de inicio y fin
+        const [startHour, startMinute] = configForDay.startTime.split(':').map(Number);
+        const [endHour, endMinute] = configForDay.endTime.split(':').map(Number);
+        
+        // Crear fechas usando zona horaria local (no UTC)
+        let currentTime = new Date(year, month, day, startHour, startMinute, 0, 0);
+        const endTimeDate = new Date(year, month, day, endHour, endMinute, 0, 0);
 
+        // Duración del turno principal (default: 60 minutos)
+        const slotDuration = (configForDay.slotDurationMinutes || 60) * 60 * 1000;
+
+        // Generar turnos principales
         while (currentTime < endTimeDate) {
-          const slot = this.timeSlotRepository.create({
-            date: new Date(currentDate),
-            startTime: currentTime.toISOString().split('T')[1].slice(0, 5),
-            endTime: new Date(currentTime.getTime() + 60 * 60 * 1000).toISOString().split('T')[1].slice(0, 5),
-            capacity: configForDay.capacity,
-            company: company,
-          });
+          const slotEndTime = new Date(currentTime.getTime() + slotDuration);
+          
+          // Verificar que no exceda el horario del día
+          if (slotEndTime <= endTimeDate) {
+            const slot = this.timeSlotRepository.create({
+              date: new Date(year, month, day), // Fecha sin hora
+              startTime: currentTime.toTimeString().slice(0, 5), // HH:MM
+              endTime: slotEndTime.toTimeString().slice(0, 5), // HH:MM
+              capacity: configForDay.capacity,
+              durationMinutes: configForDay.slotDurationMinutes || 60,
+              isIntermediateSlot: false,
+              company: company,
+            });
 
-          timeSlots.push(slot);
-          totalSlotsCreated++;
-          currentTime = new Date(currentTime.getTime() + 60 * 60 * 1000);
+            timeSlots.push(slot);
+            totalSlotsCreated++;
+          }
+          
+          currentTime = new Date(currentTime.getTime() + slotDuration);
+        }
+
+        // Generar turnos intermedios si están habilitados
+        if (configForDay.allowIntermediateSlots && configForDay.intermediateCapacity) {
+          // Los turnos intermedios tienen la misma duración que los principales (60 min)
+          const intermediateSlotDuration = slotDuration; // Mismo que el turno principal
+          
+          // El offset debe ser la mitad de la duración del turno principal
+          // Si el turno principal es de 60 min, el intermedio comienza a los 30 min
+          const offsetTime = slotDuration / 2;
+          
+          let intermediateTime = new Date(year, month, day, startHour, startMinute, 0, 0);
+          intermediateTime = new Date(intermediateTime.getTime() + offsetTime);
+
+          while (intermediateTime < endTimeDate) {
+            const intermediateEndTime = new Date(intermediateTime.getTime() + intermediateSlotDuration);
+            
+            // Verificar que no exceda el horario del día
+            if (intermediateEndTime <= endTimeDate) {
+              const intermediateSlot = this.timeSlotRepository.create({
+                date: new Date(year, month, day), // Fecha sin hora
+                startTime: intermediateTime.toTimeString().slice(0, 5), // HH:MM
+                endTime: intermediateEndTime.toTimeString().slice(0, 5), // HH:MM
+                capacity: configForDay.intermediateCapacity,
+                durationMinutes: configForDay.slotDurationMinutes || 60, // Misma duración que principal
+                isIntermediateSlot: true,
+                company: company,
+              });
+
+              timeSlots.push(intermediateSlot);
+              totalSlotsCreated++;
+            }
+            
+            // Avanzar al siguiente turno intermedio (cada turno principal)
+            intermediateTime = new Date(intermediateTime.getTime() + slotDuration);
+          }
         }
       } else {
       }

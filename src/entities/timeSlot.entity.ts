@@ -22,6 +22,12 @@ export class TimeSlot {
   @Column({ type: 'int', default: 0 })
   reservedCount: number;
 
+  @Column({ type: 'int', default: 60 })
+  durationMinutes: number; // Duración del turno en minutos
+
+  @Column({ type: 'boolean', default: false })
+  isIntermediateSlot: boolean; // Indica si es un turno intermedio/superpuesto
+
   @ManyToOne(() => Company, company => company.timeSlots)
   company: Company;
 

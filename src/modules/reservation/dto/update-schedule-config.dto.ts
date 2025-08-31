@@ -22,5 +22,26 @@ export class UpdateScheduleConfigDto {
 
   @IsBoolean()
   @IsOptional()
+  allowIntermediateSlots?: boolean;
+
+  @IsInt()
+  @Min(1)
+  @IsOptional()
+  intermediateCapacity?: number;
+
+  @IsInt()
+  @Min(15)
+  @Max(180)
+  @IsOptional()
+  slotDurationMinutes?: number;
+
+  @IsInt()
+  @Min(15)
+  @Max(120)
+  @IsOptional()
+  intermediateSlotDurationMinutes?: number;
+
+  @IsBoolean()
+  @IsOptional()
   isActive?: boolean;
 } 
