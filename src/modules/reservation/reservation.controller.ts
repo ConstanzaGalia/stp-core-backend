@@ -171,14 +171,6 @@ export class ReservationsController {
     );
   }
 
-  @Post(':userId/:timeSlotId')
-  async createReservation(
-    @Param('userId') userId: string,
-    @Param('timeSlotId') timeSlotId: string,
-  ) {
-    return this.reservationsService.createReservation(userId, timeSlotId);
-  }
-
   @Delete(':reservationId')
   @UseGuards(AuthGuard('jwt'))
   async cancelReservation(
@@ -202,6 +194,32 @@ export class ReservationsController {
     @Body() createScheduleExceptionDto: CreateScheduleExceptionDto,
   ) {
     return await this.reservationsService.createScheduleException(companyId, createScheduleExceptionDto);
+  }
+
+  @Post('schedule-exception-async/:companyId')
+  @UseGuards(AuthGuard('jwt'))
+  async createScheduleExceptionAsync(
+    @Param('companyId') companyId: string,
+    @Body() createScheduleExceptionDto: CreateScheduleExceptionDto,
+  ) {
+    // Crear la excepción inmediatamente
+    const result = await this.reservationsService.createScheduleException(companyId, createScheduleExceptionDto);
+    
+    // Procesar la aplicación de excepciones en segundo plano
+    setImmediate(async () => {
+      try {
+        await this.reservationsService.applyExceptionToExistingTimeSlots(companyId, result.exception);
+        console.log('✅ Excepción aplicada en segundo plano');
+      } catch (error) {
+        console.error('❌ Error aplicando excepción en segundo plano:', error);
+      }
+    });
+
+    return {
+      message: 'Excepción creada. Se está aplicando en segundo plano.',
+      exception: result.exception,
+      status: 'processing'
+    };
   }
 
   @Post('apply-exception/:companyId/:exceptionId')
@@ -238,5 +256,14 @@ export class ReservationsController {
   async deleteScheduleException(@Param('id') id: string) {
     await this.reservationsService.deleteScheduleException(id);
     return { message: 'Schedule exception deleted successfully' };
+  }
+
+  // Endpoint para crear reservas - debe ir al final para evitar conflictos de routing
+  @Post(':userId/:timeSlotId')
+  async createReservation(
+    @Param('userId') userId: string,
+    @Param('timeSlotId') timeSlotId: string,
+  ) {
+    return this.reservationsService.createReservation(userId, timeSlotId);
   }
 }

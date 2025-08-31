@@ -593,7 +593,7 @@ export class ReservationsService {
   async createScheduleException(
     companyId: string,
     createScheduleExceptionDto: any,
-  ): Promise<ScheduleException> {
+  ): Promise<any> {
     const company = await this.companyRepository.findOne({ where: { id: companyId } });
     
     if (!company) {
@@ -609,16 +609,20 @@ export class ReservationsService {
     const exception = await this.scheduleExceptionRepository.findOne({ where: { id: result.identifiers[0].id } });
 
     // Aplicar la excepción a los turnos existentes
-    await this.applyExceptionToExistingTimeSlots(companyId, exception);
+    const applicationResult = await this.applyExceptionToExistingTimeSlots(companyId, exception);
 
-    return exception;
+    return {
+      exception,
+      applicationResult,
+      message: 'Excepción creada correctamente',
+    };
   }
 
   async applyExceptionToExistingTimeSlots(companyId: string, exception: ScheduleException): Promise<any> {
     console.log(`Aplicando excepción ${exception.id} a turnos existentes para ${exception.exceptionDate}`);
 
-    // Buscar todos los turnos existentes para esa fecha
-    const existingTimeSlots = await this.timeSlotRepository.find({
+    // Buscar turnos sin reservas primero (más rápido para eliminar)
+    const timeSlotsToDelete = await this.timeSlotRepository.find({
       where: {
         company: { id: companyId },
         date: exception.exceptionDate,
@@ -626,94 +630,115 @@ export class ReservationsService {
       relations: ['reservations'],
     });
 
-    console.log(`Encontrados ${existingTimeSlots.length} turnos para la fecha ${exception.exceptionDate}`);
+    console.log(`Encontrados ${timeSlotsToDelete.length} turnos para la fecha ${exception.exceptionDate}`);
 
-    if (existingTimeSlots.length === 0) {
+    if (timeSlotsToDelete.length === 0) {
       console.log('No hay turnos existentes para aplicar la excepción');
-      return { message: 'No hay turnos existentes para esta fecha' };
+      return { 
+        message: 'No hay turnos existentes para esta fecha',
+        updatedSlots: 0,
+        deletedSlots: 0,
+        totalProcessed: 0,
+        note: 'La excepción se guardó pero no se aplicó a ningún turno'
+      };
     }
 
     let updatedSlots = 0;
     let deletedSlots = 0;
+    let skippedSlots = 0;
 
-    for (const timeSlot of existingTimeSlots) {
-      // Si el día está completamente cerrado
-      if (exception.isClosed) {
-        // Verificar si hay reservas
-        if (timeSlot.reservations && timeSlot.reservations.length > 0) {
-          console.log(`⚠️ No se puede cerrar el turno ${timeSlot.id} porque tiene ${timeSlot.reservations.length} reservas`);
-          continue;
-        }
-        
-        // Eliminar el turno
-        await this.timeSlotRepository.remove(timeSlot);
-        deletedSlots++;
-        console.log(`🗑️ Turno eliminado: ${timeSlot.startTime} - ${timeSlot.endTime}`);
-      } else {
-        // Modificar el turno según la excepción
-        const originalStartTime = timeSlot.startTime;
-        const originalEndTime = timeSlot.endTime;
-        const originalCapacity = timeSlot.capacity;
+    // Procesar en lotes para mejor rendimiento
+    const batchSize = 10;
+    const batches = [];
+    
+    for (let i = 0; i < timeSlotsToDelete.length; i += batchSize) {
+      batches.push(timeSlotsToDelete.slice(i, i + batchSize));
+    }
 
-        // Verificar si el turno está dentro del horario de la excepción
-        if (exception.startTime && exception.endTime) {
-          const slotStart = timeSlot.startTime;
-          const slotEnd = timeSlot.endTime;
-          const exceptionStart = exception.startTime;
-          const exceptionEnd = exception.endTime;
+    for (const batch of batches) {
+      const operations = [];
 
-          // Si el turno está completamente fuera del horario de la excepción
-          if (slotEnd <= exceptionStart || slotStart >= exceptionEnd) {
-            // Verificar si hay reservas
-            if (timeSlot.reservations && timeSlot.reservations.length > 0) {
-              console.log(`⚠️ No se puede eliminar el turno ${timeSlot.id} porque tiene reservas`);
-              continue;
-            }
-            
-            // Eliminar el turno
-            await this.timeSlotRepository.remove(timeSlot);
-            deletedSlots++;
-            console.log(`🗑️ Turno eliminado (fuera de horario): ${slotStart} - ${slotEnd}`);
-          } else {
-            // Ajustar el turno al horario de la excepción
-            const newStartTime = slotStart < exceptionStart ? exceptionStart : slotStart;
-            const newEndTime = slotEnd > exceptionEnd ? exceptionEnd : slotEnd;
-            
-            // Verificar que el turno tenga duración válida
-            if (newStartTime < newEndTime) {
-              timeSlot.startTime = newStartTime;
-              timeSlot.endTime = newEndTime;
-              timeSlot.capacity = exception.capacity || timeSlot.capacity;
+      for (const timeSlot of batch) {
+        // Si el día está completamente cerrado
+        if (exception.isClosed) {
+          // Verificar si hay reservas
+          if (timeSlot.reservations && timeSlot.reservations.length > 0) {
+            console.log(`⚠️ No se puede cerrar el turno ${timeSlot.id} porque tiene ${timeSlot.reservations.length} reservas`);
+            skippedSlots++;
+            continue;
+          }
+          
+          // Agregar a operaciones de eliminación
+          operations.push(this.timeSlotRepository.remove(timeSlot));
+          deletedSlots++;
+        } else {
+          // Modificar el turno según la excepción
+          if (exception.startTime && exception.endTime) {
+            const slotStart = timeSlot.startTime;
+            const slotEnd = timeSlot.endTime;
+            const exceptionStart = exception.startTime;
+            const exceptionEnd = exception.endTime;
+
+            // Si el turno está completamente fuera del horario de la excepción
+            if (slotEnd <= exceptionStart || slotStart >= exceptionEnd) {
+              // Verificar si hay reservas
+              if (timeSlot.reservations && timeSlot.reservations.length > 0) {
+                console.log(`⚠️ No se puede eliminar el turno ${timeSlot.id} porque tiene reservas`);
+                skippedSlots++;
+                continue;
+              }
               
-              await this.timeSlotRepository.save(timeSlot);
-              updatedSlots++;
-              console.log(`✏️ Turno actualizado: ${originalStartTime}-${originalEndTime} → ${newStartTime}-${newEndTime}`);
+              // Agregar a operaciones de eliminación
+              operations.push(this.timeSlotRepository.remove(timeSlot));
+              deletedSlots++;
             } else {
-              // Turno sin duración válida, eliminarlo si no tiene reservas
-              if (!timeSlot.reservations || timeSlot.reservations.length === 0) {
-                await this.timeSlotRepository.remove(timeSlot);
-                deletedSlots++;
-                console.log(`🗑️ Turno eliminado (sin duración válida): ${slotStart} - ${slotEnd}`);
+              // Ajustar el turno al horario de la excepción
+              const newStartTime = slotStart < exceptionStart ? exceptionStart : slotStart;
+              const newEndTime = slotEnd > exceptionEnd ? exceptionEnd : slotEnd;
+              
+              // Verificar que el turno tenga duración válida
+              if (newStartTime < newEndTime) {
+                timeSlot.startTime = newStartTime;
+                timeSlot.endTime = newEndTime;
+                timeSlot.capacity = exception.capacity || timeSlot.capacity;
+                
+                // Agregar a operaciones de actualización
+                operations.push(this.timeSlotRepository.save(timeSlot));
+                updatedSlots++;
+              } else {
+                // Turno sin duración válida, eliminarlo si no tiene reservas
+                if (!timeSlot.reservations || timeSlot.reservations.length === 0) {
+                  operations.push(this.timeSlotRepository.remove(timeSlot));
+                  deletedSlots++;
+                } else {
+                  skippedSlots++;
+                }
               }
             }
+          } else {
+            // Solo cambiar la capacidad
+            timeSlot.capacity = exception.capacity || timeSlot.capacity;
+            operations.push(this.timeSlotRepository.save(timeSlot));
+            updatedSlots++;
           }
-        } else {
-          // Solo cambiar la capacidad
-          timeSlot.capacity = exception.capacity || timeSlot.capacity;
-          await this.timeSlotRepository.save(timeSlot);
-          updatedSlots++;
-          console.log(`✏️ Capacidad actualizada: ${originalCapacity} → ${timeSlot.capacity}`);
         }
+      }
+
+      // Ejecutar operaciones en lote
+      if (operations.length > 0) {
+        await Promise.all(operations);
+        console.log(`✅ Procesado lote: ${operations.length} operaciones`);
       }
     }
 
-    console.log(`✅ Excepción aplicada: ${updatedSlots} turnos actualizados, ${deletedSlots} turnos eliminados`);
+    console.log(`✅ Excepción aplicada: ${updatedSlots} turnos actualizados, ${deletedSlots} turnos eliminados, ${skippedSlots} turnos omitidos`);
 
     return {
       message: 'Excepción aplicada correctamente',
       updatedSlots,
       deletedSlots,
-      totalProcessed: existingTimeSlots.length,
+      skippedSlots,
+      totalProcessed: timeSlotsToDelete.length,
     };
   }
 

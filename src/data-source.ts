@@ -23,4 +23,7 @@ export const AppDataSource = new DataSource({
   entities: [User, Company, Category, Exercise, Payment, Reservation, Plan, Slot, TimeSlot, UserPlan, Reservation, Tag, TrainingPlan],
   migrations: ['src/migrations/*.ts'],
   synchronize: false,
+  ssl: {
+    rejectUnauthorized: false,
+  },
 });

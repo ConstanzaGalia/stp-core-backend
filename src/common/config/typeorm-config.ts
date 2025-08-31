@@ -9,6 +9,9 @@ export const TYPEORM_CONFIG: TypeOrmModuleOptions = {
   database: process.env.DB_NAME,
   entities: ['dist/**/*.entity.{ts,js}'],
   synchronize: false,
+  ssl: {
+    rejectUnauthorized: false,
+  },
   extra: {
     connectionLimit: 15,
   },
