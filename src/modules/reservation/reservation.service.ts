@@ -808,6 +808,7 @@ export class ReservationsService {
   async getScheduleExceptionById(exceptionId: string): Promise<ScheduleException | null> {
     return this.scheduleExceptionRepository.findOne({
       where: { id: exceptionId },
+      relations: ['company']
     });
   }
 
@@ -836,7 +837,10 @@ export class ReservationsService {
   }
 
   async deleteScheduleException(id: string): Promise<void> {
-    const scheduleException = await this.scheduleExceptionRepository.findOne({ where: { id } });
+    const scheduleException = await this.scheduleExceptionRepository.findOne({ 
+      where: { id },
+      relations: ['company'] // Cargar la relación company
+    });
     
     if (!scheduleException) {
       throw new BadRequestException('Schedule exception not found');
