@@ -3,10 +3,13 @@ import { ApiProperty } from '@nestjs/swagger';
 import { UserRole } from '../common/enums/enums';
 import { Company } from './company.entity';
 import { Payment } from './payment.entity';
+import { UserPaymentSubscription } from './user-payment-subscription.entity';
+import { ClassUsage } from './class-usage.entity';
 import { Slot } from './slot.entity';
 import { TrainingPlan } from './traininPlan.entity';
 import { UserPlan } from './userPlan.entity';
 import { Reservation } from './reservation.entity';
+import { AthleteInvitation } from './athlete-invitation.entity';
 
 @Entity('user')
 export class User {
@@ -84,6 +87,12 @@ export class User {
   @OneToMany(() => Payment, payment => payment.user)
   payments: Payment[];
 
+  @OneToMany(() => UserPaymentSubscription, subscription => subscription.user)
+  paymentSubscriptions: UserPaymentSubscription[];
+
+  @OneToMany(() => ClassUsage, classUsage => classUsage.user)
+  classUsages: ClassUsage[];
+
   @OneToMany(() => Slot, slot => slot.user)
   slots: Slot[];
 
@@ -95,6 +104,9 @@ export class User {
 
   @OneToMany(() => Reservation, reservation => reservation.user)
   reservations: Reservation[];
+
+  @OneToMany(() => AthleteInvitation, invitation => invitation.user)
+  athleteInvitations: AthleteInvitation[];
 
   @CreateDateColumn({ type: "timestamp", default: () => "CURRENT_TIMESTAMP(6)" })
   public created_at: Date;

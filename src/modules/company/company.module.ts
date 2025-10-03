@@ -6,10 +6,15 @@ import { Company } from 'src/entities/company.entity';
 import { User } from 'src/entities/user.entity';
 import { TypeOrmModule } from '@nestjs/typeorm';
 import { AuthModule } from '../auth/auth.module';
+import { MailingModule } from '../mailer/mailing.module';
 
 @Module({
-  imports: [TypeOrmModule.forFeature([Company, User]), AuthModule],
+  imports: [
+    TypeOrmModule.forFeature([Company, User]), 
+    AuthModule,
+    MailingModule
+  ],
   controllers: [CompanyController],
-  providers: [CompanyService, Pagination, ],
+  providers: [CompanyService, Pagination],
 })
 export class CompanyModule {}

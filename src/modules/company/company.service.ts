@@ -20,6 +20,8 @@ import { AssociateTrainerDto } from './dto/associate-trainer.dto';
 import { JoinCompanyDto } from './dto/join-company.dto';
 import { TrainerResponseDto } from './dto/trainer-response.dto';
 import { TrainerDetailResponseDto } from './dto/trainer-detail-response.dto';
+import { MailingService } from '../mailer/mailing.service';
+import { inviteStudentEmail } from '../../utils/emailTemplates';
 
 @Injectable()
 export class CompanyService {
@@ -29,6 +31,7 @@ export class CompanyService {
     @InjectRepository(User)
     private readonly userRepository: Repository<User>,
     private pagination: Pagination,
+    private readonly mailingService: MailingService,
   ) {}
   public async create(createCompanyDto: CreateCompanyDto, user: User) {
     try {
@@ -415,6 +418,195 @@ export class CompanyService {
     }));
   }
 
+  // Método para obtener todos los alumnos de un centro
+  public async getAllCompanyStudents(companyId: string): Promise<any[]> {
+    // Verificar que la empresa existe
+    const company = await this.companyRepository.findOne({
+      where: { id: companyId },
+      relations: ['users'],
+    });
+
+    if (!company) {
+      throw new NotFoundException('Company not found');
+    }
+
+    // Verificar que la empresa está activa
+    if (company.isDelete) {
+      throw new BadRequestException('Company is not active');
+    }
+
+    // Filtrar solo alumnos (ATHLETE)
+    const students = company.users.filter(user => 
+      user.role === UserRole.ATHLETE
+    );
+
+    // Mapear a DTO de respuesta
+    return students.map(student => ({
+      id: student.id,
+      email: student.email,
+      name: student.name,
+      lastName: student.lastName,
+      role: student.role,
+      isActive: student.isActive,
+      phoneNumber: student.phoneNumber,
+      country: student.country,
+      city: student.city,
+      imageProfile: student.imageProfile,
+      enrollmentDate: student.created_at, // Usar fecha de creación como fecha de inscripción
+    }));
+  }
+
+  // Método para invitar un alumno al centro por email
+  public async inviteStudentToCompany(
+    companyId: string, 
+    studentEmail: string,
+    directorId: string
+  ): Promise<any> {
+    // Verificar que la empresa existe
+    const company = await this.companyRepository.findOne({
+      where: { id: companyId },
+      relations: ['users'],
+    });
+
+    if (!company) {
+      throw new NotFoundException('Company not found');
+    }
+
+    // Verificar que el director tiene permisos
+    const director = company.users.find(user => user.id === directorId);
+    if (!director || (director.role !== UserRole.DIRECTOR)) {
+      throw new ForbiddenException('Only directors can invite students');
+    }
+
+    // Buscar al alumno por email
+    const student = await this.userRepository.findOne({
+      where: { email: studentEmail },
+    });
+
+    if (!student) {
+      throw new NotFoundException('Student not found with the provided email');
+    }
+
+    // Verificar que el usuario es un alumno
+    if (student.role !== UserRole.ATHLETE) {
+      throw new BadRequestException('User is not a student (ATHLETE)');
+    }
+
+    // Verificar que el alumno no esté ya asociado a esta empresa
+    const isAlreadyAssociated = company.users.some(user => user.id === student.id);
+    if (isAlreadyAssociated) {
+      throw new ConflictException('Student is already associated with this company');
+    }
+
+    // Verificar que el alumno no esté asociado a otra empresa
+    const studentCompanies = await this.companyRepository.find({
+      where: {
+        users: {
+          id: student.id,
+        },
+      },
+    });
+
+    if (studentCompanies.length > 0) {
+      throw new ConflictException('Student is already associated with another company');
+    }
+
+    // Crear URL para que el alumno acepte la invitación
+    const joinUrl = `${process.env.FRONTEND_URL || 'http://localhost:3000'}/company/${companyId}/accept-invitation`;
+
+    try {
+      // Generar template de email de invitación
+      const mail = inviteStudentEmail(
+        student.email,
+        student.name,
+        company.name,
+        joinUrl,
+        process.env.RESEND_FROM_EMAIL || 'noreply@stp.com'
+      );
+
+      // Enviar email de invitación
+      await this.mailingService.sendMail(mail);
+
+      return {
+        message: 'Student invited successfully and email sent',
+        student: {
+          id: student.id,
+          email: student.email,
+          name: student.name,
+          lastName: student.lastName,
+          companyName: company.name
+        },
+        joinUrl
+      };
+    } catch (error) {
+      // Log error pero seguir con el proceso (invitation continua)
+      console.error('Error sending invitation email:', error);
+      return {
+        message: 'Student invited successfully but email failed to send',
+        student: {
+          id: student.id,
+          email: student.email,
+          name: student.name,
+          lastName: student.lastName,
+          companyName: company.name
+        },
+        joinUrl,
+        emailError: 'Email delivery failed',
+      };
+    }
+  }
+
+  // Método para que un alumno acepte la invitación (join company)
+  public async joinCompanyAsStudent(
+    companyId: string,
+    studentEmail: string,
+  ): Promise<any> {
+    // Verificar que la empresa existe
+    const company = await this.companyRepository.findOne({
+      where: { id: companyId },
+      relations: ['users'],
+    });
+
+    if (!company) {
+      throw new NotFoundException('Company not found');
+    }
+
+    // Buscar al alumno por email
+    const student = await this.userRepository.findOne({
+      where: { email: studentEmail },
+    });
+
+    if (!student) {
+      throw new NotFoundException('Student not found with the provided email');
+    }
+
+    // Verificar que es un alumno
+    if (student.role !== UserRole.ATHLETE) {
+      throw new BadRequestException('User is not a student (ATHLETE)');
+    }
+
+    // Verificar que el alumno no esté ya asociado a esta empresa
+    const isAlreadyAssociated = company.users.some(user => user.id === student.id);
+    if (isAlreadyAssociated) {
+      throw new ConflictException('Student is already associated with this company');
+    }
+
+    // Asociar el alumno a la empresa
+    company.users.push(student);
+    await this.companyRepository.save(company);
+
+    return {
+      message: 'Student joined the company successfully',
+      student: {
+        id: student.id,
+        email: student.email,
+        name: student.name,
+        lastName: student.lastName,
+        companyName: company.name
+      }
+    };
+  }
+
   // Método para obtener entrenadores con paginación
   public async getCompanyTrainersPaginated(
     companyId: string,
@@ -465,6 +657,62 @@ export class CompanyService {
 
     return {
       trainers,
+      total,
+      page,
+      totalPages,
+    };
+  }
+
+  // Método para obtener alumnos del centro con paginación
+  public async getCompanyStudentsPaginated(
+    companyId: string,
+    page: number = 1,
+    limit: number = 10,
+  ): Promise<{ students: any[]; total: number; page: number; totalPages: number }> {
+    // Verificar que la empresa existe
+    const company = await this.companyRepository.findOne({
+      where: { id: companyId },
+      relations: ['users'],
+    });
+
+    if (!company) {
+      throw new NotFoundException('Company not found');
+    }
+
+    // Verificar que la empresa está activa
+    if (company.isDelete) {
+      throw new BadRequestException('Company is not active');
+    }
+
+    // Filtrar solo alumnos (ATHLETE)
+    const allStudents = company.users.filter(user => 
+      user.role === UserRole.ATHLETE
+    );
+
+    // Calcular paginación
+    const total = allStudents.length;
+    const totalPages = Math.ceil(total / limit);
+    const startIndex = (page - 1) * limit;
+    const endIndex = startIndex + limit;
+    const paginatedStudents = allStudents.slice(startIndex, endIndex);
+
+    // Mapear a DTO de respuesta
+    const students = paginatedStudents.map(student => ({
+      id: student.id,
+      email: student.email,
+      name: student.name,
+      lastName: student.lastName,
+      role: student.role,
+      isActive: student.isActive,
+      phoneNumber: student.phoneNumber,
+      country: student.country,
+      city: student.city,
+      imageProfile: student.imageProfile,
+      enrollmentDate: student.created_at, // Fecha de inscripción
+    }));
+
+    return {
+      students,
       total,
       page,
       totalPages,

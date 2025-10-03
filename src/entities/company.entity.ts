@@ -2,12 +2,16 @@ import { Column, CreateDateColumn, DeleteDateColumn, Entity, JoinTable, ManyToMa
 import { ApiProperty } from '@nestjs/swagger';
 import { User } from './user.entity';
 import { Payment } from './payment.entity';
+import { PaymentPlan } from './payment-plan.entity';
+import { UserPaymentSubscription } from './user-payment-subscription.entity';
+import { ClassUsage } from './class-usage.entity';
 import { Slot } from './slot.entity';
 import { TrainingPlan } from './traininPlan.entity';
 import { TimeSlot } from './timeSlot.entity';
 import { ScheduleConfig } from './schedule-config.entity';
 import { ScheduleException } from './schedule-exception.entity';
 import { TimeSlotGeneration } from './time-slot-generation.entity';
+import { AthleteInvitation } from './athlete-invitation.entity';
 
 @Entity('company')
 export class Company {
@@ -42,6 +46,15 @@ export class Company {
   @OneToMany(() => Payment, payment => payment.company)
   payments: Payment[];
 
+  @OneToMany(() => PaymentPlan, paymentPlan => paymentPlan.company)
+  paymentPlans: PaymentPlan[];
+
+  @OneToMany(() => UserPaymentSubscription, subscription => subscription.company)
+  userPaymentSubscriptions: UserPaymentSubscription[];
+
+  @OneToMany(() => ClassUsage, classUsage => classUsage.company)
+  classUsages: ClassUsage[];
+
   @OneToMany(() => Slot, slot => slot.company)
   slots: Slot[];
 
@@ -59,6 +72,9 @@ export class Company {
 
   @OneToMany(() => TimeSlotGeneration, timeSlotGeneration => timeSlotGeneration.company)
   timeSlotGenerations: TimeSlotGeneration[];
+
+  @OneToMany(() => AthleteInvitation, invitation => invitation.company)
+  athleteInvitations: AthleteInvitation[];
 
   @CreateDateColumn({ type: "timestamp", default: () => "CURRENT_TIMESTAMP(6)" })
   public created_at: Date;

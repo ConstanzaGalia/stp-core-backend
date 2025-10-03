@@ -10,6 +10,8 @@ import { CompanyModule } from './modules/company/company.module';
 import { Pagination } from './common/pagination/pagination';
 import { ExerciseModule } from './modules/exercise/exercise.module';
 import { ReservationsModule } from './modules/reservation/reservation.module';
+import { PaymentsModule } from './modules/payments/payments.module';
+import { AthletesModule } from './modules/athletes/athletes.module';
 
 
 @Module({
@@ -37,6 +39,8 @@ import { ReservationsModule } from './modules/reservation/reservation.module';
     CompanyModule,
     ExerciseModule,
     ReservationsModule,
+    PaymentsModule,
+    AthletesModule,
   ],
   controllers: [],
   providers: [Pagination],

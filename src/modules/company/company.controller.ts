@@ -165,4 +165,44 @@ export class CompanyController {
   public async getAnyTrainerDetail(@Param('trainerId') trainerId: string) {
     return await this.companyService.getAnyTrainerDetail(trainerId);
   }
+
+  // Endpoints para obtener alumnos del centro
+  @Get(':companyId/students/all')
+  @UseGuards(AuthGuard('jwt'))
+  public async getAllCompanyStudents(@Param('companyId') companyId: string) {
+    return await this.companyService.getAllCompanyStudents(companyId);
+  }
+
+  @Get(':companyId/students')
+  @UseGuards(AuthGuard('jwt'))
+  public async getCompanyStudentsPaginated(
+    @Param('companyId') companyId: string,
+    @Query('page') page: number = 1,
+    @Query('limit') limit: number = 10,
+  ) {
+    return await this.companyService.getCompanyStudentsPaginated(companyId, page, limit);
+  }
+
+  // Endpoints para invitación de alumnos
+  @Post(':companyId/invite-student')
+  @UseGuards(AuthGuard('jwt'))
+  public async inviteStudentToCompany(
+    @Param('companyId') companyId: string,
+    @Body() body: { studentEmail: string },
+    @GetUser() director: User,
+  ) {
+    return await this.companyService.inviteStudentToCompany(
+      companyId, 
+      body.studentEmail, 
+      director.id
+    );
+  }
+
+  @Post(':companyId/join-as-student')
+  public async joinCompanyAsStudent(
+    @Param('companyId') companyId: string,
+    @Body() body: { studentEmail: string },
+  ) {
+    return await this.companyService.joinCompanyAsStudent(companyId, body.studentEmail);
+  }
 }
