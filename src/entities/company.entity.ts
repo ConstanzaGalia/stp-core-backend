@@ -12,6 +12,7 @@ import { ScheduleConfig } from './schedule-config.entity';
 import { ScheduleException } from './schedule-exception.entity';
 import { TimeSlotGeneration } from './time-slot-generation.entity';
 import { AthleteInvitation } from './athlete-invitation.entity';
+import { RecurringReservation } from './recurring-reservation.entity';
 
 @Entity('company')
 export class Company {
@@ -75,6 +76,9 @@ export class Company {
 
   @OneToMany(() => AthleteInvitation, invitation => invitation.company)
   athleteInvitations: AthleteInvitation[];
+
+  @OneToMany(() => RecurringReservation, recurringReservation => recurringReservation.company)
+  recurringReservations: RecurringReservation[];
 
   @CreateDateColumn({ type: "timestamp", default: () => "CURRENT_TIMESTAMP(6)" })
   public created_at: Date;

@@ -1,4 +1,4 @@
-import { Controller, Post, Param, Delete, Body, Get, Put, UseGuards, Query, BadRequestException } from '@nestjs/common';
+import { Controller, Post, Param, Delete, Body, Get, Put, UseGuards, Query, BadRequestException, ForbiddenException } from '@nestjs/common';
 import { PaginationQueryDto } from './dto/pagination-query.dto';
 import { ReservationsService } from './reservation.service';
 import { TimeSlot } from 'src/entities/timeSlot.entity';
@@ -7,9 +7,11 @@ import { CreateScheduleConfigDto } from './dto/create-schedule-config.dto';
 import { UpdateScheduleConfigDto } from './dto/update-schedule-config.dto';
 import { CreateScheduleExceptionDto } from './dto/create-schedule-exception.dto';
 import { UpdateScheduleExceptionDto } from './dto/update-schedule-exception.dto';
+import { CreateRecurringReservationDto } from './dto/create-recurring-reservation.dto';
 import { AuthGuard } from '@nestjs/passport';
 import { GetUser } from '../auth/get-user.decorator';
 import { User } from 'src/entities/user.entity';
+import { RecurringReservation } from 'src/entities/recurring-reservation.entity';
 
 
 @Controller('reservations')
@@ -260,10 +262,84 @@ export class ReservationsController {
 
   // Endpoint para crear reservas - debe ir al final para evitar conflictos de routing
   @Post(':userId/:timeSlotId')
+  @UseGuards(AuthGuard('jwt'))
   async createReservation(
     @Param('userId') userId: string,
     @Param('timeSlotId') timeSlotId: string,
+    @GetUser() user: User,
   ) {
+    // Validar que el usuario autenticado sea el mismo que está reservando
+    if (user.id !== userId) {
+      throw new ForbiddenException('Solo puedes reservar para tu propia cuenta');
+    }
+
     return this.reservationsService.createReservation(userId, timeSlotId);
+  }
+
+  // ========== ENDPOINTS PARA RESERVAS RECURRENTES ==========
+
+  /**
+   * Crear una reserva recurrente
+   * POST /reservations/recurring
+   */
+  @Post('recurring')
+  @UseGuards(AuthGuard('jwt'))
+  async createRecurringReservation(
+    @GetUser() user: User,
+    @Body() createRecurringDto: CreateRecurringReservationDto
+  ): Promise<RecurringReservation> {
+    return this.reservationsService.createRecurringReservation(user.id, createRecurringDto);
+  }
+
+  /**
+   * Obtener las reservas recurrentes del usuario autenticado
+   * GET /reservations/recurring
+   */
+  @Get('recurring')
+  @UseGuards(AuthGuard('jwt'))
+  async getUserRecurringReservations(@GetUser() user: User): Promise<RecurringReservation[]> {
+    return this.reservationsService.getUserRecurringReservations(user.id);
+  }
+
+  /**
+   * Cancelar una reserva recurrente
+   * DELETE /reservations/recurring/:id
+   */
+  @Delete('recurring/:id')
+  @UseGuards(AuthGuard('jwt'))
+  async cancelRecurringReservation(
+    @Param('id') id: string,
+    @GetUser() user: User
+  ): Promise<{ message: string }> {
+    await this.reservationsService.cancelRecurringReservation(id, user.id);
+    return { message: 'Reserva recurrente cancelada exitosamente' };
+  }
+
+  /**
+   * Pausar una reserva recurrente
+   * PUT /reservations/recurring/:id/pause
+   */
+  @Put('recurring/:id/pause')
+  @UseGuards(AuthGuard('jwt'))
+  async pauseRecurringReservation(
+    @Param('id') id: string,
+    @GetUser() user: User
+  ): Promise<{ message: string }> {
+    await this.reservationsService.pauseRecurringReservation(id, user.id);
+    return { message: 'Reserva recurrente pausada exitosamente' };
+  }
+
+  /**
+   * Reanudar una reserva recurrente
+   * PUT /reservations/recurring/:id/resume
+   */
+  @Put('recurring/:id/resume')
+  @UseGuards(AuthGuard('jwt'))
+  async resumeRecurringReservation(
+    @Param('id') id: string,
+    @GetUser() user: User
+  ): Promise<{ message: string }> {
+    await this.reservationsService.resumeRecurringReservation(id, user.id);
+    return { message: 'Reserva recurrente reanudada exitosamente' };
   }
 }

@@ -6,7 +6,12 @@ import { TimeSlot } from 'src/entities/timeSlot.entity';
 import { ScheduleConfig } from 'src/entities/schedule-config.entity';
 import { ScheduleException } from 'src/entities/schedule-exception.entity';
 import { TimeSlotGeneration } from 'src/entities/time-slot-generation.entity';
+import { RecurringReservation } from 'src/entities/recurring-reservation.entity';
+import { UserPaymentSubscription, SubscriptionStatus } from 'src/entities/user-payment-subscription.entity';
 import { Repository, Between } from 'typeorm';
+import { CreateRecurringReservationDto, RecurringFrequency, RecurringEndType } from './dto/create-recurring-reservation.dto';
+import { RecurringStatus } from 'src/entities/recurring-reservation.entity';
+import { PaymentsService } from '../payments/payments.service';
 
 
 @Injectable()
@@ -24,9 +29,40 @@ export class ReservationsService {
     private readonly scheduleExceptionRepository: Repository<ScheduleException>,
     @InjectRepository(TimeSlotGeneration)
     private readonly timeSlotGenerationRepository: Repository<TimeSlotGeneration>,
+    @InjectRepository(RecurringReservation)
+    private readonly recurringReservationRepository: Repository<RecurringReservation>,
+    @InjectRepository(UserPaymentSubscription)
+    private readonly subscriptionRepository: Repository<UserPaymentSubscription>,
+    private readonly paymentsService: PaymentsService,
   ) {}
 
+  /**
+   * Obtener la suscripción activa de un usuario
+   */
+  private async getActiveSubscriptionForUser(userId: string): Promise<UserPaymentSubscription | null> {
+    return await this.subscriptionRepository.findOne({
+      where: { 
+        user: { id: userId },
+        status: SubscriptionStatus.ACTIVE
+      },
+      relations: ['paymentPlan']
+    });
+  }
+
   async createReservation(userId: string, timeSlotId: string): Promise<Reservation> {
+    // 1. Validar que el usuario tenga suscripción activa
+    const activeSubscription = await this.getActiveSubscriptionForUser(userId);
+    if (!activeSubscription) {
+      throw new BadRequestException('No tienes una suscripción activa para reservar clases');
+    }
+
+    // 2. Validar que puede reservar (plan pagado, clases disponibles)
+    const canBook = await this.paymentsService.canUserBookClass(activeSubscription.id);
+    if (!canBook) {
+      throw new BadRequestException('No puedes reservar clases. Verifica tu plan de pago o clases disponibles');
+    }
+
+    // 3. Validar que el time slot existe
     const timeSlot = await this.timeSlotRepository.findOne({
       where: { id: timeSlotId },
       relations: ['reservations'],
@@ -36,6 +72,7 @@ export class ReservationsService {
       throw new BadRequestException('Time slot not found');
     }
 
+    // 4. Validar que el time slot esté disponible
     if (timeSlot.isAvailable()) {
       timeSlot.reservedCount += 1;
       await this.timeSlotRepository.save(timeSlot);
@@ -982,5 +1019,230 @@ export class ReservationsService {
     }
 
     return await this.timeSlotRepository.save(timeSlots);
+  }
+
+  /**
+   * Crear una reserva recurrente
+   */
+  async createRecurringReservation(
+    userId: string,
+    createRecurringDto: CreateRecurringReservationDto
+  ): Promise<RecurringReservation> {
+    const { companyId, daysOfWeek, startTime, endTime, capacity, frequency, startDate, endType, endDate, maxOccurrences, notes } = createRecurringDto;
+
+    // Verificar que la empresa existe
+    const company = await this.companyRepository.findOne({
+      where: { id: companyId }
+    });
+
+    if (!company) {
+      throw new BadRequestException('La empresa no existe');
+    }
+
+    // Validar fechas
+    const startDateObj = new Date(startDate);
+    const today = new Date();
+    today.setHours(0, 0, 0, 0);
+
+    if (startDateObj < today) {
+      throw new BadRequestException('La fecha de inicio no puede ser anterior a hoy');
+    }
+
+    if (endType === 'date' && endDate) {
+      const endDateObj = new Date(endDate);
+      if (endDateObj <= startDateObj) {
+        throw new BadRequestException('La fecha de fin debe ser posterior a la fecha de inicio');
+      }
+    }
+
+    // Crear la reserva recurrente
+    const recurringReservation = this.recurringReservationRepository.create({
+      frequency,
+      daysOfWeek: daysOfWeek.join(','),
+      startTime,
+      endTime,
+      capacity,
+      startDate: startDateObj,
+      endType,
+      endDate: endType === RecurringEndType.DATE ? new Date(endDate) : null,
+      maxOccurrences: endType === RecurringEndType.COUNT ? maxOccurrences : null,
+      currentOccurrences: 0,
+      status: RecurringStatus.ACTIVE,
+      notes,
+      user: { id: userId } as any,
+      company: { id: companyId } as any,
+    });
+
+    const savedRecurringReservation = await this.recurringReservationRepository.save(recurringReservation);
+
+    // Generar las primeras reservas (próximas 4 semanas)
+    await this.generateRecurringReservations(savedRecurringReservation.id);
+
+    return savedRecurringReservation;
+  }
+
+  /**
+   * Generar reservas para una reserva recurrente
+   */
+  async generateRecurringReservations(recurringReservationId: string): Promise<void> {
+    const recurringReservation = await this.recurringReservationRepository.findOne({
+      where: { id: recurringReservationId },
+      relations: ['user', 'company']
+    });
+
+    if (!recurringReservation || recurringReservation.status !== RecurringStatus.ACTIVE) {
+      return;
+    }
+
+    const daysOfWeek = recurringReservation.daysOfWeek.split(',').map(Number);
+    const startDate = new Date(recurringReservation.startDate);
+    const today = new Date();
+    today.setHours(0, 0, 0, 0);
+
+    // Generar reservas hasta 4 semanas en el futuro
+    const endGenerationDate = new Date(today);
+    endGenerationDate.setDate(endGenerationDate.getDate() + 28); // 4 semanas
+
+    // Si hay fecha de fin, no generar más allá de esa fecha
+    if (recurringReservation.endDate && recurringReservation.endDate < endGenerationDate) {
+      endGenerationDate.setTime(recurringReservation.endDate.getTime());
+    }
+
+    // Si hay máximo de ocurrencias, verificar
+    if (recurringReservation.maxOccurrences && 
+        recurringReservation.currentOccurrences >= recurringReservation.maxOccurrences) {
+      return;
+    }
+
+    const currentDate = new Date(Math.max(today.getTime(), startDate.getTime()));
+    let generatedCount = 0;
+
+    while (currentDate <= endGenerationDate && generatedCount < 50) { // Límite de seguridad
+      const dayOfWeek = currentDate.getDay();
+      
+      if (daysOfWeek.includes(dayOfWeek)) {
+        // Verificar si ya existe una reserva para este día y horario
+        const existingTimeSlot = await this.timeSlotRepository.findOne({
+          where: {
+            date: new Date(currentDate),
+            startTime: recurringReservation.startTime,
+            endTime: recurringReservation.endTime,
+            company: { id: recurringReservation.company.id }
+          },
+          relations: ['reservations']
+        });
+
+        if (existingTimeSlot) {
+          // Verificar si el usuario ya tiene una reserva en este slot
+          const existingReservation = await this.reservationRepository.findOne({
+            where: {
+              user: { id: recurringReservation.user.id },
+              timeSlot: { id: existingTimeSlot.id }
+            }
+          });
+
+          if (!existingReservation) {
+            // Verificar capacidad disponible
+            const currentReservations = existingTimeSlot.reservations?.length || 0;
+            if (currentReservations < existingTimeSlot.capacity) {
+              // Crear la reserva
+              const reservation = this.reservationRepository.create({
+                user: { id: recurringReservation.user.id } as any,
+                timeSlot: { id: existingTimeSlot.id } as any,
+              });
+
+              await this.reservationRepository.save(reservation);
+              generatedCount++;
+            }
+          }
+        }
+      }
+
+      // Incrementar fecha
+      currentDate.setDate(currentDate.getDate() + 1);
+    }
+
+    // Actualizar contador de ocurrencias
+    await this.recurringReservationRepository.update(recurringReservationId, {
+      currentOccurrences: recurringReservation.currentOccurrences + generatedCount,
+      lastGeneratedDate: endGenerationDate.toISOString().split('T')[0]
+    });
+  }
+
+  /**
+   * Obtener reservas recurrentes de un usuario
+   */
+  async getUserRecurringReservations(userId: string): Promise<RecurringReservation[]> {
+    return await this.recurringReservationRepository.find({
+      where: { 
+        user: { id: userId },
+        status: RecurringStatus.ACTIVE
+      },
+      relations: ['company'],
+      order: { createdAt: 'DESC' }
+    });
+  }
+
+  /**
+   * Cancelar una reserva recurrente
+   */
+  async cancelRecurringReservation(recurringReservationId: string, userId: string): Promise<void> {
+    const recurringReservation = await this.recurringReservationRepository.findOne({
+      where: { 
+        id: recurringReservationId,
+        user: { id: userId }
+      }
+    });
+
+    if (!recurringReservation) {
+      throw new BadRequestException('Reserva recurrente no encontrada');
+    }
+
+    await this.recurringReservationRepository.update(recurringReservationId, {
+      status: RecurringStatus.CANCELLED
+    });
+  }
+
+  /**
+   * Pausar una reserva recurrente
+   */
+  async pauseRecurringReservation(recurringReservationId: string, userId: string): Promise<void> {
+    const recurringReservation = await this.recurringReservationRepository.findOne({
+      where: { 
+        id: recurringReservationId,
+        user: { id: userId }
+      }
+    });
+
+    if (!recurringReservation) {
+      throw new BadRequestException('Reserva recurrente no encontrada');
+    }
+
+    await this.recurringReservationRepository.update(recurringReservationId, {
+      status: RecurringStatus.PAUSED
+    });
+  }
+
+  /**
+   * Reanudar una reserva recurrente
+   */
+  async resumeRecurringReservation(recurringReservationId: string, userId: string): Promise<void> {
+    const recurringReservation = await this.recurringReservationRepository.findOne({
+      where: { 
+        id: recurringReservationId,
+        user: { id: userId }
+      }
+    });
+
+    if (!recurringReservation) {
+      throw new BadRequestException('Reserva recurrente no encontrada');
+    }
+
+    await this.recurringReservationRepository.update(recurringReservationId, {
+      status: RecurringStatus.ACTIVE
+    });
+
+    // Generar reservas pendientes
+    await this.generateRecurringReservations(recurringReservationId);
   }
 }
