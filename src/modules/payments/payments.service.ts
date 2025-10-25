@@ -9,7 +9,7 @@ import { User } from '../../entities/user.entity';
 import { Company } from '../../entities/company.entity';
 import { CreatePaymentPlanDto } from './dto/create-payment-plan.dto';
 import { CreateSubscriptionDto } from './dto/create-subscription.dto';
-import { ProcessPaymentDto } from './dto/process-payment.dto';
+import { CompletePaymentDto } from './dto/complete-payment.dto';
 
 @Injectable()
 export class PaymentsService {
@@ -94,7 +94,10 @@ export class PaymentsService {
   async createSubscription(companyId: string, createSubscriptionDto: CreateSubscriptionDto): Promise<UserPaymentSubscription> {
     const [user, paymentPlan, company] = await Promise.all([
       this.userRepository.findOne({ where: { id: createSubscriptionDto.userId } }),
-      this.paymentPlanRepository.findOne({ where: { id: createSubscriptionDto.paymentPlanId } }),
+      this.paymentPlanRepository.findOne({ 
+        where: { id: createSubscriptionDto.paymentPlanId },
+        relations: ['company']
+      }),
       this.companyRepository.findOne({ where: { id: companyId } })
     ]);
 
@@ -133,8 +136,14 @@ export class PaymentsService {
 
     const savedSubscription = await this.subscriptionRepository.save(subscription);
 
+    // Cargar las relaciones necesarias para generar el pago
+    const subscriptionWithRelations = await this.subscriptionRepository.findOne({
+      where: { id: savedSubscription.id },
+      relations: ['paymentPlan', 'user', 'company']
+    });
+
     // Generar la primera cuota mensual
-    await this.generateMonthlyPayment(savedSubscription);
+    await this.generateMonthlyPayment(subscriptionWithRelations);
 
     return savedSubscription;
   }
@@ -163,6 +172,11 @@ export class PaymentsService {
   // ===== GENERACIÓN DE PAGOS MENSUALES =====
   async generateMonthlyPayment(subscription: UserPaymentSubscription): Promise<Payment> {
     const paymentPlan = subscription.paymentPlan;
+    
+    if (!paymentPlan || !paymentPlan.amount) {
+      throw new BadRequestException('Payment plan or amount not found');
+    }
+
     const dueDate = new Date(subscription.periodStartDate);
     dueDate.setDate(dueDate.getDate() + (paymentPlan.gracePeriodDays || 0));
 
@@ -283,59 +297,6 @@ export class PaymentsService {
     };
   }
 
-  // ===== PROCESAMIENTO DE PAGOS =====
-  async processPayment(processPaymentDto: ProcessPaymentDto): Promise<Payment> {
-    const subscription = await this.subscriptionRepository.findOne({
-      where: { id: processPaymentDto.subscriptionId },
-      relations: ['paymentPlan', 'user', 'company']
-    });
-
-    if (!subscription) {
-      throw new NotFoundException('Subscription not found');
-    }
-
-    // Buscar la cuota pendiente
-    const pendingPayment = await this.paymentRepository.findOne({
-      where: {
-        subscription: { id: processPaymentDto.subscriptionId },
-        status: PaymentStatus.PENDING
-      }
-    });
-
-    if (!pendingPayment) {
-      throw new BadRequestException('No pending payments found for this subscription');
-    }
-
-    // Calcular recargo por mora si aplica
-    let lateFee = 0;
-    if (pendingPayment.dueDate < new Date()) {
-      const daysLate = Math.floor((new Date().getTime() - pendingPayment.dueDate.getTime()) / (1000 * 60 * 60 * 24));
-      const gracePeriod = subscription.paymentPlan.gracePeriodDays || 0;
-      
-      if (daysLate > gracePeriod) {
-        lateFee = (pendingPayment.amount * subscription.paymentPlan.lateFeePercentage) / 100;
-      }
-    }
-
-    // Actualizar el pago
-    pendingPayment.status = PaymentStatus.PAID;
-    pendingPayment.paymentMethod = processPaymentDto.paymentMethod;
-    pendingPayment.paidDate = new Date();
-    pendingPayment.lateFee = lateFee;
-    pendingPayment.discount = processPaymentDto.discount || 0;
-    pendingPayment.totalAmount = pendingPayment.amount + lateFee - (processPaymentDto.discount || 0);
-    pendingPayment.transactionId = processPaymentDto.transactionId;
-    pendingPayment.notes = processPaymentDto.notes;
-
-    const savedPayment = await this.paymentRepository.save(pendingPayment);
-
-    // Marcar cuota como pagada
-    subscription.paidInstallments = 1;
-    subscription.pendingInstallments = 0;
-    await this.subscriptionRepository.save(subscription);
-
-    return savedPayment;
-  }
 
   // ===== RENOVACIÓN DEL PERÍODO =====
   async renewPeriodSubscription(subscriptionId: string): Promise<UserPaymentSubscription> {
@@ -451,5 +412,164 @@ export class PaymentsService {
         await this.paymentRepository.save(payment);
       }
     }
+  }
+
+  // ===== GESTIÓN DE ALUMNOS Y PAGOS =====
+  async getStudentsWithPayments(companyId: string): Promise<any[]> {
+    const subscriptions = await this.subscriptionRepository.find({
+      where: { company: { id: companyId } },
+      relations: [
+        'user', 
+        'paymentPlan', 
+        'payments'
+      ],
+      order: {
+        user: { name: 'ASC' }
+      }
+    });
+
+    return subscriptions.map(subscription => {
+      const pendingPayment = subscription.payments.find(p => p.status === PaymentStatus.PENDING);
+      const lastPayment = subscription.payments
+        .filter(p => p.status === PaymentStatus.PAID)
+        .sort((a, b) => b.paidDate.getTime() - a.paidDate.getTime())[0];
+
+      return {
+        studentId: subscription.user.id,
+        studentName: `${subscription.user.name} ${subscription.user.lastName}`,
+        studentEmail: subscription.user.email,
+        studentPhone: subscription.user.phoneNumber,
+        subscriptionId: subscription.id,
+        planName: subscription.paymentPlan.name,
+        planPrice: subscription.paymentPlan.amount,
+        subscriptionStatus: subscription.status,
+        periodStartDate: subscription.periodStartDate,
+        periodEndDate: subscription.periodEndDate,
+        classesUsed: subscription.classesUsedThisPeriod,
+        classesRemaining: subscription.classesRemainingThisPeriod,
+        maxClasses: subscription.paymentPlan.maxClassesPerPeriod,
+        pendingPayment: pendingPayment ? {
+          id: pendingPayment.id,
+          amount: pendingPayment.amount,
+          dueDate: pendingPayment.dueDate,
+          lateFee: pendingPayment.lateFee,
+          isOverdue: pendingPayment.dueDate < new Date()
+        } : null,
+        lastPayment: lastPayment ? {
+          id: lastPayment.id,
+          amount: lastPayment.totalAmount,
+          paidDate: lastPayment.paidDate,
+          paymentMethod: lastPayment.paymentMethod,
+          status: lastPayment.status
+        } : null,
+        totalPayments: subscription.payments.length,
+        paidPayments: subscription.payments.filter(p => p.status === PaymentStatus.PAID).length
+      };
+    });
+  }
+
+  // ===== PAGO COMPLETO (SUSCRIPCIÓN + PAGO) =====
+  async completePayment(completePaymentDto: CompletePaymentDto): Promise<{ subscription: UserPaymentSubscription; payment: Payment }> {
+    const { userId, paymentPlanId, companyId, amount, paymentMethod, discount, transactionId, notes, startDate } = completePaymentDto;
+
+    // 1. Verificar si ya existe una suscripción activa para este usuario y plan
+    let existingSubscription = await this.subscriptionRepository.findOne({
+      where: {
+        user: { id: userId },
+        paymentPlan: { id: paymentPlanId },
+        company: { id: companyId },
+        status: SubscriptionStatus.ACTIVE
+      },
+      relations: ['user', 'paymentPlan', 'company']
+    });
+
+    let subscription: UserPaymentSubscription;
+
+    if (existingSubscription) {
+      // Si ya existe una suscripción activa, usarla
+      subscription = existingSubscription;
+    } else {
+      // Si no existe, crear una nueva suscripción
+      const createSubscriptionDto: CreateSubscriptionDto = {
+        userId,
+        paymentPlanId,
+        startDate: startDate || new Date().toISOString().split('T')[0], // Fecha de hoy si no se especifica
+        autoRenew: true
+      };
+
+      subscription = await this.createSubscription(companyId, createSubscriptionDto);
+    }
+
+    // 2. Buscar el pago pendiente
+    let pendingPayment = await this.paymentRepository.findOne({
+      where: {
+        subscription: { id: subscription.id },
+        status: PaymentStatus.PENDING
+      }
+    });
+
+    // Si no se encuentra el pago, intentar generar uno nuevo
+    if (!pendingPayment) {
+      // Si es una suscripción existente, generar un nuevo pago
+      if (existingSubscription) {
+        await this.generateMonthlyPayment(subscription);
+        
+        // Buscar el pago recién creado
+        pendingPayment = await this.paymentRepository.findOne({
+          where: {
+            subscription: { id: subscription.id },
+            status: PaymentStatus.PENDING
+          }
+        });
+      } else {
+        // Si es una suscripción nueva, esperar un poco y reintentar
+        await new Promise(resolve => setTimeout(resolve, 100));
+        
+        pendingPayment = await this.paymentRepository.findOne({
+          where: {
+            subscription: { id: subscription.id },
+            status: PaymentStatus.PENDING
+          }
+        });
+      }
+    }
+
+    if (!pendingPayment) {
+      throw new BadRequestException('No pending payments found for this subscription');
+    }
+
+    // Calcular recargo por mora si aplica
+    let lateFee = 0;
+    if (pendingPayment.dueDate < new Date()) {
+      const daysLate = Math.floor((new Date().getTime() - pendingPayment.dueDate.getTime()) / (1000 * 60 * 60 * 24));
+      const gracePeriod = subscription.paymentPlan.gracePeriodDays || 0;
+      
+      if (daysLate > gracePeriod) {
+        lateFee = (pendingPayment.amount * subscription.paymentPlan.lateFeePercentage) / 100;
+      }
+    }
+
+    // Actualizar el pago
+    pendingPayment.status = PaymentStatus.PAID;
+    pendingPayment.paymentMethod = paymentMethod;
+    pendingPayment.paidDate = new Date();
+    pendingPayment.lateFee = lateFee;
+    pendingPayment.discount = discount || 0;
+    pendingPayment.totalAmount = pendingPayment.amount + lateFee - (discount || 0);
+    pendingPayment.transactionId = transactionId;
+    pendingPayment.notes = notes;
+
+    const payment = await this.paymentRepository.save(pendingPayment);
+
+    // Marcar cuota como pagada
+    subscription.paidInstallments = 1;
+    subscription.pendingInstallments = 0;
+    subscription.status = SubscriptionStatus.ACTIVE;
+    await this.subscriptionRepository.save(subscription);
+
+    return {
+      subscription,
+      payment
+    };
   }
 }

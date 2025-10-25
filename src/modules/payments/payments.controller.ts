@@ -3,7 +3,7 @@ import { AuthGuard } from '@nestjs/passport';
 import { PaymentsService } from './payments.service';
 import { CreatePaymentPlanDto } from './dto/create-payment-plan.dto';
 import { CreateSubscriptionDto } from './dto/create-subscription.dto';
-import { ProcessPaymentDto } from './dto/process-payment.dto';
+import { CompletePaymentDto } from './dto/complete-payment.dto';
 
 @Controller('payments')
 @UseGuards(AuthGuard('jwt'))
@@ -89,9 +89,9 @@ export class PaymentsController {
   }
 
   // ===== PROCESAMIENTO DE PAGOS =====
-  @Post('process')
-  async processPayment(@Body() processPaymentDto: ProcessPaymentDto) {
-    return await this.paymentsService.processPayment(processPaymentDto);
+  @Post('complete')
+  async completePayment(@Body() completePaymentDto: CompletePaymentDto) {
+    return await this.paymentsService.completePayment(completePaymentDto);
   }
 
   // ===== RENOVACIÓN DEL PERÍODO =====
@@ -132,5 +132,11 @@ export class PaymentsController {
   async calculateLateFees() {
     await this.paymentsService.calculateLateFees();
     return { message: 'Late fees calculated successfully' };
+  }
+
+  // ===== GESTIÓN DE ALUMNOS Y PAGOS =====
+  @Get('students/:companyId')
+  async getStudentsWithPayments(@Param('companyId') companyId: string) {
+    return await this.paymentsService.getStudentsWithPayments(companyId);
   }
 }
