@@ -10,6 +10,7 @@ import { Company } from '../../entities/company.entity';
 import { CreatePaymentPlanDto } from './dto/create-payment-plan.dto';
 import { CreateSubscriptionDto } from './dto/create-subscription.dto';
 import { CompletePaymentDto } from './dto/complete-payment.dto';
+import { UpdatePaymentDto } from './dto/update-payment.dto';
 
 @Injectable()
 export class PaymentsService {
@@ -571,5 +572,75 @@ export class PaymentsService {
       subscription,
       payment
     };
+  }
+
+  // ===== GESTIÓN DE PAGOS INDIVIDUALES =====
+  async updatePayment(paymentId: string, updatePaymentDto: UpdatePaymentDto): Promise<Payment> {
+    const payment = await this.paymentRepository.findOne({
+      where: { id: paymentId },
+      relations: ['subscription', 'user', 'company']
+    });
+
+    if (!payment) {
+      throw new NotFoundException('Payment not found');
+    }
+
+    // Actualizar campos si se proporcionan
+    if (updatePaymentDto.amount !== undefined) {
+      payment.amount = updatePaymentDto.amount;
+    }
+    if (updatePaymentDto.lateFee !== undefined) {
+      payment.lateFee = updatePaymentDto.lateFee;
+    }
+    if (updatePaymentDto.discount !== undefined) {
+      payment.discount = updatePaymentDto.discount;
+    }
+    if (updatePaymentDto.status !== undefined) {
+      payment.status = updatePaymentDto.status;
+    }
+    if (updatePaymentDto.paymentMethod !== undefined) {
+      payment.paymentMethod = updatePaymentDto.paymentMethod;
+    }
+    if (updatePaymentDto.transactionId !== undefined) {
+      payment.transactionId = updatePaymentDto.transactionId;
+    }
+    if (updatePaymentDto.notes !== undefined) {
+      payment.notes = updatePaymentDto.notes;
+    }
+    if (updatePaymentDto.dueDate !== undefined) {
+      payment.dueDate = new Date(updatePaymentDto.dueDate);
+    }
+    if (updatePaymentDto.paidDate !== undefined) {
+      payment.paidDate = new Date(updatePaymentDto.paidDate);
+    }
+
+    // Recalcular totalAmount si se modificó amount, lateFee o discount
+    if (updatePaymentDto.amount !== undefined || 
+        updatePaymentDto.lateFee !== undefined || 
+        updatePaymentDto.discount !== undefined) {
+      payment.totalAmount = payment.amount + payment.lateFee - payment.discount;
+    }
+
+    return await this.paymentRepository.save(payment);
+  }
+
+  async deletePayment(paymentId: string): Promise<{ message: string }> {
+    const payment = await this.paymentRepository.findOne({
+      where: { id: paymentId },
+      relations: ['subscription']
+    });
+
+    if (!payment) {
+      throw new NotFoundException('Payment not found');
+    }
+
+    // Verificar que el pago no esté pagado (opcional - puedes cambiar esta lógica)
+    if (payment.status === PaymentStatus.PAID) {
+      throw new BadRequestException('Cannot delete a paid payment');
+    }
+
+    await this.paymentRepository.remove(payment);
+
+    return { message: 'Payment deleted successfully' };
   }
 }

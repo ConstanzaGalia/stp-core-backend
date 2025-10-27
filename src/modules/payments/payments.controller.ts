@@ -4,6 +4,7 @@ import { PaymentsService } from './payments.service';
 import { CreatePaymentPlanDto } from './dto/create-payment-plan.dto';
 import { CreateSubscriptionDto } from './dto/create-subscription.dto';
 import { CompletePaymentDto } from './dto/complete-payment.dto';
+import { UpdatePaymentDto } from './dto/update-payment.dto';
 
 @Controller('payments')
 @UseGuards(AuthGuard('jwt'))
@@ -138,5 +139,19 @@ export class PaymentsController {
   @Get('students/:companyId')
   async getStudentsWithPayments(@Param('companyId') companyId: string) {
     return await this.paymentsService.getStudentsWithPayments(companyId);
+  }
+
+  // ===== GESTIÓN DE PAGOS INDIVIDUALES =====
+  @Put('payment/:paymentId')
+  async updatePayment(
+    @Param('paymentId') paymentId: string,
+    @Body() updatePaymentDto: UpdatePaymentDto
+  ) {
+    return await this.paymentsService.updatePayment(paymentId, updatePaymentDto);
+  }
+
+  @Delete('payment/:paymentId')
+  async deletePayment(@Param('paymentId') paymentId: string) {
+    return await this.paymentsService.deletePayment(paymentId);
   }
 }
