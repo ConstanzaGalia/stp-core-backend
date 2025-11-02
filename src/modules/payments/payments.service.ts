@@ -587,13 +587,16 @@ export class PaymentsService {
 
     // Actualizar campos si se proporcionan
     if (updatePaymentDto.amount !== undefined) {
-      payment.amount = updatePaymentDto.amount;
+      // Asegurar que amount sea un número
+      payment.amount = Number(updatePaymentDto.amount);
     }
     if (updatePaymentDto.lateFee !== undefined) {
-      payment.lateFee = updatePaymentDto.lateFee;
+      // Asegurar que lateFee sea un número
+      payment.lateFee = Number(updatePaymentDto.lateFee);
     }
     if (updatePaymentDto.discount !== undefined) {
-      payment.discount = updatePaymentDto.discount;
+      // Asegurar que discount sea un número
+      payment.discount = Number(updatePaymentDto.discount);
     }
     if (updatePaymentDto.status !== undefined) {
       payment.status = updatePaymentDto.status;
@@ -618,7 +621,14 @@ export class PaymentsService {
     if (updatePaymentDto.amount !== undefined || 
         updatePaymentDto.lateFee !== undefined || 
         updatePaymentDto.discount !== undefined) {
-      payment.totalAmount = payment.amount + payment.lateFee - payment.discount;
+      // Convertir explícitamente a números para evitar problemas con decimales
+      // Asegurar que todos los valores sean números, incluso los existentes de la BD
+      const amount = parseFloat(String(payment.amount || 0)) || 0;
+      const lateFee = parseFloat(String(payment.lateFee || 0)) || 0;
+      const discount = parseFloat(String(payment.discount || 0)) || 0;
+      
+      // Calcular totalAmount como suma de números
+      payment.totalAmount = parseFloat((amount + lateFee - discount).toFixed(2));
     }
 
     return await this.paymentRepository.save(payment);

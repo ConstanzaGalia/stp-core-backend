@@ -6,7 +6,11 @@ import { AppModule } from './app.module';
 
 async function bootstrap() {
   const app = await NestFactory.create(AppModule, { cors: true } );
-  app.useGlobalPipes(new ValidationPipe());
+  app.useGlobalPipes(new ValidationPipe({
+    transform: true, // Habilita la transformación automática
+    whitelist: true, // Elimina propiedades no definidas en el DTO
+    forbidNonWhitelisted: true, // Rechaza requests con propiedades no permitidas
+  }));
   app.useLogger(['error', 'warn', 'log', 'debug', 'verbose']);
   await app.listen(AppModule.port);
   console.log(`Server running on port ${AppModule.port}`);
