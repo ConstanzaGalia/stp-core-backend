@@ -8,6 +8,7 @@ import { UserPaymentSubscription } from '../../entities/user-payment-subscriptio
 import { ClassUsage } from '../../entities/class-usage.entity';
 import { User } from '../../entities/user.entity';
 import { Company } from '../../entities/company.entity';
+import { SubscriptionSuspension } from '../../entities/subscription-suspension.entity';
 
 @Module({
   imports: [
@@ -17,7 +18,8 @@ import { Company } from '../../entities/company.entity';
       UserPaymentSubscription,
       ClassUsage,
       User,
-      Company
+      Company,
+      SubscriptionSuspension
     ])
   ],
   controllers: [PaymentsController],

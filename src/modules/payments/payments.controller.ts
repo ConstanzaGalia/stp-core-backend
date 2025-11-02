@@ -5,6 +5,8 @@ import { CreatePaymentPlanDto } from './dto/create-payment-plan.dto';
 import { CreateSubscriptionDto } from './dto/create-subscription.dto';
 import { CompletePaymentDto } from './dto/complete-payment.dto';
 import { UpdatePaymentDto } from './dto/update-payment.dto';
+import { CreateSuspensionDto } from './dto/create-suspension.dto';
+import { UpdateSuspensionDto } from './dto/update-suspension.dto';
 
 @Controller('payments')
 @UseGuards(AuthGuard('jwt'))
@@ -153,5 +155,32 @@ export class PaymentsController {
   @Delete('payment/:paymentId')
   async deletePayment(@Param('paymentId') paymentId: string) {
     return await this.paymentsService.deletePayment(paymentId);
+  }
+
+  // ===== GESTIÓN DE SUSPENSIONES TEMPORALES =====
+  @Post('suspensions')
+  async createSuspension(@Body() createSuspensionDto: CreateSuspensionDto) {
+    return await this.paymentsService.createSuspension(createSuspensionDto);
+  }
+
+  @Get('suspensions/user/:userId/company/:companyId')
+  async getSuspensions(
+    @Param('userId') userId: string,
+    @Param('companyId') companyId: string
+  ) {
+    return await this.paymentsService.getSuspensions(userId, companyId);
+  }
+
+  @Put('suspensions/:suspensionId')
+  async updateSuspension(
+    @Param('suspensionId') suspensionId: string,
+    @Body() updateSuspensionDto: UpdateSuspensionDto
+  ) {
+    return await this.paymentsService.updateSuspension(suspensionId, updateSuspensionDto);
+  }
+
+  @Delete('suspensions/:suspensionId')
+  async deleteSuspension(@Param('suspensionId') suspensionId: string) {
+    return await this.paymentsService.deleteSuspension(suspensionId);
   }
 }

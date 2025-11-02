@@ -7,10 +7,13 @@ import { UserPaymentSubscription, SubscriptionStatus } from '../../entities/user
 import { ClassUsage, ClassUsageType } from '../../entities/class-usage.entity';
 import { User } from '../../entities/user.entity';
 import { Company } from '../../entities/company.entity';
+import { SubscriptionSuspension } from '../../entities/subscription-suspension.entity';
 import { CreatePaymentPlanDto } from './dto/create-payment-plan.dto';
 import { CreateSubscriptionDto } from './dto/create-subscription.dto';
 import { CompletePaymentDto } from './dto/complete-payment.dto';
 import { UpdatePaymentDto } from './dto/update-payment.dto';
+import { CreateSuspensionDto } from './dto/create-suspension.dto';
+import { UpdateSuspensionDto } from './dto/update-suspension.dto';
 
 @Injectable()
 export class PaymentsService {
@@ -27,6 +30,8 @@ export class PaymentsService {
     private readonly userRepository: Repository<User>,
     @InjectRepository(Company)
     private readonly companyRepository: Repository<Company>,
+    @InjectRepository(SubscriptionSuspension)
+    private readonly suspensionRepository: Repository<SubscriptionSuspension>,
   ) {}
 
   // ===== PLANES DE PAGO =====
@@ -422,18 +427,85 @@ export class PaymentsService {
       relations: [
         'user', 
         'paymentPlan', 
-        'payments'
+        'payments',
+        'company'
       ],
       order: {
         user: { name: 'ASC' }
       }
     });
 
-    return subscriptions.map(subscription => {
+    return Promise.all(subscriptions.map(async (subscription) => {
       const pendingPayment = subscription.payments.find(p => p.status === PaymentStatus.PENDING);
-      const lastPayment = subscription.payments
-        .filter(p => p.status === PaymentStatus.PAID)
-        .sort((a, b) => b.paidDate.getTime() - a.paidDate.getTime())[0];
+      
+      // Ordenar todos los pagos del más reciente al más antiguo
+      // Usar paidDate si existe (pagos pagados), sino dueDate (pagos pendientes)
+      const allPayments = subscription.payments
+        .map(payment => ({
+          id: payment.id,
+          amount: payment.amount,
+          totalAmount: payment.totalAmount,
+          status: payment.status,
+          paymentMethod: payment.paymentMethod,
+          dueDate: payment.dueDate,
+          paidDate: payment.paidDate,
+          lateFee: payment.lateFee,
+          discount: payment.discount,
+          transactionId: payment.transactionId,
+          notes: payment.notes,
+          instalmentNumber: payment.instalmentNumber,
+          sortDate: payment.paidDate || payment.dueDate
+        }))
+        .sort((a, b) => {
+          // Si tiene paidDate, usar paidDate; si no, usar dueDate
+          const dateA = a.sortDate ? new Date(a.sortDate).getTime() : 0;
+          const dateB = b.sortDate ? new Date(b.sortDate).getTime() : 0;
+          return dateB - dateA; // Más reciente primero
+        });
+
+      // Obtener suspensiones activas del alumno en este centro
+      let activeSuspensions = [];
+      if (subscription.user && subscription.company) {
+        activeSuspensions = await this.suspensionRepository.find({
+          where: {
+            user: { id: subscription.user.id },
+            company: { id: subscription.company.id },
+            isActive: true
+          }
+        });
+      }
+
+      // Verificar si cada pago está en un período de suspensión
+      const paymentsWithSuspension = allPayments.map(payment => {
+        let isSuspended = false;
+        const paymentDate = payment.paidDate || payment.dueDate;
+        
+        if (paymentDate && activeSuspensions.length > 0) {
+          const date = new Date(paymentDate);
+          isSuspended = activeSuspensions.some(suspension => {
+            const startDate = new Date(suspension.startDate);
+            const endDate = new Date(suspension.endDate);
+            return date >= startDate && date <= endDate;
+          });
+        }
+
+        return {
+          id: payment.id,
+          amount: payment.amount,
+          totalAmount: payment.totalAmount,
+          status: payment.status,
+          paymentMethod: payment.paymentMethod,
+          dueDate: payment.dueDate,
+          paidDate: payment.paidDate,
+          lateFee: payment.lateFee,
+          discount: payment.discount,
+          transactionId: payment.transactionId,
+          notes: payment.notes,
+          instalmentNumber: payment.instalmentNumber,
+          isOverdue: payment.dueDate ? new Date(payment.dueDate) < new Date() && payment.status === PaymentStatus.PENDING : false,
+          isSuspended: isSuspended
+        };
+      });
 
       return {
         studentId: subscription.user.id,
@@ -454,19 +526,21 @@ export class PaymentsService {
           amount: pendingPayment.amount,
           dueDate: pendingPayment.dueDate,
           lateFee: pendingPayment.lateFee,
-          isOverdue: pendingPayment.dueDate < new Date()
+          isOverdue: pendingPayment.dueDate ? new Date(pendingPayment.dueDate) < new Date() : false,
+          isSuspended: paymentsWithSuspension.find(p => p.id === pendingPayment.id)?.isSuspended || false
         } : null,
-        lastPayment: lastPayment ? {
-          id: lastPayment.id,
-          amount: lastPayment.totalAmount,
-          paidDate: lastPayment.paidDate,
-          paymentMethod: lastPayment.paymentMethod,
-          status: lastPayment.status
-        } : null,
+        payments: paymentsWithSuspension, // Todos los pagos ordenados del más reciente al más antiguo
+        activeSuspensions: activeSuspensions.map(suspension => ({
+          id: suspension.id,
+          startDate: suspension.startDate,
+          endDate: suspension.endDate,
+          reason: suspension.reason,
+          notes: suspension.notes
+        })),
         totalPayments: subscription.payments.length,
         paidPayments: subscription.payments.filter(p => p.status === PaymentStatus.PAID).length
       };
-    });
+    }));
   }
 
   // ===== PAGO COMPLETO (SUSCRIPCIÓN + PAGO) =====
@@ -652,5 +726,194 @@ export class PaymentsService {
     await this.paymentRepository.remove(payment);
 
     return { message: 'Payment deleted successfully' };
+  }
+
+  // ===== GESTIÓN DE SUSPENSIONES TEMPORALES =====
+  // Función auxiliar para parsear fechas sin problemas de zona horaria
+  private parseDateWithoutTimeZone(dateString: string): Date {
+    // Si viene en formato YYYY-MM-DD, parsearlo directamente sin zona horaria
+    const parts = dateString.split('-');
+    if (parts.length === 3) {
+      const year = parseInt(parts[0], 10);
+      const month = parseInt(parts[1], 10) - 1; // Los meses en JS son 0-indexed
+      const day = parseInt(parts[2], 10);
+      return new Date(year, month, day);
+    }
+    // Si viene en otro formato, usar el constructor normal
+    return new Date(dateString);
+  }
+
+  async createSuspension(createSuspensionDto: CreateSuspensionDto): Promise<SubscriptionSuspension> {
+    const [user, company] = await Promise.all([
+      this.userRepository.findOne({ where: { id: createSuspensionDto.userId } }),
+      this.companyRepository.findOne({ where: { id: createSuspensionDto.companyId } })
+    ]);
+
+    if (!user) {
+      throw new NotFoundException('User not found');
+    }
+
+    if (!company) {
+      throw new NotFoundException('Company not found');
+    }
+
+    const startDate = this.parseDateWithoutTimeZone(createSuspensionDto.startDate);
+    const endDate = this.parseDateWithoutTimeZone(createSuspensionDto.endDate);
+
+    if (startDate >= endDate) {
+      throw new BadRequestException('End date must be after start date');
+    }
+
+    // Verificar que no haya otra suspensión activa en el mismo período para este alumno en este centro
+    const existingSuspensions = await this.suspensionRepository.find({
+      where: {
+        user: { id: createSuspensionDto.userId },
+        company: { id: createSuspensionDto.companyId },
+        isActive: true,
+      }
+    });
+
+    // Verificar si hay solapamiento de fechas
+    const hasOverlap = existingSuspensions.some(existingSuspension => {
+      // Las fechas de la BD ya vienen como Date, solo necesitamos compararlas
+      const existingStart = existingSuspension.startDate instanceof Date 
+        ? existingSuspension.startDate 
+        : new Date(existingSuspension.startDate);
+      const existingEnd = existingSuspension.endDate instanceof Date 
+        ? existingSuspension.endDate 
+        : new Date(existingSuspension.endDate);
+      return !(endDate < existingStart || startDate > existingEnd);
+    });
+
+    if (hasOverlap) {
+      throw new BadRequestException('There is already an active suspension for this period');
+    }
+
+    // Obtener la suscripción activa del alumno (si existe)
+    const activeSubscription = await this.subscriptionRepository.findOne({
+      where: {
+        user: { id: createSuspensionDto.userId },
+        company: { id: createSuspensionDto.companyId },
+        status: SubscriptionStatus.ACTIVE
+      }
+    });
+
+    const suspension = this.suspensionRepository.create({
+      startDate,
+      endDate,
+      reason: createSuspensionDto.reason,
+      notes: createSuspensionDto.notes,
+      subscription: activeSubscription ? { id: activeSubscription.id } : null,
+      user: { id: createSuspensionDto.userId },
+      company: { id: createSuspensionDto.companyId },
+      isActive: true
+    });
+
+    return await this.suspensionRepository.save(suspension);
+  }
+
+  async getSuspensions(userId: string, companyId: string): Promise<SubscriptionSuspension[]> {
+    return await this.suspensionRepository.find({
+      where: { 
+        user: { id: userId },
+        company: { id: companyId }
+      },
+      relations: ['user', 'company', 'subscription'],
+      order: { startDate: 'DESC' }
+    });
+  }
+
+  async getActiveSuspension(subscriptionId: string, date?: Date): Promise<SubscriptionSuspension | null> {
+    const checkDate = date || new Date();
+    
+    return await this.suspensionRepository.findOne({
+      where: {
+        subscription: { id: subscriptionId },
+        isActive: true,
+      }
+    });
+
+    // Verificar si la fecha está dentro del rango de suspensión
+    // (esto se puede hacer en la consulta, pero por ahora lo hacemos manualmente)
+  }
+
+  async updateSuspension(suspensionId: string, updateSuspensionDto: UpdateSuspensionDto): Promise<SubscriptionSuspension> {
+    const suspension = await this.suspensionRepository.findOne({
+      where: { id: suspensionId },
+      relations: ['user', 'company']
+    });
+
+    if (!suspension) {
+      throw new NotFoundException('Suspension not found');
+    }
+
+    // Actualizar campos si se proporcionan
+    if (updateSuspensionDto.startDate !== undefined) {
+      const startDate = this.parseDateWithoutTimeZone(updateSuspensionDto.startDate);
+      suspension.startDate = startDate;
+    }
+
+    if (updateSuspensionDto.endDate !== undefined) {
+      const endDate = this.parseDateWithoutTimeZone(updateSuspensionDto.endDate);
+      suspension.endDate = endDate;
+    }
+
+    if (updateSuspensionDto.reason !== undefined) {
+      suspension.reason = updateSuspensionDto.reason;
+    }
+
+    if (updateSuspensionDto.notes !== undefined) {
+      suspension.notes = updateSuspensionDto.notes;
+    }
+
+    if (updateSuspensionDto.isActive !== undefined) {
+      suspension.isActive = updateSuspensionDto.isActive;
+    }
+
+    // Validar fechas si ambas fueron actualizadas
+    if (updateSuspensionDto.startDate !== undefined || updateSuspensionDto.endDate !== undefined) {
+      if (suspension.startDate >= suspension.endDate) {
+        throw new BadRequestException('End date must be after start date');
+      }
+    }
+
+    return await this.suspensionRepository.save(suspension);
+  }
+
+  async deleteSuspension(suspensionId: string): Promise<{ message: string }> {
+    const suspension = await this.suspensionRepository.findOne({
+      where: { id: suspensionId }
+    });
+
+    if (!suspension) {
+      throw new NotFoundException('Suspension not found');
+    }
+
+    await this.suspensionRepository.remove(suspension);
+
+    return { message: 'Suspension deleted successfully' };
+  }
+
+  // Verificar si un pago está en un período de suspensión
+  private async isPaymentInSuspension(payment: Payment): Promise<boolean> {
+    if (!payment.dueDate || !payment.user || !payment.company) {
+      return false;
+    }
+
+    const suspensions = await this.suspensionRepository.find({
+      where: {
+        user: { id: payment.user.id },
+        company: { id: payment.company.id },
+        isActive: true
+      }
+    });
+
+    const paymentDate = new Date(payment.dueDate);
+    
+    return suspensions.some(suspension => {
+      const startDate = new Date(suspension.startDate);
+      const endDate = new Date(suspension.endDate);
+      return paymentDate >= startDate && paymentDate <= endDate;
+    });
   }
 }
