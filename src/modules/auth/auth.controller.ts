@@ -31,6 +31,7 @@ import { JwtService } from '@nestjs/jwt';
 import { ActivateResponseDto } from './dto/activate-response.dto';
 import { UpdateUserRoleDto } from './dto/update-user-role.dto';
 import { UpdateTrainerProfileDto } from './dto/update-trainer-profile.dto';
+import { UpdateUserProfileDto } from './dto/update-user-profile.dto';
 
 @Controller('auth')
 export class AuthController {
@@ -270,6 +271,22 @@ export class AuthController {
     return {
       message: 'Trainer profile updated successfully',
       trainer: updatedProfile,
+    };
+  }
+
+  @Patch('/users/:userId/profile')
+  @UseGuards(AuthGuard('jwt'))
+  async updateUserProfile(
+    @Param('userId') userId: string,
+    @Body() updateUserProfileDto: UpdateUserProfileDto,
+  ) {
+    const updatedProfile = await this.authService.updateUserProfile(
+      userId,
+      updateUserProfileDto,
+    );
+    return {
+      message: 'User profile updated successfully',
+      user: updatedProfile,
     };
   }
 }

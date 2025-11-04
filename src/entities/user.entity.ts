@@ -55,6 +55,10 @@ export class User {
   imageProfile?: string;
 
   @ApiProperty()
+  @Column({name: 'date_of_birth', nullable: true, type: 'date'})
+  dateOfBirth?: Date;
+
+  @ApiProperty()
   @Column({name: 'specialty', nullable: true, length: 200})
   specialty?: string;
 

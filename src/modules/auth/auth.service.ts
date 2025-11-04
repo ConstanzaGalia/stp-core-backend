@@ -26,6 +26,7 @@ import { LoginResponseDto } from './dto/login-response.dto';
 import { UserRole } from 'src/common/enums/enums';
 import { UpdateUserRoleDto } from './dto/update-user-role.dto';
 import { UpdateTrainerProfileDto } from './dto/update-trainer-profile.dto';
+import { UpdateUserProfileDto } from './dto/update-user-profile.dto';
 import { TrainerProfileResponseDto } from './dto/trainer-profile-response.dto';
 @Injectable()
 export class AuthService {
@@ -326,6 +327,7 @@ export class AuthService {
       country: user.country,
       city: user.city,
       imageProfile: user.imageProfile,
+      dateOfBirth: user.dateOfBirth,
       createdAt: user.created_at,
       updatedAt: user.updated_at,
       companies: user.company || [],
@@ -454,5 +456,75 @@ export class AuthService {
 
     // Obtener información completa del entrenador actualizado
     return this.getTrainerProfile(trainerId);
+  }
+
+  // Método para actualizar el perfil de un usuario/alumno
+  async updateUserProfile(
+    userId: string,
+    updateUserProfileDto: UpdateUserProfileDto,
+  ): Promise<any> {
+    const user = await this.userRepository.findOne({
+      where: { id: userId },
+    });
+
+    if (!user) {
+      throw new NotFoundException('User not found');
+    }
+
+    // Actualizar los campos del perfil si se proporcionan
+    if (updateUserProfileDto.name !== undefined) {
+      user.name = updateUserProfileDto.name;
+    }
+    if (updateUserProfileDto.lastName !== undefined) {
+      user.lastName = updateUserProfileDto.lastName;
+    }
+    if (updateUserProfileDto.phoneNumber !== undefined) {
+      // Convertir a number solo si es un número válido
+      const phoneNumber = parseInt(updateUserProfileDto.phoneNumber);
+      if (!isNaN(phoneNumber)) {
+        user.phoneNumber = phoneNumber;
+      }
+    }
+    if (updateUserProfileDto.country !== undefined) {
+      user.country = updateUserProfileDto.country;
+    }
+    if (updateUserProfileDto.city !== undefined) {
+      user.city = updateUserProfileDto.city;
+    }
+    if (updateUserProfileDto.imageProfile !== undefined) {
+      user.imageProfile = updateUserProfileDto.imageProfile;
+    }
+    if (updateUserProfileDto.dateOfBirth !== undefined) {
+      // Parsear la fecha sin problemas de zona horaria
+      const dateParts = updateUserProfileDto.dateOfBirth.split('-');
+      if (dateParts.length === 3) {
+        const year = parseInt(dateParts[0], 10);
+        const month = parseInt(dateParts[1], 10) - 1; // Los meses en JS son 0-indexed
+        const day = parseInt(dateParts[2], 10);
+        user.dateOfBirth = new Date(year, month, day);
+      } else {
+        user.dateOfBirth = new Date(updateUserProfileDto.dateOfBirth);
+      }
+    }
+
+    // Guardar los cambios
+    const updatedUser = await this.userRepository.save(user);
+
+    // Retornar información actualizada del usuario
+    return {
+      id: updatedUser.id,
+      email: updatedUser.email,
+      name: updatedUser.name,
+      lastName: updatedUser.lastName,
+      role: updatedUser.role,
+      isActive: updatedUser.isActive,
+      phoneNumber: updatedUser.phoneNumber,
+      country: updatedUser.country,
+      city: updatedUser.city,
+      imageProfile: updatedUser.imageProfile,
+      dateOfBirth: updatedUser.dateOfBirth,
+      createdAt: updatedUser.created_at,
+      updatedAt: updatedUser.updated_at,
+    };
   }
 }

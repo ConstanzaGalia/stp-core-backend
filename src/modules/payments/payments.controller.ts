@@ -63,6 +63,14 @@ export class PaymentsController {
     return await this.paymentsService.getUserSubscriptions(userId);
   }
 
+  @Get('student/:userId/company/:companyId/plan-payments')
+  async getStudentPlanAndPayments(
+    @Param('userId') userId: string,
+    @Param('companyId') companyId: string
+  ) {
+    return await this.paymentsService.getStudentPlanAndPayments(userId, companyId);
+  }
+
   // ===== GESTIÓN DE CLASES =====
   @Get('subscriptions/:subscriptionId/class-status')
   async getClassStatus(@Param('subscriptionId') subscriptionId: string) {

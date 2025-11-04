@@ -894,6 +894,139 @@ export class PaymentsService {
     return { message: 'Suspension deleted successfully' };
   }
 
+  // ===== OBTENER PLAN Y PAGOS DEL ALUMNO =====
+  async getStudentPlanAndPayments(userId: string, companyId: string): Promise<any> {
+    // Obtener la suscripción activa del alumno en el centro
+    const subscription = await this.subscriptionRepository.findOne({
+      where: {
+        user: { id: userId },
+        company: { id: companyId },
+        status: SubscriptionStatus.ACTIVE
+      },
+      relations: ['user', 'paymentPlan', 'company', 'payments']
+    });
+
+    if (!subscription) {
+      throw new NotFoundException('Active subscription not found for this student');
+    }
+
+    // Obtener todos los pagos ordenados del más reciente al más antiguo
+    const allPayments = subscription.payments
+      .map(payment => ({
+        id: payment.id,
+        amount: payment.amount,
+        totalAmount: payment.totalAmount,
+        status: payment.status,
+        paymentMethod: payment.paymentMethod,
+        dueDate: payment.dueDate,
+        paidDate: payment.paidDate,
+        lateFee: payment.lateFee,
+        discount: payment.discount,
+        transactionId: payment.transactionId,
+        notes: payment.notes,
+        instalmentNumber: payment.instalmentNumber,
+        sortDate: payment.paidDate || payment.dueDate
+      }))
+      .sort((a, b) => {
+        const dateA = a.sortDate ? new Date(a.sortDate).getTime() : 0;
+        const dateB = b.sortDate ? new Date(b.sortDate).getTime() : 0;
+        return dateB - dateA; // Más reciente primero
+      });
+
+    // Obtener suspensiones activas del alumno
+    const activeSuspensions = await this.suspensionRepository.find({
+      where: {
+        user: { id: userId },
+        company: { id: companyId },
+        isActive: true
+      },
+      order: { startDate: 'DESC' }
+    });
+
+    // Verificar si cada pago está en un período de suspensión
+    const paymentsWithSuspension = allPayments.map(payment => {
+      let isSuspended = false;
+      const paymentDate = payment.paidDate || payment.dueDate;
+      
+      if (paymentDate && activeSuspensions.length > 0) {
+        const date = new Date(paymentDate);
+        isSuspended = activeSuspensions.some(suspension => {
+          const startDate = new Date(suspension.startDate);
+          const endDate = new Date(suspension.endDate);
+          return date >= startDate && date <= endDate;
+        });
+      }
+
+      return {
+        ...payment,
+        isOverdue: payment.dueDate ? new Date(payment.dueDate) < new Date() && payment.status === PaymentStatus.PENDING : false,
+        isSuspended: isSuspended
+      };
+    });
+
+    // Obtener el pago pendiente actual
+    const pendingPayment = subscription.payments.find(p => p.status === PaymentStatus.PENDING);
+
+    return {
+      // Información de la suscripción
+      subscription: {
+        id: subscription.id,
+        status: subscription.status,
+        periodStartDate: subscription.periodStartDate,
+        periodEndDate: subscription.periodEndDate,
+        nextBillingDate: subscription.nextBillingDate,
+        classesUsedThisPeriod: subscription.classesUsedThisPeriod,
+        classesRemainingThisPeriod: subscription.classesRemainingThisPeriod,
+        autoRenew: subscription.autoRenew
+      },
+      // Información del plan
+      plan: {
+        id: subscription.paymentPlan.id,
+        name: subscription.paymentPlan.name,
+        description: subscription.paymentPlan.description,
+        amount: subscription.paymentPlan.amount,
+        classesPerWeek: subscription.paymentPlan.classesPerWeek,
+        maxClassesPerPeriod: subscription.paymentPlan.maxClassesPerPeriod,
+        frequencyDays: subscription.paymentPlan.frequencyDays,
+        gracePeriodDays: subscription.paymentPlan.gracePeriodDays,
+        lateFeePercentage: subscription.paymentPlan.lateFeePercentage,
+        allowClassRollover: subscription.paymentPlan.allowClassRollover,
+        maxRolloverClasses: subscription.paymentPlan.maxRolloverClasses
+      },
+      // Todos los pagos
+      payments: paymentsWithSuspension,
+      // Pago pendiente (si existe)
+      pendingPayment: pendingPayment ? {
+        id: pendingPayment.id,
+        amount: pendingPayment.amount,
+        totalAmount: pendingPayment.totalAmount,
+        dueDate: pendingPayment.dueDate,
+        lateFee: pendingPayment.lateFee,
+        discount: pendingPayment.discount,
+        isOverdue: pendingPayment.dueDate ? new Date(pendingPayment.dueDate) < new Date() : false,
+        isSuspended: paymentsWithSuspension.find(p => p.id === pendingPayment.id)?.isSuspended || false
+      } : null,
+      // Suspensiones activas
+      suspensions: activeSuspensions.map(suspension => ({
+        id: suspension.id,
+        startDate: suspension.startDate,
+        endDate: suspension.endDate,
+        reason: suspension.reason,
+        notes: suspension.notes,
+        isActive: suspension.isActive
+      })),
+      // Estadísticas
+      statistics: {
+        totalPayments: subscription.payments.length,
+        paidPayments: subscription.payments.filter(p => p.status === PaymentStatus.PAID).length,
+        pendingPayments: subscription.payments.filter(p => p.status === PaymentStatus.PENDING).length,
+        overduePayments: subscription.payments.filter(p => 
+          p.status === PaymentStatus.PENDING && p.dueDate && new Date(p.dueDate) < new Date()
+        ).length
+      }
+    };
+  }
+
   // Verificar si un pago está en un período de suspensión
   private async isPaymentInSuspension(payment: Payment): Promise<boolean> {
     if (!payment.dueDate || !payment.user || !payment.company) {
