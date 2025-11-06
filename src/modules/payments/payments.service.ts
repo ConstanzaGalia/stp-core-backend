@@ -8,6 +8,8 @@ import { ClassUsage, ClassUsageType } from '../../entities/class-usage.entity';
 import { User } from '../../entities/user.entity';
 import { Company } from '../../entities/company.entity';
 import { SubscriptionSuspension } from '../../entities/subscription-suspension.entity';
+import { Reservation } from '../../entities/reservation.entity';
+import { TimeSlot } from '../../entities/timeSlot.entity';
 import { CreatePaymentPlanDto } from './dto/create-payment-plan.dto';
 import { CreateSubscriptionDto } from './dto/create-subscription.dto';
 import { CompletePaymentDto } from './dto/complete-payment.dto';
@@ -32,6 +34,10 @@ export class PaymentsService {
     private readonly companyRepository: Repository<Company>,
     @InjectRepository(SubscriptionSuspension)
     private readonly suspensionRepository: Repository<SubscriptionSuspension>,
+    @InjectRepository(Reservation)
+    private readonly reservationRepository: Repository<Reservation>,
+    @InjectRepository(TimeSlot)
+    private readonly timeSlotRepository: Repository<TimeSlot>,
   ) {}
 
   // ===== PLANES DE PAGO =====
@@ -123,6 +129,9 @@ export class PaymentsService {
 
     const nextBillingDate = new Date(periodEndDate);
 
+    // Calcular el inicio de la semana actual (lunes)
+    const weekStartDate = this.getWeekStartDate(startDate);
+
     const subscription = this.subscriptionRepository.create({
       ...createSubscriptionDto,
       startDate: periodStartDate,
@@ -132,6 +141,9 @@ export class PaymentsService {
       pendingInstallments: 1,
       classesUsedThisPeriod: 0,
       classesRemainingThisPeriod: paymentPlan.maxClassesPerPeriod,
+      weekStartDate, // Inicio de la semana actual
+      classesUsedThisWeek: 0, // Clases usadas esta semana
+      classesRemainingThisWeek: paymentPlan.classesPerWeek, // Clases restantes esta semana
       periodStartDate,
       periodEndDate,
       autoRenew: true, // Siempre se renueva
@@ -201,11 +213,128 @@ export class PaymentsService {
     return await this.paymentRepository.save(payment);
   }
 
+  // ===== HELPERS PARA LÓGICA SEMANAL =====
+  /**
+   * Calcula el inicio de la semana (lunes) para una fecha dada
+   */
+  private getWeekStartDate(date: Date): Date {
+    const d = new Date(date);
+    const day = d.getDay();
+    const diff = d.getDate() - day + (day === 0 ? -6 : 1); // Ajustar para que lunes sea el primer día
+    const monday = new Date(d.setDate(diff));
+    monday.setHours(0, 0, 0, 0);
+    return monday;
+  }
+
+  /**
+   * Verifica si una fecha está en la misma semana que otra fecha
+   */
+  private isSameWeek(date1: Date, date2: Date): boolean {
+    const weekStart1 = this.getWeekStartDate(date1);
+    const weekStart2 = this.getWeekStartDate(date2);
+    return weekStart1.getTime() === weekStart2.getTime();
+  }
+
+  /**
+   * Renueva los contadores semanales si es necesario
+   */
+  private async renewWeeklyCounters(subscription: UserPaymentSubscription): Promise<UserPaymentSubscription> {
+    const today = new Date();
+    today.setHours(0, 0, 0, 0);
+
+    // Si no tiene weekStartDate o es una semana diferente, renovar
+    if (!subscription.weekStartDate || !this.isSameWeek(today, subscription.weekStartDate)) {
+      // Asegurarse de que paymentPlan esté cargado
+      if (!subscription.paymentPlan) {
+        const subscriptionWithPlan = await this.subscriptionRepository.findOne({
+          where: { id: subscription.id },
+          relations: ['paymentPlan']
+        });
+        if (!subscriptionWithPlan || !subscriptionWithPlan.paymentPlan) {
+          return subscription;
+        }
+        subscription.paymentPlan = subscriptionWithPlan.paymentPlan;
+      }
+
+      const newWeekStart = this.getWeekStartDate(today);
+      subscription.weekStartDate = newWeekStart;
+      subscription.classesUsedThisWeek = 0;
+      subscription.classesRemainingThisWeek = subscription.paymentPlan.classesPerWeek;
+      await this.subscriptionRepository.save(subscription);
+    }
+
+    return subscription;
+  }
+
+  /**
+   * Obtiene las clases vencidas (semanas pasadas sin usar)
+   */
+  private async getExpiredClasses(subscription: UserPaymentSubscription): Promise<any[]> {
+    const expiredClasses = [];
+    const today = new Date();
+    today.setHours(0, 0, 0, 0);
+    const currentWeekStart = this.getWeekStartDate(today);
+
+    // Asegurarse de que paymentPlan esté cargado
+    if (!subscription.paymentPlan) {
+      const subscriptionWithPlan = await this.subscriptionRepository.findOne({
+        where: { id: subscription.id },
+        relations: ['paymentPlan']
+      });
+      if (!subscriptionWithPlan || !subscriptionWithPlan.paymentPlan) {
+        return [];
+      }
+      subscription.paymentPlan = subscriptionWithPlan.paymentPlan;
+    }
+
+    // Obtener todas las semanas desde el inicio del período hasta hoy
+    const periodStart = new Date(subscription.periodStartDate);
+    periodStart.setHours(0, 0, 0, 0);
+    const periodStartWeek = this.getWeekStartDate(periodStart);
+
+    // Iterar por cada semana desde el inicio del período hasta la semana pasada
+    let weekStart = new Date(periodStartWeek);
+    while (weekStart < currentWeekStart) {
+      const weekEnd = new Date(weekStart);
+      weekEnd.setDate(weekEnd.getDate() + 6); // Domingo de esa semana
+      weekEnd.setHours(23, 59, 59, 999); // Incluir todo el día
+
+      // Verificar si hay clases usadas en esa semana
+      const classesInWeek = await this.classUsageRepository.find({
+        where: {
+          subscription: { id: subscription.id },
+          usageDate: Between(weekStart, weekEnd)
+        }
+      });
+
+      const classesUsed = classesInWeek.length;
+      const classesAllowed = subscription.paymentPlan.classesPerWeek;
+      const classesExpired = Math.max(0, classesAllowed - classesUsed);
+
+      if (classesExpired > 0) {
+        const weekEndDate = new Date(weekStart);
+        weekEndDate.setDate(weekEndDate.getDate() + 6); // Domingo de esa semana
+        expiredClasses.push({
+          weekStart: weekStart.toISOString().split('T')[0],
+          weekEnd: weekEndDate.toISOString().split('T')[0],
+          classesAllowed,
+          classesUsed,
+          classesExpired
+        });
+      }
+
+      // Avanzar a la siguiente semana
+      weekStart.setDate(weekStart.getDate() + 7);
+    }
+
+    return expiredClasses;
+  }
+
   // ===== GESTIÓN DE CLASES =====
-  async canUserBookClass(subscriptionId: string): Promise<boolean> {
+  async canUserBookClass(subscriptionId: string, reservationDate?: Date): Promise<boolean> {
     const subscription = await this.subscriptionRepository.findOne({
       where: { id: subscriptionId },
-      relations: ['paymentPlan']
+      relations: ['paymentPlan', 'payments']
     });
 
     if (!subscription) {
@@ -217,8 +346,69 @@ export class PaymentsService {
       return false;
     }
 
-    // Verificar que tenga clases disponibles
-    if (subscription.classesRemainingThisPeriod <= 0) {
+    // Si se proporciona una fecha de reserva, verificar que haya un pago pagado para ese período
+    if (reservationDate) {
+      const reservationDateOnly = new Date(reservationDate);
+      reservationDateOnly.setHours(0, 0, 0, 0);
+
+      // Buscar un pago pagado cuyo período incluya la fecha de la reserva
+      const paidPayment = subscription.payments.find(payment => {
+        if (payment.status !== PaymentStatus.PAID || !payment.paidDate) {
+          return false;
+        }
+
+        // Obtener el período de la suscripción cuando se pagó este pago
+        // El período es de 30 días desde el paidDate
+        const paymentDate = new Date(payment.paidDate);
+        paymentDate.setHours(0, 0, 0, 0);
+        
+        const periodStart = new Date(paymentDate);
+        const periodEnd = new Date(paymentDate);
+        periodEnd.setDate(periodEnd.getDate() + 30);
+
+        // Verificar que la fecha de reserva esté dentro del período pagado
+        return reservationDateOnly >= periodStart && reservationDateOnly <= periodEnd;
+      });
+
+      if (!paidPayment) {
+        return false; // No hay pago pagado para este período
+      }
+    } else {
+      // Si no se proporciona fecha, verificar que haya un pago pagado para el período actual
+      const today = new Date();
+      today.setHours(0, 0, 0, 0);
+
+      const paidPayment = subscription.payments.find(payment => {
+        if (payment.status !== PaymentStatus.PAID || !payment.paidDate) {
+          return false;
+        }
+
+        const paymentDate = new Date(payment.paidDate);
+        paymentDate.setHours(0, 0, 0, 0);
+        
+        const periodStart = new Date(paymentDate);
+        const periodEnd = new Date(paymentDate);
+        periodEnd.setDate(periodEnd.getDate() + 30);
+
+        return today >= periodStart && today <= periodEnd;
+      });
+
+      if (!paidPayment) {
+        return false; // No hay pago pagado para el período actual
+      }
+    }
+
+    // Renovar contadores semanales si es necesario
+    await this.renewWeeklyCounters(subscription);
+
+    // Recargar la suscripción para obtener los valores actualizados
+    const updatedSubscription = await this.subscriptionRepository.findOne({
+      where: { id: subscriptionId },
+      relations: ['paymentPlan']
+    });
+
+    // Verificar que tenga clases disponibles esta semana (lógica semanal)
+    if (updatedSubscription.classesRemainingThisWeek <= 0) {
       return false;
     }
 
@@ -252,20 +442,34 @@ export class PaymentsService {
       throw new BadRequestException('User cannot book class at this time');
     }
 
+    // Renovar contadores semanales si es necesario
+    await this.renewWeeklyCounters(subscription);
+
+    // Recargar la suscripción para obtener los valores actualizados
+    const updatedSubscription = await this.subscriptionRepository.findOne({
+      where: { id: subscriptionId },
+      relations: ['user', 'company', 'paymentPlan']
+    });
+
     // Crear registro de uso de clase
     const classUsage = this.classUsageRepository.create({
       ...usageData,
-      user: { id: subscription.user.id },
-      company: { id: subscription.company.id },
+      user: { id: updatedSubscription.user.id },
+      company: { id: updatedSubscription.company.id },
       subscription: { id: subscriptionId }
     });
 
     const savedClassUsage = await this.classUsageRepository.save(classUsage);
 
-    // Actualizar contadores de la suscripción
-    subscription.classesUsedThisPeriod += 1;
-    subscription.classesRemainingThisPeriod -= 1;
-    await this.subscriptionRepository.save(subscription);
+    // Actualizar contadores semanales (lógica semanal)
+    updatedSubscription.classesUsedThisWeek += 1;
+    updatedSubscription.classesRemainingThisWeek -= 1;
+    
+    // También actualizar contadores del período (para compatibilidad)
+    updatedSubscription.classesUsedThisPeriod += 1;
+    updatedSubscription.classesRemainingThisPeriod -= 1;
+    
+    await this.subscriptionRepository.save(updatedSubscription);
 
     return savedClassUsage;
   }
@@ -543,70 +747,163 @@ export class PaymentsService {
     }));
   }
 
+  /**
+   * Reinicia los períodos y contadores mensuales de una suscripción
+   */
+  private async resetMonthlyPeriod(subscription: UserPaymentSubscription, newPaymentPlan?: PaymentPlan): Promise<UserPaymentSubscription> {
+    const today = new Date();
+    today.setHours(0, 0, 0, 0);
+
+    // Si se proporciona un nuevo plan, actualizarlo
+    let paymentPlanToUse = subscription.paymentPlan;
+    if (newPaymentPlan) {
+      paymentPlanToUse = newPaymentPlan;
+      // Actualizar la relación en la base de datos
+      subscription.paymentPlan = newPaymentPlan;
+    }
+
+    // Asegurarse de que paymentPlan esté cargado
+    if (!paymentPlanToUse) {
+      const subscriptionWithPlan = await this.subscriptionRepository.findOne({
+        where: { id: subscription.id },
+        relations: ['paymentPlan']
+      });
+      if (subscriptionWithPlan && subscriptionWithPlan.paymentPlan) {
+        paymentPlanToUse = subscriptionWithPlan.paymentPlan;
+        subscription.paymentPlan = subscriptionWithPlan.paymentPlan;
+      } else {
+        throw new BadRequestException('Payment plan not found for subscription');
+      }
+    }
+
+    // Calcular nuevo período mensual (30 días desde hoy)
+    const newPeriodStartDate = new Date(today);
+    const newPeriodEndDate = new Date(today);
+    newPeriodEndDate.setDate(newPeriodEndDate.getDate() + 30);
+
+    // Actualizar períodos
+    subscription.periodStartDate = newPeriodStartDate;
+    subscription.periodEndDate = newPeriodEndDate;
+    subscription.nextBillingDate = newPeriodEndDate;
+
+    // Reiniciar contadores mensuales
+    subscription.classesUsedThisPeriod = 0;
+    subscription.classesRemainingThisPeriod = paymentPlanToUse.maxClassesPerPeriod;
+
+    // Reiniciar contadores semanales (nueva semana del nuevo mes)
+    const newWeekStart = this.getWeekStartDate(today);
+    subscription.weekStartDate = newWeekStart;
+    subscription.classesUsedThisWeek = 0;
+    subscription.classesRemainingThisWeek = paymentPlanToUse.classesPerWeek;
+
+    return await this.subscriptionRepository.save(subscription);
+  }
+
+  /**
+   * Verifica si una suscripción necesita reiniciar su período mensual
+   */
+  private needsMonthlyReset(subscription: UserPaymentSubscription): boolean {
+    const today = new Date();
+    today.setHours(0, 0, 0, 0);
+    const periodEnd = new Date(subscription.periodEndDate);
+    periodEnd.setHours(0, 0, 0, 0);
+
+    // Si el período ya terminó, necesita reiniciar
+    return today > periodEnd;
+  }
+
   // ===== PAGO COMPLETO (SUSCRIPCIÓN + PAGO) =====
   async completePayment(completePaymentDto: CompletePaymentDto): Promise<{ subscription: UserPaymentSubscription; payment: Payment }> {
     const { userId, paymentPlanId, companyId, amount, paymentMethod, discount, transactionId, notes, startDate } = completePaymentDto;
 
-    // 1. Verificar si ya existe una suscripción activa para este usuario y plan
+    // 1. Obtener el nuevo plan de pago
+    const newPaymentPlan = await this.paymentPlanRepository.findOne({
+      where: { id: paymentPlanId },
+      relations: ['company']
+    });
+
+    if (!newPaymentPlan) {
+      throw new NotFoundException('Payment plan not found');
+    }
+
+    // Verificar que el plan pertenece a la empresa
+    if (newPaymentPlan.company.id !== companyId) {
+      throw new BadRequestException('Payment plan does not belong to this company');
+    }
+
+    // 2. Buscar cualquier suscripción activa del usuario en esta empresa
     let existingSubscription = await this.subscriptionRepository.findOne({
       where: {
         user: { id: userId },
-        paymentPlan: { id: paymentPlanId },
         company: { id: companyId },
         status: SubscriptionStatus.ACTIVE
       },
-      relations: ['user', 'paymentPlan', 'company']
+      relations: ['user', 'paymentPlan', 'company', 'payments']
     });
 
     let subscription: UserPaymentSubscription;
+    let planChanged = false;
+    let needsReset = false;
 
     if (existingSubscription) {
-      // Si ya existe una suscripción activa, usarla
-      subscription = existingSubscription;
+      // Verificar si el plan cambió
+      planChanged = existingSubscription.paymentPlan.id !== paymentPlanId;
+
+      // Verificar si necesita reiniciar el período mensual
+      needsReset = this.needsMonthlyReset(existingSubscription);
+
+      // Siempre reiniciar el período cuando se paga una nueva cuota mensual
+      // Esto asegura que cada pago mensual reinicie los contadores
+      subscription = await this.resetMonthlyPeriod(existingSubscription, planChanged ? newPaymentPlan : undefined);
     } else {
-      // Si no existe, crear una nueva suscripción
+      // Si no existe suscripción activa, crear una nueva
       const createSubscriptionDto: CreateSubscriptionDto = {
         userId,
         paymentPlanId,
-        startDate: startDate || new Date().toISOString().split('T')[0], // Fecha de hoy si no se especifica
+        startDate: startDate || new Date().toISOString().split('T')[0],
         autoRenew: true
       };
 
       subscription = await this.createSubscription(companyId, createSubscriptionDto);
     }
 
-    // 2. Buscar el pago pendiente
-    let pendingPayment = await this.paymentRepository.findOne({
+    // 3. Recargar la suscripción para obtener los valores actualizados después del reinicio
+    subscription = await this.subscriptionRepository.findOne({
+      where: { id: subscription.id },
+      relations: ['user', 'paymentPlan', 'company']
+    });
+
+    // 4. Si existe una suscripción activa, siempre generar un nuevo pago mensual
+    // Esto asegura que cada pago mensual tenga su propio pago asociado
+    if (existingSubscription) {
+      // Generar nuevo pago mensual para el nuevo período
+      await this.generateMonthlyPayment(subscription);
+    }
+
+    // 5. Buscar el pago pendiente (puede ser el recién generado o uno existente)
+    let pendingPayments = await this.paymentRepository.find({
       where: {
         subscription: { id: subscription.id },
         status: PaymentStatus.PENDING
-      }
+      },
+      order: { dueDate: 'DESC' } // Obtener el más reciente por fecha de vencimiento
     });
 
-    // Si no se encuentra el pago, intentar generar uno nuevo
+    let pendingPayment = pendingPayments.length > 0 ? pendingPayments[0] : null;
+
+    // Si no se encuentra, esperar un poco y reintentar (para suscripciones nuevas)
     if (!pendingPayment) {
-      // Si es una suscripción existente, generar un nuevo pago
-      if (existingSubscription) {
-        await this.generateMonthlyPayment(subscription);
-        
-        // Buscar el pago recién creado
-        pendingPayment = await this.paymentRepository.findOne({
-          where: {
-            subscription: { id: subscription.id },
-            status: PaymentStatus.PENDING
-          }
-        });
-      } else {
-        // Si es una suscripción nueva, esperar un poco y reintentar
-        await new Promise(resolve => setTimeout(resolve, 100));
-        
-        pendingPayment = await this.paymentRepository.findOne({
-          where: {
-            subscription: { id: subscription.id },
-            status: PaymentStatus.PENDING
-          }
-        });
-      }
+      await new Promise(resolve => setTimeout(resolve, 100));
+      
+      pendingPayments = await this.paymentRepository.find({
+        where: {
+          subscription: { id: subscription.id },
+          status: PaymentStatus.PENDING
+        },
+        order: { dueDate: 'DESC' }
+      });
+
+      pendingPayment = pendingPayments.length > 0 ? pendingPayments[0] : null;
     }
 
     if (!pendingPayment) {
@@ -708,24 +1005,96 @@ export class PaymentsService {
     return await this.paymentRepository.save(payment);
   }
 
-  async deletePayment(paymentId: string): Promise<{ message: string }> {
+  async deletePayment(paymentId: string): Promise<{ message: string; cancelledReservations?: number; subscriptionCancelled?: boolean }> {
     const payment = await this.paymentRepository.findOne({
       where: { id: paymentId },
-      relations: ['subscription']
+      relations: ['subscription', 'subscription.user', 'subscription.company']
     });
 
     if (!payment) {
       throw new NotFoundException('Payment not found');
     }
 
-    // Verificar que el pago no esté pagado (opcional - puedes cambiar esta lógica)
-    if (payment.status === PaymentStatus.PAID) {
-      throw new BadRequestException('Cannot delete a paid payment');
+    const subscriptionId = payment.subscription?.id;
+    let cancelledReservationsCount = 0;
+    let subscriptionCancelled = false;
+
+    // Si el pago está pagado, cancelar todas las reservas del período correspondiente
+    if (payment.status === PaymentStatus.PAID && payment.paidDate && payment.subscription) {
+      const subscription = payment.subscription;
+      
+      // Calcular el período del pago (30 días desde paidDate)
+      const paymentDate = new Date(payment.paidDate);
+      paymentDate.setHours(0, 0, 0, 0);
+      
+      const periodStart = new Date(paymentDate);
+      const periodEnd = new Date(paymentDate);
+      periodEnd.setDate(periodEnd.getDate() + 30);
+      periodEnd.setHours(23, 59, 59, 999);
+
+      // Buscar todas las reservas del usuario en este período
+      const reservations = await this.reservationRepository.find({
+        where: {
+          user: { id: subscription.user.id },
+        },
+        relations: ['timeSlot', 'user']
+      });
+
+      // Filtrar reservas que estén dentro del período del pago eliminado
+      const reservationsInPeriod = reservations.filter(reservation => {
+        const reservationDate = new Date(reservation.timeSlot.date);
+        reservationDate.setHours(0, 0, 0, 0);
+        return reservationDate >= periodStart && reservationDate <= periodEnd;
+      });
+
+      // Eliminar las reservas y actualizar contadores de timeSlots
+      for (const reservation of reservationsInPeriod) {
+        // Decrementar contador del timeSlot
+        const timeSlot = await this.timeSlotRepository.findOne({
+          where: { id: reservation.timeSlot.id }
+        });
+        
+        if (timeSlot) {
+          timeSlot.reservedCount = Math.max(0, timeSlot.reservedCount - 1);
+          await this.timeSlotRepository.save(timeSlot);
+        }
+
+        // Eliminar la reserva
+        await this.reservationRepository.remove(reservation);
+        cancelledReservationsCount++;
+      }
     }
 
+    // Eliminar el pago
     await this.paymentRepository.remove(payment);
 
-    return { message: 'Payment deleted successfully' };
+    // Si la suscripción existe, verificar si tiene otros pagos pagados
+    if (subscriptionId) {
+      const subscription = await this.subscriptionRepository.findOne({
+        where: { id: subscriptionId },
+        relations: ['payments']
+      });
+
+      if (subscription) {
+        // Verificar si hay otros pagos pagados
+        const hasOtherPaidPayments = subscription.payments.some(
+          p => p.status === PaymentStatus.PAID && p.id !== paymentId
+        );
+
+        // Si no hay otros pagos pagados, cancelar la suscripción
+        if (!hasOtherPaidPayments) {
+          subscription.status = SubscriptionStatus.CANCELLED;
+          await this.subscriptionRepository.save(subscription);
+          subscriptionCancelled = true;
+        }
+      }
+    }
+
+    return { 
+      message: 'Payment deleted successfully',
+      cancelledReservations: cancelledReservationsCount,
+      subscriptionCancelled: subscriptionCancelled
+    };
   }
 
   // ===== GESTIÓN DE SUSPENSIONES TEMPORALES =====
@@ -906,12 +1275,44 @@ export class PaymentsService {
       relations: ['user', 'paymentPlan', 'company', 'payments']
     });
 
+    // Si no hay suscripción activa, devolver objeto vacío
     if (!subscription) {
-      throw new NotFoundException('Active subscription not found for this student');
+      return {
+        subscription: null,
+        plan: null,
+        payments: [],
+        pendingPayment: null,
+        suspensions: [],
+        expiredClasses: [],
+        statistics: {
+          totalPayments: 0,
+          paidPayments: 0,
+          pendingPayments: 0,
+          overduePayments: 0,
+          totalExpiredClasses: 0
+        },
+        hasActiveSubscription: false
+      };
     }
 
+    // Renovar contadores semanales si es necesario
+    await this.renewWeeklyCounters(subscription);
+
+    // Recargar la suscripción para obtener los valores actualizados
+    const updatedSubscription = await this.subscriptionRepository.findOne({
+      where: {
+        user: { id: userId },
+        company: { id: companyId },
+        status: SubscriptionStatus.ACTIVE
+      },
+      relations: ['user', 'paymentPlan', 'company', 'payments']
+    });
+
+    // Obtener clases vencidas
+    const expiredClasses = await this.getExpiredClasses(updatedSubscription);
+
     // Obtener todos los pagos ordenados del más reciente al más antiguo
-    const allPayments = subscription.payments
+    const allPayments = updatedSubscription.payments
       .map(payment => ({
         id: payment.id,
         amount: payment.amount,
@@ -965,33 +1366,43 @@ export class PaymentsService {
     });
 
     // Obtener el pago pendiente actual
-    const pendingPayment = subscription.payments.find(p => p.status === PaymentStatus.PENDING);
+    const pendingPayment = updatedSubscription.payments.find(p => p.status === PaymentStatus.PENDING);
+
+    // Calcular el fin de la semana actual
+    const currentWeekEnd = new Date(updatedSubscription.weekStartDate);
+    currentWeekEnd.setDate(currentWeekEnd.getDate() + 6);
 
     return {
       // Información de la suscripción
       subscription: {
-        id: subscription.id,
-        status: subscription.status,
-        periodStartDate: subscription.periodStartDate,
-        periodEndDate: subscription.periodEndDate,
-        nextBillingDate: subscription.nextBillingDate,
-        classesUsedThisPeriod: subscription.classesUsedThisPeriod,
-        classesRemainingThisPeriod: subscription.classesRemainingThisPeriod,
-        autoRenew: subscription.autoRenew
+        id: updatedSubscription.id,
+        status: updatedSubscription.status,
+        periodStartDate: updatedSubscription.periodStartDate,
+        periodEndDate: updatedSubscription.periodEndDate,
+        nextBillingDate: updatedSubscription.nextBillingDate,
+        classesUsedThisPeriod: updatedSubscription.classesUsedThisPeriod,
+        classesRemainingThisPeriod: updatedSubscription.classesRemainingThisPeriod,
+        autoRenew: updatedSubscription.autoRenew,
+        // Información semanal
+        weekStartDate: updatedSubscription.weekStartDate,
+        weekEndDate: currentWeekEnd.toISOString().split('T')[0],
+        classesUsedThisWeek: updatedSubscription.classesUsedThisWeek,
+        classesRemainingThisWeek: updatedSubscription.classesRemainingThisWeek,
+        classesAllowedPerWeek: updatedSubscription.paymentPlan.classesPerWeek
       },
       // Información del plan
       plan: {
-        id: subscription.paymentPlan.id,
-        name: subscription.paymentPlan.name,
-        description: subscription.paymentPlan.description,
-        amount: subscription.paymentPlan.amount,
-        classesPerWeek: subscription.paymentPlan.classesPerWeek,
-        maxClassesPerPeriod: subscription.paymentPlan.maxClassesPerPeriod,
-        frequencyDays: subscription.paymentPlan.frequencyDays,
-        gracePeriodDays: subscription.paymentPlan.gracePeriodDays,
-        lateFeePercentage: subscription.paymentPlan.lateFeePercentage,
-        allowClassRollover: subscription.paymentPlan.allowClassRollover,
-        maxRolloverClasses: subscription.paymentPlan.maxRolloverClasses
+        id: updatedSubscription.paymentPlan.id,
+        name: updatedSubscription.paymentPlan.name,
+        description: updatedSubscription.paymentPlan.description,
+        amount: updatedSubscription.paymentPlan.amount,
+        classesPerWeek: updatedSubscription.paymentPlan.classesPerWeek,
+        maxClassesPerPeriod: updatedSubscription.paymentPlan.maxClassesPerPeriod,
+        frequencyDays: updatedSubscription.paymentPlan.frequencyDays,
+        gracePeriodDays: updatedSubscription.paymentPlan.gracePeriodDays,
+        lateFeePercentage: updatedSubscription.paymentPlan.lateFeePercentage,
+        allowClassRollover: updatedSubscription.paymentPlan.allowClassRollover,
+        maxRolloverClasses: updatedSubscription.paymentPlan.maxRolloverClasses
       },
       // Todos los pagos
       payments: paymentsWithSuspension,
@@ -1015,15 +1426,19 @@ export class PaymentsService {
         notes: suspension.notes,
         isActive: suspension.isActive
       })),
+      // Clases vencidas (semanas pasadas sin usar)
+      expiredClasses: expiredClasses,
       // Estadísticas
       statistics: {
-        totalPayments: subscription.payments.length,
-        paidPayments: subscription.payments.filter(p => p.status === PaymentStatus.PAID).length,
-        pendingPayments: subscription.payments.filter(p => p.status === PaymentStatus.PENDING).length,
-        overduePayments: subscription.payments.filter(p => 
+        totalPayments: updatedSubscription.payments.length,
+        paidPayments: updatedSubscription.payments.filter(p => p.status === PaymentStatus.PAID).length,
+        pendingPayments: updatedSubscription.payments.filter(p => p.status === PaymentStatus.PENDING).length,
+        overduePayments: updatedSubscription.payments.filter(p => 
           p.status === PaymentStatus.PENDING && p.dueDate && new Date(p.dueDate) < new Date()
-        ).length
-      }
+        ).length,
+        totalExpiredClasses: expiredClasses.reduce((sum, week) => sum + week.classesExpired, 0)
+      },
+      hasActiveSubscription: true
     };
   }
 

@@ -56,13 +56,7 @@ export class ReservationsService {
       throw new BadRequestException('No tienes una suscripción activa para reservar clases');
     }
 
-    // 2. Validar que puede reservar (plan pagado, clases disponibles)
-    const canBook = await this.paymentsService.canUserBookClass(activeSubscription.id);
-    if (!canBook) {
-      throw new BadRequestException('No puedes reservar clases. Verifica tu plan de pago o clases disponibles');
-    }
-
-    // 3. Validar que el time slot existe
+    // 2. Validar que el time slot existe
     const timeSlot = await this.timeSlotRepository.findOne({
       where: { id: timeSlotId },
       relations: ['reservations'],
@@ -70,6 +64,13 @@ export class ReservationsService {
 
     if (!timeSlot) {
       throw new BadRequestException('Time slot not found');
+    }
+
+    // 3. Validar que puede reservar (plan pagado para este período, clases disponibles)
+    // Pasar la fecha del turno para validar que haya un pago pagado para ese período
+    const canBook = await this.paymentsService.canUserBookClass(activeSubscription.id, timeSlot.date);
+    if (!canBook) {
+      throw new BadRequestException('No puedes reservar clases. Verifica que tengas el pago del mes correspondiente o clases disponibles');
     }
 
     // 4. Validar que el time slot esté disponible

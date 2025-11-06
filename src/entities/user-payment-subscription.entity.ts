@@ -44,6 +44,15 @@ export class UserPaymentSubscription {
   @Column({ type: 'int', default: 0 })
   classesRemainingThisPeriod: number; // Clases restantes en el período
 
+  @Column({ type: 'date', nullable: true })
+  weekStartDate: Date; // Fecha de inicio de la semana actual (lunes)
+
+  @Column({ type: 'int', default: 0 })
+  classesUsedThisWeek: number; // Clases usadas esta semana
+
+  @Column({ type: 'int', default: 0 })
+  classesRemainingThisWeek: number; // Clases restantes esta semana
+
   @Column({ type: 'date' })
   periodStartDate: Date; // Fecha de inicio del período (cuando se paga)
 
