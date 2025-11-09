@@ -437,8 +437,11 @@ export class PaymentsService {
       throw new NotFoundException('Subscription not found');
     }
 
-    // Verificar que pueda usar la clase
-    if (!(await this.canUserBookClass(subscriptionId))) {
+    const usageDate = usageData.usageDate ? new Date(usageData.usageDate) : new Date();
+    usageDate.setHours(0, 0, 0, 0);
+
+    // Verificar que pueda usar la clase en la fecha indicada
+    if (!(await this.canUserBookClass(subscriptionId, usageDate))) {
       throw new BadRequestException('User cannot book class at this time');
     }
 
@@ -454,6 +457,7 @@ export class PaymentsService {
     // Crear registro de uso de clase
     const classUsage = this.classUsageRepository.create({
       ...usageData,
+      usageDate,
       user: { id: updatedSubscription.user.id },
       company: { id: updatedSubscription.company.id },
       subscription: { id: subscriptionId }
@@ -1006,22 +1010,39 @@ export class PaymentsService {
   }
 
   async deletePayment(paymentId: string): Promise<{ message: string; cancelledReservations?: number; subscriptionCancelled?: boolean }> {
-    const payment = await this.paymentRepository.findOne({
-      where: { id: paymentId },
-      relations: ['subscription', 'subscription.user', 'subscription.company']
-    });
+    // Validar que paymentId sea un UUID válido
+    const uuidRegex = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
+    if (!uuidRegex.test(paymentId)) {
+      throw new BadRequestException('Invalid payment ID format');
+    }
+
+    // Obtener el payment con solo los campos necesarios usando query builder
+    const payment = await this.paymentRepository
+      .createQueryBuilder('payment')
+      .select(['payment.id', 'payment.status', 'payment.paidDate', 'payment.subscriptionId'])
+      .where('payment.id = :id', { id: paymentId })
+      .getOne();
 
     if (!payment) {
       throw new NotFoundException('Payment not found');
     }
 
-    const subscriptionId = payment.subscription?.id;
+    // Obtener subscriptionId directamente del campo subscriptionId
+    const subscriptionId = (payment as any).subscriptionId;
     let cancelledReservationsCount = 0;
     let subscriptionCancelled = false;
 
     // Si el pago está pagado, cancelar todas las reservas del período correspondiente
-    if (payment.status === PaymentStatus.PAID && payment.paidDate && payment.subscription) {
-      const subscription = payment.subscription;
+    if (payment.status === PaymentStatus.PAID && payment.paidDate && subscriptionId && uuidRegex.test(subscriptionId)) {
+      // Recargar la suscripción con todas las relaciones necesarias
+      const subscription = await this.subscriptionRepository.findOne({
+        where: { id: subscriptionId },
+        relations: ['user', 'company']
+      });
+
+      if (!subscription || !subscription.user || !subscription.user.id) {
+        throw new BadRequestException('Subscription or user not found');
+      }
       
       // Calcular el período del pago (30 días desde paidDate)
       const paymentDate = new Date(payment.paidDate);
@@ -1065,30 +1086,37 @@ export class PaymentsService {
       }
     }
 
-    // Eliminar el pago
-    await this.paymentRepository.remove(payment);
-
-    // Si la suscripción existe, verificar si tiene otros pagos pagados
-    if (subscriptionId) {
-      const subscription = await this.subscriptionRepository.findOne({
-        where: { id: subscriptionId },
-        relations: ['payments']
+    // Si la suscripción existe, verificar si tiene otros pagos pagados ANTES de eliminar
+    if (subscriptionId && uuidRegex.test(subscriptionId)) {
+      // Buscar otros pagos pagados de esta suscripción (excluyendo el que vamos a eliminar)
+      const otherPaidPayments = await this.paymentRepository.find({
+        where: {
+          subscription: { id: subscriptionId },
+          status: PaymentStatus.PAID
+        }
       });
 
-      if (subscription) {
-        // Verificar si hay otros pagos pagados
-        const hasOtherPaidPayments = subscription.payments.some(
-          p => p.status === PaymentStatus.PAID && p.id !== paymentId
-        );
+      // Filtrar el payment que vamos a eliminar
+      const hasOtherPaidPayments = otherPaidPayments.some(
+        p => p.id !== paymentId
+      );
 
-        // Si no hay otros pagos pagados, cancelar la suscripción
-        if (!hasOtherPaidPayments) {
+      // Si no hay otros pagos pagados, cancelar la suscripción
+      if (!hasOtherPaidPayments) {
+        const subscription = await this.subscriptionRepository.findOne({
+          where: { id: subscriptionId }
+        });
+
+        if (subscription) {
           subscription.status = SubscriptionStatus.CANCELLED;
           await this.subscriptionRepository.save(subscription);
           subscriptionCancelled = true;
         }
       }
     }
+
+    // Eliminar el pago usando el ID
+    await this.paymentRepository.delete(paymentId);
 
     return { 
       message: 'Payment deleted successfully',

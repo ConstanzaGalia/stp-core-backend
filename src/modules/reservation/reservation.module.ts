@@ -9,6 +9,7 @@ import { ScheduleException } from 'src/entities/schedule-exception.entity';
 import { TimeSlotGeneration } from 'src/entities/time-slot-generation.entity';
 import { RecurringReservation } from 'src/entities/recurring-reservation.entity';
 import { UserPaymentSubscription } from 'src/entities/user-payment-subscription.entity';
+import { ClassUsage } from 'src/entities/class-usage.entity';
 import { ReservationsController } from './reservation.controller';
 import { ReservationsService } from './reservation.service';
 import { PaymentsModule } from '../payments/payments.module';
@@ -16,7 +17,7 @@ import { PaymentsModule } from '../payments/payments.module';
 
 @Module({
   imports: [
-    TypeOrmModule.forFeature([Reservation, TimeSlot, User, Company, ScheduleConfig, ScheduleException, TimeSlotGeneration, RecurringReservation, UserPaymentSubscription]), 
+    TypeOrmModule.forFeature([Reservation, TimeSlot, User, Company, ScheduleConfig, ScheduleException, TimeSlotGeneration, RecurringReservation, UserPaymentSubscription, ClassUsage]), 
     PaymentsModule,
   ],
   controllers: [ReservationsController],

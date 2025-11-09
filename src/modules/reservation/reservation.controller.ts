@@ -1,6 +1,6 @@
 import { Controller, Post, Param, Delete, Body, Get, Put, UseGuards, Query, BadRequestException, ForbiddenException } from '@nestjs/common';
 import { PaginationQueryDto } from './dto/pagination-query.dto';
-import { ReservationsService } from './reservation.service';
+import { ReservationsService, RecurringGenerationSummary } from './reservation.service';
 import { TimeSlot } from 'src/entities/timeSlot.entity';
 import { CreateTimeSlotsDto } from './dto/createTimeSlot.dto';
 import { CreateScheduleConfigDto } from './dto/create-schedule-config.dto';
@@ -287,7 +287,7 @@ export class ReservationsController {
   async createRecurringReservation(
     @GetUser() user: User,
     @Body() createRecurringDto: CreateRecurringReservationDto
-  ): Promise<RecurringReservation> {
+  ): Promise<{ recurringReservation: RecurringReservation; generationSummary: RecurringGenerationSummary }> {
     return this.reservationsService.createRecurringReservation(user.id, createRecurringDto);
   }
 
@@ -302,17 +302,28 @@ export class ReservationsController {
   }
 
   /**
-   * Cancelar una reserva recurrente
+   * Obtener todas las reservas recurrentes de una empresa
+   * GET /reservations/recurring/company/:companyId
+   */
+  @Get('recurring/company/:companyId')
+  @UseGuards(AuthGuard('jwt'))
+  async getCompanyRecurringReservations(@Param('companyId') companyId: string): Promise<RecurringReservation[]> {
+    return this.reservationsService.getCompanyRecurringReservations(companyId);
+  }
+
+  /**
+   * Cancelar una reserva recurrente y eliminar todas las reservas asociadas
    * DELETE /reservations/recurring/:id
    */
   @Delete('recurring/:id')
   @UseGuards(AuthGuard('jwt'))
   async cancelRecurringReservation(
     @Param('id') id: string,
-    @GetUser() user: User
-  ): Promise<{ message: string }> {
-    await this.reservationsService.cancelRecurringReservation(id, user.id);
-    return { message: 'Reserva recurrente cancelada exitosamente' };
+    @GetUser() user: User,
+    @Query('deleteReservations') deleteReservations?: string
+  ) {
+    const shouldDelete = deleteReservations !== 'false'; // Por defecto elimina las reservas
+    return await this.reservationsService.cancelRecurringReservation(id, user.id, shouldDelete);
   }
 
   /**

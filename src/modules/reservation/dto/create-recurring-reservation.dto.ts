@@ -12,12 +12,6 @@ export enum RecurringEndType {
 }
 
 export class CreateRecurringReservationDto {
-  @IsString()
-  timeSlotId: string; // ID del slot que se quiere reservar
-
-  @IsString()
-  companyId: string; // ID de la empresa
-
   @IsArray()
   @ArrayNotEmpty()
   @IsInt({ each: true })
@@ -31,18 +25,21 @@ export class CreateRecurringReservationDto {
   @IsString()
   endTime: string; // Ejemplo: "09:00"
 
-  @IsInt()
-  @Min(1)
-  capacity: number; // Capacidad del slot
+  @IsString()
+  @IsOptional()
+  companyId?: string; // ID de la empresa (opcional, se puede obtener del contexto)
 
   @IsString()
-  frequency: RecurringFrequency; // 'weekly' o 'monthly'
+  @IsOptional()
+  frequency?: RecurringFrequency; // 'weekly' o 'monthly' (por defecto: 'weekly')
 
   @IsDateString()
-  startDate: string; // Fecha de inicio de las reservas recurrentes
+  @IsOptional()
+  startDate?: string; // Fecha de inicio (por defecto: hoy)
 
   @IsString()
-  endType: RecurringEndType; // 'date', 'count' o 'never'
+  @IsOptional()
+  endType?: RecurringEndType; // 'date', 'count' o 'never' (por defecto: 'never')
 
   @IsDateString()
   @IsOptional()

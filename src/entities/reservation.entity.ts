@@ -1,4 +1,4 @@
-import { Entity, PrimaryGeneratedColumn, ManyToOne, CreateDateColumn } from 'typeorm';
+import { Entity, PrimaryGeneratedColumn, ManyToOne, CreateDateColumn, JoinColumn, Column } from 'typeorm';
 import { User } from './user.entity';
 import { TimeSlot } from './timeSlot.entity';
 
@@ -10,9 +10,13 @@ export class Reservation {
   @ManyToOne(() => User, user => user.reservations)
   user: User;
 
+  @Column({ type: 'uuid', name: 'timeSlotId' })
+  timeSlotId: string;
+
   @ManyToOne(() => TimeSlot, timeSlot => timeSlot.reservations, {
     onDelete: 'CASCADE'
   })
+  @JoinColumn({ name: 'timeSlotId' })
   timeSlot: TimeSlot;
 
   @CreateDateColumn()

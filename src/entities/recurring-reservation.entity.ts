@@ -60,8 +60,8 @@ export class RecurringReservation {
   @Column({ type: 'text', nullable: true })
   notes: string;
 
-  @Column({ type: 'uuid', nullable: true })
-  lastGeneratedDate: string; // Última fecha para la que se generaron reservas
+  @Column({ type: 'date', nullable: true })
+  lastGeneratedDate: Date; // Última fecha para la que se generaron reservas
 
   @ManyToOne(() => User, user => user.recurringReservations, { onDelete: 'CASCADE' })
   user: User;

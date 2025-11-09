@@ -1,4 +1,4 @@
-import { Injectable, BadRequestException, ForbiddenException } from '@nestjs/common';
+import { Injectable, BadRequestException, ForbiddenException, Logger } from '@nestjs/common';
 import { InjectRepository } from '@nestjs/typeorm';
 import { Company } from 'src/entities/company.entity';
 import { Reservation } from 'src/entities/reservation.entity';
@@ -12,10 +12,22 @@ import { Repository, Between } from 'typeorm';
 import { CreateRecurringReservationDto, RecurringFrequency, RecurringEndType } from './dto/create-recurring-reservation.dto';
 import { RecurringStatus } from 'src/entities/recurring-reservation.entity';
 import { PaymentsService } from '../payments/payments.service';
+import { ClassUsage, ClassUsageType } from '../../entities/class-usage.entity';
+
+export interface RecurringGenerationSummary {
+  createdReservations: number;
+  skippedPastDates: string[];
+  noCapacityDates: string[];
+  cannotBookDates: string[];
+  duplicateDates: string[];
+  missingTimeSlotDates: string[];
+}
 
 
 @Injectable()
 export class ReservationsService {
+  private readonly logger = new Logger(ReservationsService.name);
+
   constructor(
     @InjectRepository(Reservation)
     private readonly reservationRepository: Repository<Reservation>,
@@ -33,8 +45,20 @@ export class ReservationsService {
     private readonly recurringReservationRepository: Repository<RecurringReservation>,
     @InjectRepository(UserPaymentSubscription)
     private readonly subscriptionRepository: Repository<UserPaymentSubscription>,
+    @InjectRepository(ClassUsage)
+    private readonly classUsageRepository: Repository<ClassUsage>,
     private readonly paymentsService: PaymentsService,
   ) {}
+
+  private normalizeTimeString(time?: string): string {
+    if (!time) {
+      return '00:00';
+    }
+    const parts = time.split(':');
+    const hours = parts[0] ?? '00';
+    const minutes = parts[1] ?? '00';
+    return `${hours.padStart(2, '0')}:${minutes.padStart(2, '0')}`;
+  }
 
   /**
    * Obtener la suscripción activa de un usuario
@@ -45,24 +69,27 @@ export class ReservationsService {
         user: { id: userId },
         status: SubscriptionStatus.ACTIVE
       },
-      relations: ['paymentPlan']
+      relations: ['paymentPlan', 'company']
     });
   }
 
   async createReservation(userId: string, timeSlotId: string): Promise<Reservation> {
+    this.logger.debug(`createReservation -> userId=${userId}, timeSlotId=${timeSlotId}`);
     // 1. Validar que el usuario tenga suscripción activa
     const activeSubscription = await this.getActiveSubscriptionForUser(userId);
     if (!activeSubscription) {
       throw new BadRequestException('No tienes una suscripción activa para reservar clases');
     }
+    this.logger.debug(`createReservation -> activeSubscription=${activeSubscription.id}`);
 
     // 2. Validar que el time slot existe
-    const timeSlot = await this.timeSlotRepository.findOne({
+    let timeSlot = await this.timeSlotRepository.findOne({
       where: { id: timeSlotId },
       relations: ['reservations'],
     });
 
     if (!timeSlot) {
+      this.logger.warn(`createReservation -> timeSlot not found: ${timeSlotId}`);
       throw new BadRequestException('Time slot not found');
     }
 
@@ -70,21 +97,58 @@ export class ReservationsService {
     // Pasar la fecha del turno para validar que haya un pago pagado para ese período
     const canBook = await this.paymentsService.canUserBookClass(activeSubscription.id, timeSlot.date);
     if (!canBook) {
+      this.logger.warn(`createReservation -> canBookClass=false for subscription=${activeSubscription.id}`);
       throw new BadRequestException('No puedes reservar clases. Verifica que tengas el pago del mes correspondiente o clases disponibles');
     }
 
     // 4. Validar que el time slot esté disponible
     if (timeSlot.isAvailable()) {
+      const now = new Date();
+      const slotDateTime = new Date(timeSlot.date);
+      const [slotHour, slotMinute] = timeSlot.startTime.split(':').map(Number);
+      slotDateTime.setHours(slotHour || 0, slotMinute || 0, 0, 0);
+      if (slotDateTime <= now) {
+        throw new BadRequestException('No puedes reservar un turno en el pasado');
+      }
+
       timeSlot.reservedCount += 1;
+      if (!timeSlot.id) {
+        timeSlot = await this.timeSlotRepository.save(timeSlot);
+      }
       await this.timeSlotRepository.save(timeSlot);
 
-      const reservation = this.reservationRepository.create({
-        user: { id: userId },
-        timeSlot: { id: timeSlotId },
-      });
+      if (!timeSlot.id) {
+        throw new BadRequestException('No se pudo determinar el turno para la reserva');
+      }
 
-      return this.reservationRepository.save(reservation);
+      const reservation = this.reservationRepository.create();
+      reservation.user = { id: userId } as any;
+      reservation.timeSlot = timeSlot;
+      reservation.timeSlotId = timeSlot.id;
+
+      const savedReservation = await this.reservationRepository.save(reservation);
+      this.logger.log(`createReservation -> reservation created id=${savedReservation.id}`);
+
+      // 5. Registrar el uso de clase automáticamente al reservar
+      try {
+        await this.paymentsService.registerClassUsage(activeSubscription.id, {
+          type: ClassUsageType.RESERVATION,
+          usageDate: timeSlot.date,
+          notes: `Reserva de turno - ${timeSlot.startTime} a ${timeSlot.endTime}`
+        });
+        this.logger.log(`createReservation -> class usage registered subscription=${activeSubscription.id}`);
+      } catch (error) {
+        // Si falla el registro de uso de clase, revertir la reserva
+        await this.reservationRepository.delete({ id: savedReservation.id });
+        timeSlot.reservedCount = Math.max(0, timeSlot.reservedCount - 1);
+        await this.timeSlotRepository.save(timeSlot);
+        this.logger.error(`createReservation -> error registering class usage: ${error?.message}`, error?.stack);
+        throw error;
+      }
+
+      return savedReservation;
     } else {
+      this.logger.warn(`createReservation -> timeSlot full id=${timeSlot.id}`);
       throw new BadRequestException('Time slot is full');
     }
   }
@@ -659,25 +723,27 @@ export class ReservationsService {
       order: { id: 'DESC' },
     });
 
-    return reservations.map(reservation => {
-      const timeSlotDate = new Date(reservation.timeSlot.date);
-      const timeSlotTime = reservation.timeSlot.startTime;
+    return reservations
+      .filter(reservation => reservation.timeSlot)
+      .map(reservation => {
+        const timeSlotDate = reservation.timeSlot?.date ? new Date(reservation.timeSlot.date) : new Date(0);
+        const timeSlotTime = reservation.timeSlot?.startTime ?? '00:00';
       const [hours, minutes] = timeSlotTime.split(':').map(Number);
-      timeSlotDate.setHours(hours, minutes, 0, 0);
+        timeSlotDate.setHours(hours || 0, minutes || 0, 0, 0);
 
       const now = new Date();
       const twoHoursBefore = new Date(timeSlotDate.getTime() - 2 * 60 * 60 * 1000);
 
       return {
         id: reservation.id,
-        userId: reservation.user.id,
-        timeSlotId: reservation.timeSlot.id,
-        date: reservation.timeSlot.date,
-        startTime: reservation.timeSlot.startTime,
-        endTime: reservation.timeSlot.endTime,
-        companyName: reservation.timeSlot.company.name,
-        canCancel: now < twoHoursBefore,
-        cancelDeadline: twoHoursBefore,
+          userId: reservation.user?.id,
+          timeSlotId: reservation.timeSlot?.id ?? null,
+          date: reservation.timeSlot?.date ?? null,
+          startTime: reservation.timeSlot?.startTime ?? null,
+          endTime: reservation.timeSlot?.endTime ?? null,
+          companyName: reservation.timeSlot?.company?.name ?? null,
+          canCancel: reservation.timeSlot ? now < twoHoursBefore : false,
+          cancelDeadline: reservation.timeSlot ? twoHoursBefore : null,
         createdAt: reservation.createdAt,
       };
     });
@@ -1028,146 +1094,337 @@ export class ReservationsService {
   async createRecurringReservation(
     userId: string,
     createRecurringDto: CreateRecurringReservationDto
-  ): Promise<RecurringReservation> {
-    const { companyId, daysOfWeek, startTime, endTime, capacity, frequency, startDate, endType, endDate, maxOccurrences, notes } = createRecurringDto;
+  ): Promise<{ recurringReservation: RecurringReservation; generationSummary: RecurringGenerationSummary }> {
+    this.logger.debug(`createRecurringReservation -> userId=${userId}, days=${createRecurringDto.daysOfWeek?.join(',')}, startTime=${createRecurringDto.startTime}`);
+    const { daysOfWeek, startTime, endTime, companyId, frequency, startDate, endType, endDate, maxOccurrences, notes } = createRecurringDto;
+
+    const normalizedStartTime = this.normalizeTimeString(startTime);
+    const normalizedEndTime = this.normalizeTimeString(endTime);
+
+    // Obtener companyId del usuario si no se proporciona
+    let finalCompanyId = companyId;
+    if (!finalCompanyId) {
+      // Obtener la suscripción activa del usuario para obtener el companyId
+      const activeSubscription = await this.getActiveSubscriptionForUser(userId);
+      if (!activeSubscription) {
+        throw new BadRequestException('No tienes una suscripción activa. Necesitas especificar el companyId');
+      }
+      finalCompanyId = activeSubscription.company.id;
+    }
 
     // Verificar que la empresa existe
     const company = await this.companyRepository.findOne({
-      where: { id: companyId }
+      where: { id: finalCompanyId }
     });
 
     if (!company) {
       throw new BadRequestException('La empresa no existe');
     }
 
-    // Validar fechas
-    const startDateObj = new Date(startDate);
+    // Valores por defecto
+    const finalFrequency = frequency || RecurringFrequency.WEEKLY;
+    const finalEndType = endType || RecurringEndType.NEVER;
     const today = new Date();
     today.setHours(0, 0, 0, 0);
+    const finalStartDate = startDate ? new Date(startDate) : today;
 
-    if (startDateObj < today) {
+    // Validar fechas
+    if (finalStartDate < today) {
       throw new BadRequestException('La fecha de inicio no puede ser anterior a hoy');
     }
 
-    if (endType === 'date' && endDate) {
+    if (finalEndType === RecurringEndType.DATE && endDate) {
       const endDateObj = new Date(endDate);
-      if (endDateObj <= startDateObj) {
+      if (endDateObj <= finalStartDate) {
         throw new BadRequestException('La fecha de fin debe ser posterior a la fecha de inicio');
       }
     }
 
+    // Capacidad por defecto: 1 (reserva individual)
+    const capacity = 1;
+
     // Crear la reserva recurrente
     const recurringReservation = this.recurringReservationRepository.create({
-      frequency,
+      frequency: finalFrequency,
       daysOfWeek: daysOfWeek.join(','),
-      startTime,
-      endTime,
+      startTime: normalizedStartTime,
+      endTime: normalizedEndTime,
       capacity,
-      startDate: startDateObj,
-      endType,
-      endDate: endType === RecurringEndType.DATE ? new Date(endDate) : null,
-      maxOccurrences: endType === RecurringEndType.COUNT ? maxOccurrences : null,
+      startDate: finalStartDate,
+      endType: finalEndType,
+      endDate: finalEndType === RecurringEndType.DATE && endDate ? new Date(endDate) : null,
+      maxOccurrences: finalEndType === RecurringEndType.COUNT ? maxOccurrences : null,
       currentOccurrences: 0,
       status: RecurringStatus.ACTIVE,
       notes,
       user: { id: userId } as any,
-      company: { id: companyId } as any,
+      company: { id: finalCompanyId } as any,
     });
 
     const savedRecurringReservation = await this.recurringReservationRepository.save(recurringReservation);
 
-    // Generar las primeras reservas (próximas 4 semanas)
-    await this.generateRecurringReservations(savedRecurringReservation.id);
+    const generationSummary = await this.generateRecurringReservations(savedRecurringReservation.id);
 
-    return savedRecurringReservation;
+    return {
+      recurringReservation: savedRecurringReservation,
+      generationSummary,
+    };
   }
 
   /**
    * Generar reservas para una reserva recurrente
    */
-  async generateRecurringReservations(recurringReservationId: string): Promise<void> {
+  async generateRecurringReservations(recurringReservationId: string): Promise<RecurringGenerationSummary> {
+    this.logger.debug(`generateRecurringReservations -> recurringReservationId=${recurringReservationId}`);
     const recurringReservation = await this.recurringReservationRepository.findOne({
       where: { id: recurringReservationId },
       relations: ['user', 'company']
     });
 
     if (!recurringReservation || recurringReservation.status !== RecurringStatus.ACTIVE) {
-      return;
+      this.logger.warn(`generateRecurringReservations -> reservation inactive or not found id=${recurringReservationId}`);
+      return {
+        createdReservations: 0,
+        skippedPastDates: [],
+        noCapacityDates: [],
+        cannotBookDates: [],
+        duplicateDates: [],
+        missingTimeSlotDates: [],
+      };
     }
 
-    const daysOfWeek = recurringReservation.daysOfWeek.split(',').map(Number);
+    // Manejar daysOfWeek como string o array (TypeORM simple-array puede devolver ambos)
+    let daysOfWeek: number[];
+    if (typeof recurringReservation.daysOfWeek === 'string') {
+      daysOfWeek = recurringReservation.daysOfWeek.split(',').map(Number);
+    } else if (Array.isArray(recurringReservation.daysOfWeek)) {
+      daysOfWeek = (recurringReservation.daysOfWeek as any[]).map(Number);
+    } else {
+      daysOfWeek = [];
+    }
     const startDate = new Date(recurringReservation.startDate);
     const today = new Date();
     today.setHours(0, 0, 0, 0);
 
-    // Generar reservas hasta 4 semanas en el futuro
-    const endGenerationDate = new Date(today);
-    endGenerationDate.setDate(endGenerationDate.getDate() + 28); // 4 semanas
-
-    // Si hay fecha de fin, no generar más allá de esa fecha
-    if (recurringReservation.endDate && recurringReservation.endDate < endGenerationDate) {
-      endGenerationDate.setTime(recurringReservation.endDate.getTime());
+    // Ajustar el rango de generación según la suscripción y la reserva recurrente
+    const activeSubscription = await this.getActiveSubscriptionForUser(recurringReservation.user.id);
+    if (!activeSubscription) {
+      this.logger.warn(`generateRecurringReservations -> no active subscription for user=${recurringReservation.user.id}`);
+      throw new BadRequestException('No tienes una suscripción activa para crear reservas recurrentes');
     }
 
-    // Si hay máximo de ocurrencias, verificar
-    if (recurringReservation.maxOccurrences && 
-        recurringReservation.currentOccurrences >= recurringReservation.maxOccurrences) {
-      return;
+    // Ajustar el rango de generación según la suscripción y la reserva recurrente
+    const periodStart = new Date(activeSubscription.periodStartDate);
+    periodStart.setHours(0, 0, 0, 0);
+    const periodEnd = new Date(activeSubscription.periodEndDate);
+    periodEnd.setHours(23, 59, 59, 999);
+
+    let endGenerationDate = new Date(periodEnd);
+    if (recurringReservation.endDate) {
+      const recurrenceEnd = new Date(recurringReservation.endDate);
+      recurrenceEnd.setHours(23, 59, 59, 999);
+      if (recurrenceEnd.getTime() < endGenerationDate.getTime()) {
+        endGenerationDate = recurrenceEnd;
+      }
     }
 
-    const currentDate = new Date(Math.max(today.getTime(), startDate.getTime()));
+    let remainingOccurrences = recurringReservation.maxOccurrences
+      ? Math.max(recurringReservation.maxOccurrences - (recurringReservation.currentOccurrences || 0), 0)
+      : Number.MAX_SAFE_INTEGER;
+
+    if (remainingOccurrences <= 0) {
+      return {
+        createdReservations: 0,
+        skippedPastDates: [],
+        noCapacityDates: [],
+        cannotBookDates: [],
+        duplicateDates: [],
+        missingTimeSlotDates: [],
+      };
+    }
+
+    const effectiveStartTimestamp = Math.max(today.getTime(), startDate.getTime(), periodStart.getTime());
+    let currentDate = new Date(effectiveStartTimestamp);
+    currentDate.setHours(0, 0, 0, 0);
+
+    if (currentDate.getTime() > endGenerationDate.getTime()) {
+      return {
+        createdReservations: 0,
+        skippedPastDates: [],
+        noCapacityDates: [],
+        cannotBookDates: [],
+        duplicateDates: [],
+        missingTimeSlotDates: [],
+      };
+    }
+
+    let remainingClassesPeriod = activeSubscription.classesRemainingThisPeriod ?? 0;
+    if (remainingClassesPeriod <= 0) {
+      const maxClassesPerPeriod = activeSubscription.paymentPlan?.maxClassesPerPeriod ?? 0;
+      const classesUsedThisPeriod = activeSubscription.classesUsedThisPeriod ?? 0;
+      if (maxClassesPerPeriod > 0 && classesUsedThisPeriod < maxClassesPerPeriod) {
+        remainingClassesPeriod = maxClassesPerPeriod - classesUsedThisPeriod;
+      }
+    }
+
+    if (remainingClassesPeriod <= 0) {
+      this.logger.warn(`generateRecurringReservations -> no remaining classes subscription=${activeSubscription.id}`);
+      return {
+        createdReservations: 0,
+        skippedPastDates: [],
+        noCapacityDates: [],
+        cannotBookDates: [],
+        duplicateDates: [],
+        missingTimeSlotDates: [],
+      };
+    }
+
     let generatedCount = 0;
+    let lastGeneratedDate: Date | null = null;
+    const skippedPastDates: string[] = [];
+    const noCapacityDates: string[] = [];
+    const cannotBookDates: string[] = [];
+    const duplicateDates: string[] = [];
+    const missingTimeSlotDates: string[] = [];
 
-    while (currentDate <= endGenerationDate && generatedCount < 50) { // Límite de seguridad
+    const nowGlobal = new Date();
+    nowGlobal.setSeconds(0, 0);
+    const recurringStartTime = this.normalizeTimeString(recurringReservation.startTime);
+    const recurringEndTime = this.normalizeTimeString(recurringReservation.endTime);
+
+    try {
+      this.logger.debug(`generateRecurringReservations -> start loop recurringId=${recurringReservationId}, remainingOccurrences=${remainingOccurrences}, remainingClasses=${remainingClassesPeriod}`);
+      while (
+        currentDate.getTime() <= endGenerationDate.getTime() &&
+        generatedCount < 50 &&
+        remainingClassesPeriod > 0 &&
+        remainingOccurrences > 0
+      ) {
       const dayOfWeek = currentDate.getDay();
       
-      if (daysOfWeek.includes(dayOfWeek)) {
-        // Verificar si ya existe una reserva para este día y horario
-        const existingTimeSlot = await this.timeSlotRepository.findOne({
-          where: {
-            date: new Date(currentDate),
-            startTime: recurringReservation.startTime,
-            endTime: recurringReservation.endTime,
-            company: { id: recurringReservation.company.id }
+        if (!daysOfWeek.includes(dayOfWeek)) {
+          this.logger.verbose(`generateRecurringReservations -> skip day (not in schedule) date=${currentDate.toISOString()}`);
+          currentDate.setDate(currentDate.getDate() + 1);
+          continue;
+        }
+
+        if (currentDate.getTime() > periodEnd.getTime()) {
+          this.logger.verbose(`generateRecurringReservations -> reached period end date=${currentDate.toISOString()}`);
+          break;
+        }
+
+        const slotDate = new Date(currentDate);
+        slotDate.setHours(0, 0, 0, 0);
+
+        const slotDateTime = new Date(slotDate);
+        const [startHour, startMinute] = recurringStartTime.split(':').map(Number);
+        slotDateTime.setHours(startHour || 0, startMinute || 0, 0, 0);
+        if (slotDateTime <= nowGlobal) {
+          this.logger.verbose(`generateRecurringReservations -> skip past slot date=${slotDateTime.toISOString()}`);
+          skippedPastDates.push(slotDate.toISOString().split('T')[0]);
+          currentDate.setDate(currentDate.getDate() + 1);
+          continue;
+        }
+
+        // Verificar que el usuario pueda reservar en esa fecha específica
+        const canBook = await this.paymentsService.canUserBookClass(activeSubscription.id, slotDate);
+        if (!canBook) {
+          this.logger.verbose(`generateRecurringReservations -> canBook=false subscription=${activeSubscription.id} date=${slotDate.toISOString()}`);
+          cannotBookDates.push(slotDate.toISOString().split('T')[0]);
+          currentDate.setDate(currentDate.getDate() + 1);
+          continue;
+        }
+
+        const timeSlot = await this.timeSlotRepository.findOne({
+            where: {
+            date: slotDate,
+              startTime: recurringStartTime,
+              endTime: recurringEndTime,
+              company: { id: recurringReservation.company.id }
           },
           relations: ['reservations']
         });
+ 
+        if (!timeSlot?.id) {
+          this.logger.verbose(`generateRecurringReservations -> no timeslot configured date=${slotDate.toISOString()} start=${recurringReservation.startTime}`);
+          missingTimeSlotDates.push(slotDate.toISOString().split('T')[0]);
+          currentDate.setDate(currentDate.getDate() + 1);
+          continue;
+        }
 
-        if (existingTimeSlot) {
-          // Verificar si el usuario ya tiene una reserva en este slot
-          const existingReservation = await this.reservationRepository.findOne({
+        const existingReservation = await this.reservationRepository.findOne({
             where: {
               user: { id: recurringReservation.user.id },
-              timeSlot: { id: existingTimeSlot.id }
-            }
-          });
-
-          if (!existingReservation) {
-            // Verificar capacidad disponible
-            const currentReservations = existingTimeSlot.reservations?.length || 0;
-            if (currentReservations < existingTimeSlot.capacity) {
-              // Crear la reserva
-              const reservation = this.reservationRepository.create({
-                user: { id: recurringReservation.user.id } as any,
-                timeSlot: { id: existingTimeSlot.id } as any,
-              });
-
-              await this.reservationRepository.save(reservation);
-              generatedCount++;
-            }
+            timeSlot: { id: timeSlot.id }
           }
-        }
-      }
+        });
 
-      // Incrementar fecha
+        if (existingReservation) {
+          this.logger.verbose(`generateRecurringReservations -> reservation already exists timeSlot=${timeSlot.id}`);
+          duplicateDates.push(slotDate.toISOString().split('T')[0]);
+          currentDate.setDate(currentDate.getDate() + 1);
+          continue;
+        }
+
+        const reservedCount = timeSlot.reservedCount ?? timeSlot.reservations?.length ?? 0;
+        if (reservedCount >= timeSlot.capacity) {
+          this.logger.verbose(`generateRecurringReservations -> timeSlot full id=${timeSlot.id}`);
+          noCapacityDates.push(slotDate.toISOString().split('T')[0]);
+          currentDate.setDate(currentDate.getDate() + 1);
+          continue;
+        }
+
+        const reservation = this.reservationRepository.create({
+          user: { id: recurringReservation.user.id } as any,
+          timeSlot: { id: timeSlot.id } as any,
+          timeSlotId: timeSlot.id,
+        });
+
+        const savedReservation = await this.reservationRepository.save(reservation);
+        this.logger.log(`generateRecurringReservations -> created reservation id=${savedReservation.id} date=${slotDate.toISOString()}`);
+
+        try {
+          await this.paymentsService.registerClassUsage(activeSubscription.id, {
+            type: ClassUsageType.RESERVATION,
+            usageDate: slotDate,
+            notes: `Reserva recurrente - ${recurringStartTime} a ${recurringEndTime}`
+          });
+          this.logger.log(`generateRecurringReservations -> class usage registered subscription=${activeSubscription.id}`);
+
+          if (timeSlot) {
+            timeSlot.reservedCount = reservedCount + 1;
+            await this.timeSlotRepository.update({ id: timeSlot.id }, { reservedCount: timeSlot.reservedCount });
+          }
+
+          remainingClassesPeriod--;
+          remainingOccurrences--;
+              generatedCount++;
+          lastGeneratedDate = new Date(slotDate);
+        } catch (error) {
+          await this.reservationRepository.delete({ id: savedReservation.id });
+          this.logger.error(`generateRecurringReservations -> error registering class usage date=${slotDate.toISOString()}: ${error?.message}`, error?.stack);
+        }
+
       currentDate.setDate(currentDate.getDate() + 1);
     }
 
-    // Actualizar contador de ocurrencias
     await this.recurringReservationRepository.update(recurringReservationId, {
       currentOccurrences: recurringReservation.currentOccurrences + generatedCount,
-      lastGeneratedDate: endGenerationDate.toISOString().split('T')[0]
+        lastGeneratedDate: lastGeneratedDate ?? recurringReservation.lastGeneratedDate
     });
+    this.logger.log(`generateRecurringReservations -> completed recurringId=${recurringReservationId}, generated=${generatedCount}`);
+    return {
+      createdReservations: generatedCount,
+      skippedPastDates,
+      noCapacityDates,
+      cannotBookDates,
+      duplicateDates,
+      missingTimeSlotDates,
+    };
+  } catch (error) {
+      this.logger.error(`generateRecurringReservations -> fatal error recurringId=${recurringReservationId}: ${error?.message}`, error?.stack);
+      throw error;
+    }
   }
 
   /**
@@ -1176,32 +1433,253 @@ export class ReservationsService {
   async getUserRecurringReservations(userId: string): Promise<RecurringReservation[]> {
     return await this.recurringReservationRepository.find({
       where: { 
-        user: { id: userId },
-        status: RecurringStatus.ACTIVE
+        user: { id: userId }
       },
-      relations: ['company'],
+      relations: ['company', 'user'],
       order: { createdAt: 'DESC' }
     });
   }
 
   /**
-   * Cancelar una reserva recurrente
+   * Obtener todas las reservas recurrentes de una empresa
    */
-  async cancelRecurringReservation(recurringReservationId: string, userId: string): Promise<void> {
+  async getCompanyRecurringReservations(companyId: string): Promise<RecurringReservation[]> {
+    return await this.recurringReservationRepository.find({
+      where: { 
+        company: { id: companyId }
+      },
+      relations: ['company', 'user'],
+      order: { createdAt: 'DESC' }
+    });
+  }
+
+  /**
+   * Cancelar una reserva recurrente y eliminar todas las reservas asociadas
+   */
+  async cancelRecurringReservation(recurringReservationId: string, userId: string, deleteReservations: boolean = true): Promise<{ message: string; deletedReservations: number; deletedTimeSlots: number; restoredClasses: number }> {
     const recurringReservation = await this.recurringReservationRepository.findOne({
       where: { 
         id: recurringReservationId,
         user: { id: userId }
-      }
+      },
+      relations: ['company', 'user']
     });
 
     if (!recurringReservation) {
       throw new BadRequestException('Reserva recurrente no encontrada');
     }
 
-    await this.recurringReservationRepository.update(recurringReservationId, {
-      status: RecurringStatus.CANCELLED
-    });
+    // Obtener la suscripción activa del usuario para restaurar clases
+    const activeSubscription = await this.getActiveSubscriptionForUser(userId);
+    if (!activeSubscription) {
+      throw new BadRequestException('No tienes una suscripción activa');
+    }
+
+    let deletedReservationsCount = 0;
+    let deletedTimeSlotsCount = 0;
+    let restoredClassesCount = 0;
+
+    // Si se debe eliminar las reservas asociadas
+    if (deleteReservations) {
+      // Obtener los días de la semana de la reserva recurrente
+      let daysOfWeek: number[];
+      if (typeof recurringReservation.daysOfWeek === 'string') {
+        daysOfWeek = recurringReservation.daysOfWeek.split(',').map(Number);
+      } else if (Array.isArray(recurringReservation.daysOfWeek)) {
+        daysOfWeek = (recurringReservation.daysOfWeek as any[]).map(Number);
+      } else {
+        daysOfWeek = [];
+      }
+
+      // Buscar todas las reservas del usuario que coincidan con los días y horarios de la reserva recurrente
+      const startDate = new Date(recurringReservation.startDate);
+      const today = new Date();
+      today.setHours(0, 0, 0, 0);
+      
+      // Buscar reservas futuras (desde hoy en adelante)
+      const userReservations = await this.reservationRepository.find({
+        where: {
+          user: { id: userId }
+        },
+        relations: ['timeSlot', 'timeSlot.company']
+      });
+
+      // Filtrar reservas que coincidan con la reserva recurrente
+      const reservationsToDelete = userReservations.filter(reservation => {
+        if (!reservation.timeSlot) {
+          return false;
+        }
+
+        const reservationDate = new Date(reservation.timeSlot.date);
+        reservationDate.setHours(0, 0, 0, 0);
+        
+        // Verificar que la fecha sea futura o igual a la fecha de inicio
+        if (reservationDate < startDate) {
+          return false;
+        }
+
+        // Verificar que coincida el día de la semana
+        const dayOfWeek = reservationDate.getDay();
+        if (!daysOfWeek.includes(dayOfWeek)) {
+          return false;
+        }
+
+        // Verificar que coincida el horario
+        if (!reservation.timeSlot.startTime || !reservation.timeSlot.endTime) {
+          return false;
+        }
+
+        if (reservation.timeSlot.startTime !== recurringReservation.startTime ||
+            reservation.timeSlot.endTime !== recurringReservation.endTime) {
+          return false;
+        }
+
+        // Verificar que sea del mismo company
+        if (!reservation.timeSlot.company || reservation.timeSlot.company.id !== recurringReservation.company.id) {
+          return false;
+        }
+
+        return true;
+      });
+
+      // Buscar los registros de ClassUsage asociados a estas reservas
+      const reservationDates = reservationsToDelete
+        .filter(r => r.timeSlot)
+        .map(r => {
+          const date = new Date(r.timeSlot.date);
+          date.setHours(0, 0, 0, 0);
+          return date;
+        });
+
+      // Buscar todos los ClassUsage del usuario para estas fechas
+      const classUsagesToDelete = await this.classUsageRepository.find({
+        where: {
+          user: { id: userId },
+          subscription: { id: activeSubscription.id },
+          type: ClassUsageType.RESERVATION
+        },
+        relations: ['user', 'subscription']
+      });
+
+      // Filtrar los ClassUsage que coincidan con las fechas de las reservas a eliminar
+      const classUsagesToRemove = classUsagesToDelete.filter(classUsage => {
+        const usageDate = new Date(classUsage.usageDate);
+        usageDate.setHours(0, 0, 0, 0);
+        return reservationDates.some(date => {
+          const dateStr = date.toISOString().split('T')[0];
+          const usageDateStr = usageDate.toISOString().split('T')[0];
+          return dateStr === usageDateStr;
+        });
+      });
+
+      // Eliminar los registros de ClassUsage
+      for (const classUsage of classUsagesToRemove) {
+        await this.classUsageRepository.remove(classUsage);
+        restoredClassesCount++;
+      }
+
+      // Restaurar contadores de clases en la suscripción
+      if (restoredClassesCount > 0) {
+        // Recargar la suscripción para obtener valores actualizados
+        const updatedSubscription = await this.subscriptionRepository.findOne({
+          where: { id: activeSubscription.id },
+          relations: ['paymentPlan']
+        });
+
+        if (updatedSubscription) {
+          const classesPerWeekLimit = updatedSubscription.paymentPlan?.classesPerWeek ?? Number.MAX_SAFE_INTEGER;
+          const maxClassesPerPeriod = updatedSubscription.paymentPlan?.maxClassesPerPeriod ?? Number.MAX_SAFE_INTEGER;
+
+          const originalWeeklyTotal = Math.max(0, (updatedSubscription.classesUsedThisWeek ?? 0) + (updatedSubscription.classesRemainingThisWeek ?? 0));
+          const originalPeriodTotal = Math.max(0, (updatedSubscription.classesUsedThisPeriod ?? 0) + (updatedSubscription.classesRemainingThisPeriod ?? 0));
+
+          // Restaurar contadores semanales
+          updatedSubscription.classesUsedThisWeek = Math.max(0, (updatedSubscription.classesUsedThisWeek ?? 0) - restoredClassesCount);
+          const restoredWeekRemaining = Math.min(
+            classesPerWeekLimit,
+            Math.max(0, (updatedSubscription.classesRemainingThisWeek ?? 0) + restoredClassesCount)
+          );
+          // Evitar exceder el total original semanal (si se conocía)
+          updatedSubscription.classesRemainingThisWeek = originalWeeklyTotal > 0
+            ? Math.min(restoredWeekRemaining, originalWeeklyTotal - updatedSubscription.classesUsedThisWeek)
+            : restoredWeekRemaining;
+
+          // Restaurar contadores del período
+          updatedSubscription.classesUsedThisPeriod = Math.max(0, (updatedSubscription.classesUsedThisPeriod ?? 0) - restoredClassesCount);
+          const restoredPeriodRemaining = Math.min(
+            maxClassesPerPeriod,
+            Math.max(0, (updatedSubscription.classesRemainingThisPeriod ?? 0) + restoredClassesCount)
+          );
+          updatedSubscription.classesRemainingThisPeriod = originalPeriodTotal > 0
+            ? Math.min(restoredPeriodRemaining, originalPeriodTotal - updatedSubscription.classesUsedThisPeriod)
+            : restoredPeriodRemaining;
+
+          await this.subscriptionRepository.save(updatedSubscription);
+        }
+      }
+
+      // Eliminar las reservas y actualizar contadores de time slots
+      const timeSlotsToUpdate = new Map<string, { timeSlot: TimeSlot; count: number }>();
+
+      for (const reservation of reservationsToDelete) {
+        if (!reservation.timeSlot) {
+          continue;
+        }
+
+        // Eliminar la reserva
+        await this.reservationRepository.delete({ id: reservation.id });
+        deletedReservationsCount++;
+
+        // Actualizar contador del time slot
+        const timeSlotId = reservation.timeSlot.id;
+        if (!timeSlotsToUpdate.has(timeSlotId)) {
+          timeSlotsToUpdate.set(timeSlotId, {
+            timeSlot: reservation.timeSlot,
+            count: 0
+          });
+        }
+        const slotData = timeSlotsToUpdate.get(timeSlotId);
+        if (slotData) {
+          slotData.count++;
+        }
+      }
+
+      // Actualizar contadores de time slots
+      for (const [timeSlotId, slotData] of timeSlotsToUpdate) {
+        if (!slotData.timeSlot) {
+          continue;
+        }
+
+        slotData.timeSlot.reservedCount = Math.max(0, (slotData.timeSlot.reservedCount || 0) - slotData.count);
+        await this.timeSlotRepository.save(slotData.timeSlot);
+
+        // Si el time slot quedó vacío y fue creado por esta reserva recurrente, eliminarlo
+        if (slotData.timeSlot.reservedCount === 0) {
+          const slotDate = slotData.timeSlot.date ? new Date(slotData.timeSlot.date) : null;
+          if (slotDate) {
+            slotDate.setHours(0, 0, 0, 0);
+          }
+          
+          // Verificar si el time slot fue creado después de la fecha de inicio de la reserva recurrente
+          if (slotDate && slotDate >= startDate) {
+            await this.timeSlotRepository.remove(slotData.timeSlot);
+            deletedTimeSlotsCount++;
+            this.logger.verbose(`cancelRecurringReservation -> timeSlot removed id=${slotData.timeSlot.id}`);
+          }
+        }
+      }
+    }
+
+    // Eliminar la reserva recurrente (no solo cancelarla)
+    await this.recurringReservationRepository.remove(recurringReservation);
+    this.logger.log(`cancelRecurringReservation -> recurring removed id=${recurringReservationId}`);
+
+    return {
+      message: 'Reserva recurrente eliminada exitosamente',
+      deletedReservations: deletedReservationsCount,
+      deletedTimeSlots: deletedTimeSlotsCount,
+      restoredClasses: restoredClassesCount
+    };
   }
 
   /**
