@@ -720,30 +720,47 @@ export class ReservationsService {
     const reservations = await this.reservationRepository.find({
       where: { user: { id: userId } },
       relations: ['user', 'timeSlot', 'timeSlot.company'],
-      order: { id: 'DESC' },
     });
 
-    return reservations
-      .filter(reservation => reservation.timeSlot)
-      .map(reservation => {
-        const timeSlotDate = reservation.timeSlot?.date ? new Date(reservation.timeSlot.date) : new Date(0);
-        const timeSlotTime = reservation.timeSlot?.startTime ?? '00:00';
-      const [hours, minutes] = timeSlotTime.split(':').map(Number);
-        timeSlotDate.setHours(hours || 0, minutes || 0, 0, 0);
+    const now = new Date();
 
-      const now = new Date();
+    const upcoming = reservations
+      .filter(reservation => {
+        if (!reservation.timeSlot || !reservation.timeSlot.date) {
+          return false;
+        }
+        const startDateTime = new Date(reservation.timeSlot.date);
+        const [hour, minute] = (reservation.timeSlot.startTime ?? '00:00').split(':').map(Number);
+        startDateTime.setHours(hour || 0, minute || 0, 0, 0);
+        return startDateTime >= now;
+      })
+      .sort((a, b) => {
+        const dateA = new Date(a.timeSlot.date);
+        const dateB = new Date(b.timeSlot.date);
+        const [hourA, minuteA] = (a.timeSlot.startTime ?? '00:00').split(':').map(Number);
+        const [hourB, minuteB] = (b.timeSlot.startTime ?? '00:00').split(':').map(Number);
+        dateA.setHours(hourA || 0, minuteA || 0, 0, 0);
+        dateB.setHours(hourB || 0, minuteB || 0, 0, 0);
+        return dateA.getTime() - dateB.getTime();
+      });
+
+    return upcoming.map(reservation => {
+      const timeSlotDate = new Date(reservation.timeSlot.date);
+      const [hours, minutes] = (reservation.timeSlot.startTime ?? '00:00').split(':').map(Number);
+      timeSlotDate.setHours(hours || 0, minutes || 0, 0, 0);
+
       const twoHoursBefore = new Date(timeSlotDate.getTime() - 2 * 60 * 60 * 1000);
 
       return {
         id: reservation.id,
-          userId: reservation.user?.id,
-          timeSlotId: reservation.timeSlot?.id ?? null,
-          date: reservation.timeSlot?.date ?? null,
-          startTime: reservation.timeSlot?.startTime ?? null,
-          endTime: reservation.timeSlot?.endTime ?? null,
-          companyName: reservation.timeSlot?.company?.name ?? null,
-          canCancel: reservation.timeSlot ? now < twoHoursBefore : false,
-          cancelDeadline: reservation.timeSlot ? twoHoursBefore : null,
+        userId: reservation.user.id,
+        timeSlotId: reservation.timeSlot.id,
+        date: reservation.timeSlot.date,
+        startTime: reservation.timeSlot.startTime,
+        endTime: reservation.timeSlot.endTime,
+        companyName: reservation.timeSlot.company?.name ?? null,
+        canCancel: new Date() < twoHoursBefore,
+        cancelDeadline: twoHoursBefore,
         createdAt: reservation.createdAt,
       };
     });
@@ -1336,15 +1353,15 @@ export class ReservationsService {
         }
 
         const timeSlot = await this.timeSlotRepository.findOne({
-            where: {
+          where: {
             date: slotDate,
               startTime: recurringStartTime,
               endTime: recurringEndTime,
-              company: { id: recurringReservation.company.id }
+            company: { id: recurringReservation.company.id }
           },
           relations: ['reservations']
         });
- 
+
         if (!timeSlot?.id) {
           this.logger.verbose(`generateRecurringReservations -> no timeslot configured date=${slotDate.toISOString()} start=${recurringReservation.startTime}`);
           missingTimeSlotDates.push(slotDate.toISOString().split('T')[0]);
@@ -1352,7 +1369,7 @@ export class ReservationsService {
           continue;
         }
 
-        const existingReservation = await this.reservationRepository.findOne({
+          const existingReservation = await this.reservationRepository.findOne({
             where: {
               user: { id: recurringReservation.user.id },
             timeSlot: { id: timeSlot.id }
@@ -1374,8 +1391,8 @@ export class ReservationsService {
           continue;
         }
 
-        const reservation = this.reservationRepository.create({
-          user: { id: recurringReservation.user.id } as any,
+              const reservation = this.reservationRepository.create({
+                user: { id: recurringReservation.user.id } as any,
           timeSlot: { id: timeSlot.id } as any,
           timeSlotId: timeSlot.id,
         });
@@ -1457,6 +1474,8 @@ export class ReservationsService {
    * Cancelar una reserva recurrente y eliminar todas las reservas asociadas
    */
   async cancelRecurringReservation(recurringReservationId: string, userId: string, deleteReservations: boolean = true): Promise<{ message: string; deletedReservations: number; deletedTimeSlots: number; restoredClasses: number }> {
+    this.logger.debug(`cancelRecurringReservation -> recurringId=${recurringReservationId}, userId=${userId}, deleteReservations=${deleteReservations}`);
+    
     const recurringReservation = await this.recurringReservationRepository.findOne({
       where: { 
         id: recurringReservationId,
@@ -1466,18 +1485,25 @@ export class ReservationsService {
     });
 
     if (!recurringReservation) {
+      this.logger.warn(`cancelRecurringReservation -> Recurring reservation not found: ${recurringReservationId}`);
       throw new BadRequestException('Reserva recurrente no encontrada');
     }
 
     // Obtener la suscripción activa del usuario para restaurar clases
     const activeSubscription = await this.getActiveSubscriptionForUser(userId);
     if (!activeSubscription) {
+      this.logger.error(`cancelRecurringReservation -> No active subscription for user ${userId}`);
       throw new BadRequestException('No tienes una suscripción activa');
     }
 
     let deletedReservationsCount = 0;
     let deletedTimeSlotsCount = 0;
     let restoredClassesCount = 0;
+
+    // Normalizar horarios de la reserva recurrente
+    const recurringStartTime = this.normalizeTimeString(recurringReservation.startTime);
+    const recurringEndTime = this.normalizeTimeString(recurringReservation.endTime);
+    this.logger.debug(`cancelRecurringReservation -> recurring times: ${recurringStartTime}-${recurringEndTime}`);
 
     // Si se debe eliminar las reservas asociadas
     if (deleteReservations) {
@@ -1490,19 +1516,20 @@ export class ReservationsService {
       } else {
         daysOfWeek = [];
       }
+      this.logger.debug(`cancelRecurringReservation -> daysOfWeek: ${daysOfWeek.join(',')}`);
 
       // Buscar todas las reservas del usuario que coincidan con los días y horarios de la reserva recurrente
       const startDate = new Date(recurringReservation.startDate);
-      const today = new Date();
-      today.setHours(0, 0, 0, 0);
+      startDate.setHours(0, 0, 0, 0);
       
-      // Buscar reservas futuras (desde hoy en adelante)
+      // Buscar todas las reservas del usuario
       const userReservations = await this.reservationRepository.find({
         where: {
           user: { id: userId }
         },
         relations: ['timeSlot', 'timeSlot.company']
       });
+      this.logger.debug(`cancelRecurringReservation -> found ${userReservations.length} user reservations`);
 
       // Filtrar reservas que coincidan con la reserva recurrente
       const reservationsToDelete = userReservations.filter(reservation => {
@@ -1513,7 +1540,7 @@ export class ReservationsService {
         const reservationDate = new Date(reservation.timeSlot.date);
         reservationDate.setHours(0, 0, 0, 0);
         
-        // Verificar que la fecha sea futura o igual a la fecha de inicio
+        // Verificar que la fecha sea igual o posterior a la fecha de inicio
         if (reservationDate < startDate) {
           return false;
         }
@@ -1524,13 +1551,15 @@ export class ReservationsService {
           return false;
         }
 
-        // Verificar que coincida el horario
+        // Verificar que coincida el horario (normalizar antes de comparar)
         if (!reservation.timeSlot.startTime || !reservation.timeSlot.endTime) {
           return false;
         }
 
-        if (reservation.timeSlot.startTime !== recurringReservation.startTime ||
-            reservation.timeSlot.endTime !== recurringReservation.endTime) {
+        const normalizedStartTime = this.normalizeTimeString(reservation.timeSlot.startTime);
+        const normalizedEndTime = this.normalizeTimeString(reservation.timeSlot.endTime);
+
+        if (normalizedStartTime !== recurringStartTime || normalizedEndTime !== recurringEndTime) {
           return false;
         }
 
@@ -1542,17 +1571,23 @@ export class ReservationsService {
         return true;
       });
 
-      // Buscar los registros de ClassUsage asociados a estas reservas
-      const reservationDates = reservationsToDelete
-        .filter(r => r.timeSlot)
-        .map(r => {
-          const date = new Date(r.timeSlot.date);
-          date.setHours(0, 0, 0, 0);
-          return date;
-        });
+      this.logger.log(`cancelRecurringReservation -> found ${reservationsToDelete.length} reservations to delete`);
 
-      // Buscar todos los ClassUsage del usuario para estas fechas
-      const classUsagesToDelete = await this.classUsageRepository.find({
+      // Crear un mapa de fechas de reservas para buscar ClassUsage más eficientemente
+      const reservationDateMap = new Map<string, Date>();
+      for (const reservation of reservationsToDelete) {
+        if (reservation.timeSlot && reservation.timeSlot.date) {
+          const date = new Date(reservation.timeSlot.date);
+          date.setHours(0, 0, 0, 0);
+          const dateKey = date.toISOString().split('T')[0];
+          reservationDateMap.set(dateKey, date);
+        }
+      }
+
+      this.logger.debug(`cancelRecurringReservation -> reservation dates: ${Array.from(reservationDateMap.keys()).join(', ')}`);
+
+      // Buscar todos los ClassUsage del usuario para esta suscripción y tipo RESERVATION
+      const allClassUsages = await this.classUsageRepository.find({
         where: {
           user: { id: userId },
           subscription: { id: activeSubscription.id },
@@ -1560,22 +1595,23 @@ export class ReservationsService {
         },
         relations: ['user', 'subscription']
       });
+      this.logger.debug(`cancelRecurringReservation -> found ${allClassUsages.length} class usages`);
 
       // Filtrar los ClassUsage que coincidan con las fechas de las reservas a eliminar
-      const classUsagesToRemove = classUsagesToDelete.filter(classUsage => {
+      const classUsagesToRemove = allClassUsages.filter(classUsage => {
         const usageDate = new Date(classUsage.usageDate);
         usageDate.setHours(0, 0, 0, 0);
-        return reservationDates.some(date => {
-          const dateStr = date.toISOString().split('T')[0];
-          const usageDateStr = usageDate.toISOString().split('T')[0];
-          return dateStr === usageDateStr;
-        });
+        const usageDateKey = usageDate.toISOString().split('T')[0];
+        return reservationDateMap.has(usageDateKey);
       });
+
+      this.logger.log(`cancelRecurringReservation -> found ${classUsagesToRemove.length} class usages to remove`);
 
       // Eliminar los registros de ClassUsage
       for (const classUsage of classUsagesToRemove) {
         await this.classUsageRepository.remove(classUsage);
         restoredClassesCount++;
+        this.logger.verbose(`cancelRecurringReservation -> removed classUsage id=${classUsage.id}, date=${classUsage.usageDate}`);
       }
 
       // Restaurar contadores de clases en la suscripción
@@ -1587,34 +1623,31 @@ export class ReservationsService {
         });
 
         if (updatedSubscription) {
-          const classesPerWeekLimit = updatedSubscription.paymentPlan?.classesPerWeek ?? Number.MAX_SAFE_INTEGER;
-          const maxClassesPerPeriod = updatedSubscription.paymentPlan?.maxClassesPerPeriod ?? Number.MAX_SAFE_INTEGER;
+          const classesPerWeek = updatedSubscription.paymentPlan?.classesPerWeek ?? 0;
+          const maxClassesPerPeriod = updatedSubscription.paymentPlan?.maxClassesPerPeriod ?? 0;
 
-          const originalWeeklyTotal = Math.max(0, (updatedSubscription.classesUsedThisWeek ?? 0) + (updatedSubscription.classesRemainingThisWeek ?? 0));
-          const originalPeriodTotal = Math.max(0, (updatedSubscription.classesUsedThisPeriod ?? 0) + (updatedSubscription.classesRemainingThisPeriod ?? 0));
+          // Restaurar contadores semanales (restar de usadas, sumar a disponibles)
+          const previousUsedThisWeek = updatedSubscription.classesUsedThisWeek ?? 0;
+          const previousRemainingThisWeek = updatedSubscription.classesRemainingThisWeek ?? 0;
 
-          // Restaurar contadores semanales
-          updatedSubscription.classesUsedThisWeek = Math.max(0, (updatedSubscription.classesUsedThisWeek ?? 0) - restoredClassesCount);
-          const restoredWeekRemaining = Math.min(
-            classesPerWeekLimit,
-            Math.max(0, (updatedSubscription.classesRemainingThisWeek ?? 0) + restoredClassesCount)
+          updatedSubscription.classesUsedThisWeek = Math.max(0, previousUsedThisWeek - restoredClassesCount);
+          updatedSubscription.classesRemainingThisWeek = Math.min(
+            classesPerWeek,
+            previousRemainingThisWeek + restoredClassesCount
           );
-          // Evitar exceder el total original semanal (si se conocía)
-          updatedSubscription.classesRemainingThisWeek = originalWeeklyTotal > 0
-            ? Math.min(restoredWeekRemaining, originalWeeklyTotal - updatedSubscription.classesUsedThisWeek)
-            : restoredWeekRemaining;
 
-          // Restaurar contadores del período
-          updatedSubscription.classesUsedThisPeriod = Math.max(0, (updatedSubscription.classesUsedThisPeriod ?? 0) - restoredClassesCount);
-          const restoredPeriodRemaining = Math.min(
+          // Restaurar contadores del período (restar de usadas, sumar a disponibles)
+          const previousUsedThisPeriod = updatedSubscription.classesUsedThisPeriod ?? 0;
+          const previousRemainingThisPeriod = updatedSubscription.classesRemainingThisPeriod ?? 0;
+
+          updatedSubscription.classesUsedThisPeriod = Math.max(0, previousUsedThisPeriod - restoredClassesCount);
+          updatedSubscription.classesRemainingThisPeriod = Math.min(
             maxClassesPerPeriod,
-            Math.max(0, (updatedSubscription.classesRemainingThisPeriod ?? 0) + restoredClassesCount)
+            previousRemainingThisPeriod + restoredClassesCount
           );
-          updatedSubscription.classesRemainingThisPeriod = originalPeriodTotal > 0
-            ? Math.min(restoredPeriodRemaining, originalPeriodTotal - updatedSubscription.classesUsedThisPeriod)
-            : restoredPeriodRemaining;
 
           await this.subscriptionRepository.save(updatedSubscription);
+          this.logger.log(`cancelRecurringReservation -> restored ${restoredClassesCount} classes. Weekly: ${previousUsedThisWeek}->${updatedSubscription.classesUsedThisWeek} used, ${previousRemainingThisWeek}->${updatedSubscription.classesRemainingThisWeek} remaining. Period: ${previousUsedThisPeriod}->${updatedSubscription.classesUsedThisPeriod} used, ${previousRemainingThisPeriod}->${updatedSubscription.classesRemainingThisPeriod} remaining`);
         }
       }
 
@@ -1622,13 +1655,14 @@ export class ReservationsService {
       const timeSlotsToUpdate = new Map<string, { timeSlot: TimeSlot; count: number }>();
 
       for (const reservation of reservationsToDelete) {
-        if (!reservation.timeSlot) {
+        if (!reservation.timeSlot || !reservation.id) {
           continue;
         }
 
         // Eliminar la reserva
-        await this.reservationRepository.delete({ id: reservation.id });
+        await this.reservationRepository.delete(reservation.id);
         deletedReservationsCount++;
+        this.logger.verbose(`cancelRecurringReservation -> deleted reservation id=${reservation.id}, date=${reservation.timeSlot.date}`);
 
         // Actualizar contador del time slot
         const timeSlotId = reservation.timeSlot.id;
@@ -1644,35 +1678,27 @@ export class ReservationsService {
         }
       }
 
-      // Actualizar contadores de time slots
+      this.logger.log(`cancelRecurringReservation -> deleted ${deletedReservationsCount} reservations`);
+
+      // Actualizar contadores de time slots (NO eliminar, solo restaurar capacidad)
       for (const [timeSlotId, slotData] of timeSlotsToUpdate) {
         if (!slotData.timeSlot) {
           continue;
         }
 
-        slotData.timeSlot.reservedCount = Math.max(0, (slotData.timeSlot.reservedCount || 0) - slotData.count);
-        await this.timeSlotRepository.save(slotData.timeSlot);
-
-        // Si el time slot quedó vacío y fue creado por esta reserva recurrente, eliminarlo
-        if (slotData.timeSlot.reservedCount === 0) {
-          const slotDate = slotData.timeSlot.date ? new Date(slotData.timeSlot.date) : null;
-          if (slotDate) {
-            slotDate.setHours(0, 0, 0, 0);
-          }
-          
-          // Verificar si el time slot fue creado después de la fecha de inicio de la reserva recurrente
-          if (slotDate && slotDate >= startDate) {
-            await this.timeSlotRepository.remove(slotData.timeSlot);
-            deletedTimeSlotsCount++;
-            this.logger.verbose(`cancelRecurringReservation -> timeSlot removed id=${slotData.timeSlot.id}`);
-          }
-        }
+        const currentReservedCount = slotData.timeSlot.reservedCount || 0;
+        const newReservedCount = Math.max(0, currentReservedCount - slotData.count);
+        
+        await this.timeSlotRepository.update(timeSlotId, { reservedCount: newReservedCount });
+        this.logger.verbose(`cancelRecurringReservation -> updated timeSlot id=${timeSlotId}, reservedCount: ${currentReservedCount}->${newReservedCount} (capacity restored, timeSlot kept)`);
       }
+
+      this.logger.log(`cancelRecurringReservation -> updated ${timeSlotsToUpdate.size} timeSlots (capacity restored, no timeSlots deleted)`);
     }
 
     // Eliminar la reserva recurrente (no solo cancelarla)
     await this.recurringReservationRepository.remove(recurringReservation);
-    this.logger.log(`cancelRecurringReservation -> recurring removed id=${recurringReservationId}`);
+    this.logger.log(`cancelRecurringReservation -> deleted recurring reservation id=${recurringReservationId}`);
 
     return {
       message: 'Reserva recurrente eliminada exitosamente',
