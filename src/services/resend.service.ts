@@ -6,8 +6,6 @@ export class ResendService {
   private resend: Resend;
 
   constructor() {
-  console.log('RESEND_API_KEY exists:', !!process.env.RESEND_API_KEY);
-  console.log('API Key starts with re_:', process.env.RESEND_API_KEY?.startsWith('re_'));
     this.resend = new Resend(process.env.RESEND_API_KEY);
   }
 
