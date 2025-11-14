@@ -115,7 +115,14 @@ export class ReservationsController {
     @Query('date') date?: string,
   ) {
     // Si no se proporciona fecha, usar la fecha actual
-    const targetDate = date ? new Date(date) : new Date();
+    let targetDate: Date;
+    if (date) {
+      // Parsear la fecha directamente del string YYYY-MM-DD para evitar problemas de zona horaria
+      const [year, month, day] = date.split('-').map(Number);
+      targetDate = new Date(year, month - 1, day);
+    } else {
+      targetDate = new Date();
+    }
     
     // Validar que la fecha sea válida
     if (isNaN(targetDate.getTime())) {

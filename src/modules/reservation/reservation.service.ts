@@ -8,7 +8,7 @@ import { ScheduleException } from 'src/entities/schedule-exception.entity';
 import { TimeSlotGeneration } from 'src/entities/time-slot-generation.entity';
 import { RecurringReservation } from 'src/entities/recurring-reservation.entity';
 import { UserPaymentSubscription, SubscriptionStatus } from 'src/entities/user-payment-subscription.entity';
-import { Repository, Between } from 'typeorm';
+import { Repository, Between, In } from 'typeorm';
 import { CreateRecurringReservationDto, RecurringFrequency, RecurringEndType } from './dto/create-recurring-reservation.dto';
 import { RecurringStatus } from 'src/entities/recurring-reservation.entity';
 import { PaymentsService } from '../payments/payments.service';
@@ -459,28 +459,68 @@ export class ReservationsService {
    * @returns Array de time slots con información de reservas y alumnos
    */
   async getDailyReservationsForAdmin(companyId: string, date: Date): Promise<any[]> {
-    // Normalizar la fecha (solo día, sin hora)
-    const targetDate = new Date(date);
-    targetDate.setHours(0, 0, 0, 0);
-    const nextDay = new Date(targetDate);
-    nextDay.setDate(nextDay.getDate() + 1);
-    nextDay.setHours(0, 0, 0, 0);
+    // Obtener año, mes y día directamente de la fecha (ya viene parseada correctamente del controller)
+    // Usar getFullYear(), getMonth(), getDate() que devuelven valores en hora local
+    const year = date.getFullYear();
+    const month = date.getMonth(); // 0-indexed (0 = Enero, 11 = Diciembre)
+    const day = date.getDate();
+    
+    // Crear string de fecha para comparación en PostgreSQL (formato YYYY-MM-DD)
+    const dateString = `${year}-${String(month + 1).padStart(2, '0')}-${String(day).padStart(2, '0')}`;
 
-    // Buscar todos los time slots para esa fecha usando query builder para mayor precisión
+    // Buscar todos los time slots para esa fecha usando DATE() de PostgreSQL
+    // Esto compara solo la parte de fecha, ignorando hora y zona horaria
     const timeSlots = await this.timeSlotRepository
       .createQueryBuilder('timeSlot')
-      .leftJoinAndSelect('timeSlot.reservations', 'reservations')
-      .leftJoinAndSelect('reservations.user', 'user')
       .leftJoinAndSelect('timeSlot.company', 'company')
       .where('company.id = :companyId', { companyId })
-      .andWhere('timeSlot.date >= :startDate', { startDate: targetDate })
-      .andWhere('timeSlot.date < :endDate', { endDate: nextDay })
+      .andWhere(`DATE(timeSlot.date) = DATE(:dateString)`, { dateString })
       .orderBy('timeSlot.startTime', 'ASC')
       .getMany();
 
+    // Obtener todos los IDs de time slots
+    const timeSlotIds = timeSlots.map(ts => ts.id);
+
+    // Cargar todas las reservas para estos time slots con sus usuarios usando query builder
+    // Esto asegura que las relaciones se carguen correctamente
+    // Usamos leftJoin para traer todas las reservas, incluso si el usuario está eliminado
+    // Luego filtraremos en JavaScript
+    let reservationsWithUsers: Reservation[] = [];
+    if (timeSlotIds.length > 0) {
+      reservationsWithUsers = await this.reservationRepository
+        .createQueryBuilder('reservation')
+        .leftJoinAndSelect('reservation.user', 'user')
+        .leftJoinAndSelect('reservation.timeSlot', 'timeSlot')
+        .where('reservation.timeSlotId IN (:...timeSlotIds)', { timeSlotIds })
+        .getMany();
+    }
+
+    // Crear un mapa de timeSlotId -> reservas para acceso rápido
+    const reservationsByTimeSlot = new Map<string, Reservation[]>();
+    reservationsWithUsers.forEach(reservation => {
+      if (!reservationsByTimeSlot.has(reservation.timeSlotId)) {
+        reservationsByTimeSlot.set(reservation.timeSlotId, []);
+      }
+      reservationsByTimeSlot.get(reservation.timeSlotId)!.push(reservation);
+    });
+
+    // Log útil para monitoreo en producción
+    const totalReservations = reservationsWithUsers.length;
+    const totalStudents = reservationsWithUsers.filter(r => r.user && r.user.deletedAt === null).length;
+    this.logger.log(`[getDailyReservationsForAdmin] Company: ${companyId}, Date: ${dateString}, TimeSlots: ${timeSlots.length}, Reservations: ${totalReservations}, Students: ${totalStudents}`);
+
     // Formatear la respuesta
     return timeSlots.map(timeSlot => {
-      const reservations = timeSlot.reservations || [];
+      const reservations = reservationsByTimeSlot.get(timeSlot.id) || [];
+      
+      // Filtrar reservas que tienen usuario válido (no eliminado y no null)
+      const validReservations = reservations.filter(reservation => {
+        if (!reservation || !reservation.user) {
+          return false;
+        }
+        // Verificar que el usuario no esté eliminado (deletedAt debe ser null o undefined)
+        return reservation.user.deletedAt === null || reservation.user.deletedAt === undefined;
+      });
       
       return {
         id: timeSlot.id,
@@ -488,23 +528,30 @@ export class ReservationsService {
         startTime: timeSlot.startTime,
         endTime: timeSlot.endTime,
         capacity: timeSlot.capacity,
-        reservedCount: timeSlot.reservedCount || reservations.length,
-        availableSpots: timeSlot.capacity - (timeSlot.reservedCount || reservations.length),
+        reservedCount: timeSlot.reservedCount || validReservations.length,
+        availableSpots: timeSlot.capacity - (timeSlot.reservedCount || validReservations.length),
         durationMinutes: timeSlot.durationMinutes || 60,
         isIntermediateSlot: timeSlot.isIntermediateSlot || false,
-        students: reservations.map(reservation => ({
-          id: reservation.user?.id,
-          reservationId: reservation.id,
-          name: reservation.user?.name || '',
-          lastName: reservation.user?.lastName || '',
-          fullName: `${reservation.user?.name || ''} ${reservation.user?.lastName || ''}`.trim(),
-          email: reservation.user?.email || '',
-          createdAt: reservation.createdAt,
-          // Por ahora no tenemos campo de asistencia, pero podemos agregar null
-          attendanceStatus: null, // 'present' | 'absent' | null
-          // Campos adicionales que podrían ser útiles
-          imageProfile: reservation.user?.imageProfile || null,
-        })),
+        students: validReservations.map(reservation => {
+          const user = reservation.user;
+          if (!user) {
+            return null;
+          }
+          
+          return {
+            id: user.id,
+            reservationId: reservation.id,
+            name: user.name || '',
+            lastName: user.lastName || '',
+            fullName: `${user.name || ''} ${user.lastName || ''}`.trim() || 'Usuario sin nombre',
+            email: user.email || '',
+            createdAt: reservation.createdAt,
+            // Por ahora no tenemos campo de asistencia, pero podemos agregar null
+            attendanceStatus: null, // 'present' | 'absent' | null
+            // Campos adicionales que podrían ser útiles
+            imageProfile: user.imageProfile || null,
+          };
+        }).filter(student => student !== null), // Eliminar cualquier estudiante null
         // Información del entrenador (por ahora null, se puede agregar después)
         trainer: null,
         trainerName: null,

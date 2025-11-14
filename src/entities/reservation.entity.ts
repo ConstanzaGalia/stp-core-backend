@@ -8,6 +8,7 @@ export class Reservation {
   id: string;
 
   @ManyToOne(() => User, user => user.reservations)
+  @JoinColumn({ name: 'userId' })
   user: User;
 
   @Column({ type: 'uuid', name: 'timeSlotId' })
