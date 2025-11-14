@@ -452,6 +452,66 @@ export class ReservationsService {
     return days[dayOfWeek];
   }
 
+  /**
+   * Obtener todos los time slots de un día específico con las reservas y alumnos para la vista de administración
+   * @param companyId ID de la empresa
+   * @param date Fecha para la cual obtener los time slots (YYYY-MM-DD)
+   * @returns Array de time slots con información de reservas y alumnos
+   */
+  async getDailyReservationsForAdmin(companyId: string, date: Date): Promise<any[]> {
+    // Normalizar la fecha (solo día, sin hora)
+    const targetDate = new Date(date);
+    targetDate.setHours(0, 0, 0, 0);
+    const nextDay = new Date(targetDate);
+    nextDay.setDate(nextDay.getDate() + 1);
+    nextDay.setHours(0, 0, 0, 0);
+
+    // Buscar todos los time slots para esa fecha usando query builder para mayor precisión
+    const timeSlots = await this.timeSlotRepository
+      .createQueryBuilder('timeSlot')
+      .leftJoinAndSelect('timeSlot.reservations', 'reservations')
+      .leftJoinAndSelect('reservations.user', 'user')
+      .leftJoinAndSelect('timeSlot.company', 'company')
+      .where('company.id = :companyId', { companyId })
+      .andWhere('timeSlot.date >= :startDate', { startDate: targetDate })
+      .andWhere('timeSlot.date < :endDate', { endDate: nextDay })
+      .orderBy('timeSlot.startTime', 'ASC')
+      .getMany();
+
+    // Formatear la respuesta
+    return timeSlots.map(timeSlot => {
+      const reservations = timeSlot.reservations || [];
+      
+      return {
+        id: timeSlot.id,
+        date: timeSlot.date,
+        startTime: timeSlot.startTime,
+        endTime: timeSlot.endTime,
+        capacity: timeSlot.capacity,
+        reservedCount: timeSlot.reservedCount || reservations.length,
+        availableSpots: timeSlot.capacity - (timeSlot.reservedCount || reservations.length),
+        durationMinutes: timeSlot.durationMinutes || 60,
+        isIntermediateSlot: timeSlot.isIntermediateSlot || false,
+        students: reservations.map(reservation => ({
+          id: reservation.user?.id,
+          reservationId: reservation.id,
+          name: reservation.user?.name || '',
+          lastName: reservation.user?.lastName || '',
+          fullName: `${reservation.user?.name || ''} ${reservation.user?.lastName || ''}`.trim(),
+          email: reservation.user?.email || '',
+          createdAt: reservation.createdAt,
+          // Por ahora no tenemos campo de asistencia, pero podemos agregar null
+          attendanceStatus: null, // 'present' | 'absent' | null
+          // Campos adicionales que podrían ser útiles
+          imageProfile: reservation.user?.imageProfile || null,
+        })),
+        // Información del entrenador (por ahora null, se puede agregar después)
+        trainer: null,
+        trainerName: null,
+      };
+    });
+  }
+
   private formatDateToUTC(date: any): string {
     try {
       // Si es null o undefined

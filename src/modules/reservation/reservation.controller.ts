@@ -104,6 +104,27 @@ export class ReservationsController {
     return this.reservationsService.getAvailableTimeSlots(companyId, start, end);
   }
 
+  /**
+   * Obtener todas las reservas de un día específico para la vista de administración
+   * GET /reservations/admin/:companyId/daily?date=2025-11-13
+   */
+  @Get('admin/:companyId/daily')
+  @UseGuards(AuthGuard('jwt'))
+  async getDailyReservationsForAdmin(
+    @Param('companyId') companyId: string,
+    @Query('date') date?: string,
+  ) {
+    // Si no se proporciona fecha, usar la fecha actual
+    const targetDate = date ? new Date(date) : new Date();
+    
+    // Validar que la fecha sea válida
+    if (isNaN(targetDate.getTime())) {
+      throw new BadRequestException('Fecha inválida. Use formato YYYY-MM-DD');
+    }
+    
+    return this.reservationsService.getDailyReservationsForAdmin(companyId, targetDate);
+  }
+
   @Get('schedule-config-status/:companyId')
   @UseGuards(AuthGuard('jwt'))
   async getScheduleConfigStatus(@Param('companyId') companyId: string) {
