@@ -546,8 +546,7 @@ export class ReservationsService {
             fullName: `${user.name || ''} ${user.lastName || ''}`.trim() || 'Usuario sin nombre',
             email: user.email || '',
             createdAt: reservation.createdAt,
-            // Por ahora no tenemos campo de asistencia, pero podemos agregar null
-            attendanceStatus: null, // 'present' | 'absent' | null
+            attendanceStatus: reservation.attendanceStatus, // true = presente, false = ausente, null = sin marcar
             // Campos adicionales que podrían ser útiles
             imageProfile: user.imageProfile || null,
           };
@@ -557,6 +556,30 @@ export class ReservationsService {
         trainerName: null,
       };
     });
+  }
+
+  /**
+   * Actualizar el estado de asistencia de una reserva
+   * @param reservationId ID de la reserva
+   * @param attendanceStatus Estado de asistencia (true = presente, false = ausente, null = sin marcar)
+   * @returns Reserva actualizada
+   */
+  async updateAttendance(reservationId: string, attendanceStatus: boolean | null): Promise<Reservation> {
+    const reservation = await this.reservationRepository.findOne({
+      where: { id: reservationId },
+      relations: ['user', 'timeSlot'],
+    });
+
+    if (!reservation) {
+      throw new BadRequestException('Reserva no encontrada');
+    }
+
+    reservation.attendanceStatus = attendanceStatus;
+    const updatedReservation = await this.reservationRepository.save(reservation);
+
+    this.logger.log(`[updateAttendance] Reservation ${reservationId} updated: attendanceStatus=${attendanceStatus}`);
+
+    return updatedReservation;
   }
 
   private formatDateToUTC(date: any): string {

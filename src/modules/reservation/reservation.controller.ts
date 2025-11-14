@@ -1,4 +1,4 @@
-import { Controller, Post, Param, Delete, Body, Get, Put, UseGuards, Query, BadRequestException, ForbiddenException } from '@nestjs/common';
+import { Controller, Post, Param, Delete, Body, Get, Put, Patch, UseGuards, Query, BadRequestException, ForbiddenException } from '@nestjs/common';
 import { PaginationQueryDto } from './dto/pagination-query.dto';
 import { ReservationsService, RecurringGenerationSummary } from './reservation.service';
 import { TimeSlot } from 'src/entities/timeSlot.entity';
@@ -130,6 +130,30 @@ export class ReservationsController {
     }
     
     return this.reservationsService.getDailyReservationsForAdmin(companyId, targetDate);
+  }
+
+  /**
+   * Actualizar el estado de asistencia de una reserva
+   * PATCH /reservations/:reservationId/attendance
+   */
+  @Patch(':reservationId/attendance')
+  @UseGuards(AuthGuard('jwt'))
+  async updateAttendance(
+    @Param('reservationId') reservationId: string,
+    @Body() body: { attendanceStatus: boolean | null },
+    @GetUser() user: User,
+  ) {
+    // Validar que el body tenga el campo attendanceStatus
+    if (body.attendanceStatus === undefined) {
+      throw new BadRequestException('El campo attendanceStatus es requerido');
+    }
+
+    // Validar que attendanceStatus sea boolean o null
+    if (body.attendanceStatus !== null && typeof body.attendanceStatus !== 'boolean') {
+      throw new BadRequestException('attendanceStatus debe ser true, false o null');
+    }
+
+    return this.reservationsService.updateAttendance(reservationId, body.attendanceStatus);
   }
 
   @Get('schedule-config-status/:companyId')

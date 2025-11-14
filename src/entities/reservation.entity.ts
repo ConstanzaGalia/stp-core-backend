@@ -1,4 +1,4 @@
-import { Entity, PrimaryGeneratedColumn, ManyToOne, CreateDateColumn, JoinColumn, Column } from 'typeorm';
+import { Entity, PrimaryGeneratedColumn, ManyToOne, CreateDateColumn, UpdateDateColumn, JoinColumn, Column } from 'typeorm';
 import { User } from './user.entity';
 import { TimeSlot } from './timeSlot.entity';
 
@@ -20,6 +20,12 @@ export class Reservation {
   @JoinColumn({ name: 'timeSlotId' })
   timeSlot: TimeSlot;
 
+  @Column({ type: 'boolean', nullable: true, name: 'attendance_status' })
+  attendanceStatus: boolean | null;
+
   @CreateDateColumn()
   createdAt: Date;
+
+  @UpdateDateColumn()
+  updatedAt: Date;
 }
