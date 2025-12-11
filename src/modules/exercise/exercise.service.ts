@@ -29,21 +29,25 @@ export class ExerciseService {
     limit: number,
     path: string,
   ): Promise<PaginatedListDto<Exercise>> {
-    const [companies, count] = await this.ExerciseRepository.findAndCount({
+    const [exercises, count] = await this.ExerciseRepository.findAndCount({
       take: limit,
       skip: offset,
+      relations: ['primaryCategory', 'tags'],
       order: {
         name: 'ASC',
       },
     });
     return new PaginatedListDto(
-      companies,
+      exercises,
       this.pagination.buildPaginationDto(limit, offset, count, path),
     );
   }
 
   public async findOne(id: string): Promise<Exercise> {
-    return await this.ExerciseRepository.findOneBy({ id });
+    return await this.ExerciseRepository.findOne({
+      where: { id },
+      relations: ['primaryCategory', 'tags'],
+    });
   }
 
   public async update(id: string, updateExerciseDto: UpdateExerciseDto) {

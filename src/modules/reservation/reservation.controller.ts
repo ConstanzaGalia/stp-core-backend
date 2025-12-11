@@ -8,10 +8,12 @@ import { UpdateScheduleConfigDto } from './dto/update-schedule-config.dto';
 import { CreateScheduleExceptionDto } from './dto/create-schedule-exception.dto';
 import { UpdateScheduleExceptionDto } from './dto/update-schedule-exception.dto';
 import { CreateRecurringReservationDto } from './dto/create-recurring-reservation.dto';
+import { UpdateRecurringReservationDto } from './dto/update-recurring-reservation.dto';
 import { AuthGuard } from '@nestjs/passport';
 import { GetUser } from '../auth/get-user.decorator';
 import { User } from 'src/entities/user.entity';
-import { RecurringReservation } from 'src/entities/recurring-reservation.entity';
+import { AthleteSchedule } from 'src/entities/athlete-schedule.entity';
+import { UserRole } from 'src/common/enums/enums';
 
 
 @Controller('reservations')
@@ -232,6 +234,43 @@ export class ReservationsController {
     @GetUser() user: User,
   ) {
     await this.reservationsService.cancelReservation(reservationId, user.id);
+    return { message: 'Reservation cancelled successfully' };
+  }
+
+  /**
+   * Modificar reserva (cambiar horario del día)
+   * PUT /reservations/:reservationId/modify
+   */
+  @Put(':reservationId/modify')
+  @UseGuards(AuthGuard('jwt'))
+  async modifyReservation(
+    @Param('reservationId') reservationId: string,
+    @Body() body: { newTimeSlotId: string },
+    @GetUser() user: User
+  ) {
+    return await this.reservationsService.modifyReservation(
+      reservationId,
+      user.id,
+      body.newTimeSlotId
+    );
+  }
+
+  /**
+   * Validar si se puede modificar una reserva
+   * GET /reservations/:reservationId/can-modify
+   */
+  @Get(':reservationId/can-modify')
+  @UseGuards(AuthGuard('jwt'))
+  async canModifyReservation(
+    @Param('reservationId') reservationId: string,
+    @GetUser() user: User,
+    @Query('newTimeSlotId') newTimeSlotId?: string
+  ) {
+    return await this.reservationsService.canModifyReservation(
+      reservationId,
+      user.id,
+      newTimeSlotId
+    );
   }
 
   @Get('user/:userId')
@@ -338,9 +377,18 @@ export class ReservationsController {
   @UseGuards(AuthGuard('jwt'))
   async createRecurringReservation(
     @GetUser() user: User,
-    @Body() createRecurringDto: CreateRecurringReservationDto
-  ): Promise<{ recurringReservation: RecurringReservation; generationSummary: RecurringGenerationSummary }> {
-    return this.reservationsService.createRecurringReservation(user.id, createRecurringDto);
+    @Body() createRecurringDto: CreateRecurringReservationDto & { userId?: string }
+  ): Promise<{ recurringReservation: AthleteSchedule; generationSummary: RecurringGenerationSummary }> {
+    // Si userId está presente y el usuario es admin, crear para ese usuario
+    // De lo contrario, usar el usuario autenticado
+    const targetUserId = createRecurringDto.userId && (user.role === UserRole.STP_ADMIN || user.role === UserRole.DIRECTOR || user.role === UserRole.TRAINER) 
+      ? createRecurringDto.userId 
+      : user.id;
+    
+    // Remover userId del DTO antes de pasarlo al servicio
+    const { userId, ...dto } = createRecurringDto;
+    
+    return this.reservationsService.createRecurringReservation(targetUserId, dto);
   }
 
   /**
@@ -349,7 +397,7 @@ export class ReservationsController {
    */
   @Get('recurring')
   @UseGuards(AuthGuard('jwt'))
-  async getUserRecurringReservations(@GetUser() user: User): Promise<RecurringReservation[]> {
+  async getUserRecurringReservations(@GetUser() user: User): Promise<AthleteSchedule[]> {
     return this.reservationsService.getUserRecurringReservations(user.id);
   }
 
@@ -359,8 +407,22 @@ export class ReservationsController {
    */
   @Get('recurring/company/:companyId')
   @UseGuards(AuthGuard('jwt'))
-  async getCompanyRecurringReservations(@Param('companyId') companyId: string): Promise<RecurringReservation[]> {
+  async getCompanyRecurringReservations(@Param('companyId') companyId: string): Promise<AthleteSchedule[]> {
     return this.reservationsService.getCompanyRecurringReservations(companyId);
+  }
+
+  /**
+   * Actualizar una reserva recurrente
+   * PUT /reservations/recurring/:id
+   */
+  @Put('recurring/:id')
+  @UseGuards(AuthGuard('jwt'))
+  async updateRecurringReservation(
+    @Param('id') id: string,
+    @GetUser() user: User,
+    @Body() updateDto: UpdateRecurringReservationDto
+  ) {
+    return await this.reservationsService.updateRecurringReservation(id, user.id, updateDto);
   }
 
   /**
@@ -404,5 +466,69 @@ export class ReservationsController {
   ): Promise<{ message: string }> {
     await this.reservationsService.resumeRecurringReservation(id, user.id);
     return { message: 'Reserva recurrente reanudada exitosamente' };
+  }
+
+  /**
+   * Obtener lista de espera del usuario actual
+   * GET /reservations/waitlist
+   */
+  @Get('waitlist')
+  @UseGuards(AuthGuard('jwt'))
+  async getWaitlist(@GetUser() user: User) {
+    return this.reservationsService.getUserWaitlist(user.id);
+  }
+
+  /**
+   * Cancelar entrada de lista de espera
+   * DELETE /reservations/waitlist/:waitlistId
+   */
+  @Delete('waitlist/:waitlistId')
+  @UseGuards(AuthGuard('jwt'))
+  async cancelWaitlistEntry(
+    @Param('waitlistId') waitlistId: string,
+    @GetUser() user: User
+  ) {
+    return this.reservationsService.cancelWaitlistEntry(waitlistId, user.id);
+  }
+
+  /**
+   * Obtener lista de espera de un TimeSlot (admin)
+   * GET /reservations/waitlist/timeslot/:timeSlotId
+   */
+  @Get('waitlist/timeslot/:timeSlotId')
+  @UseGuards(AuthGuard('jwt'))
+  async getTimeSlotWaitlist(@Param('timeSlotId') timeSlotId: string) {
+    return this.reservationsService.getTimeSlotWaitlist(timeSlotId);
+  }
+
+  /**
+   * Obtener alumnos de un TimeSlot (admin)
+   * GET /reservations/timeslot/:timeSlotId/students
+   */
+  @Get('timeslot/:timeSlotId/students')
+  @UseGuards(AuthGuard('jwt'))
+  async getTimeSlotStudents(@Param('timeSlotId') timeSlotId: string) {
+    return this.reservationsService.getTimeSlotStudents(timeSlotId);
+  }
+
+  /**
+   * Obtener TimeSlots disponibles con cupo
+   * GET /reservations/available-timeslots/:companyId
+   */
+  @Get('available-timeslots/:companyId')
+  @UseGuards(AuthGuard('jwt'))
+  async getAvailableTimeSlotsWithCapacity(
+    @Param('companyId') companyId: string,
+    @Query('startDate') startDate: string,
+    @Query('endDate') endDate: string,
+    @Query('minAvailableSpots') minAvailableSpots?: string
+  ) {
+    const minSpots = minAvailableSpots ? parseInt(minAvailableSpots, 10) : 1;
+    return this.reservationsService.getAvailableTimeSlotsWithCapacity(
+      companyId,
+      startDate,
+      endDate,
+      minSpots
+    );
   }
 }

@@ -11,6 +11,12 @@ export class Exercise {
   @Column()
   name: string;
 
+  @Column({ type: 'text', nullable: true })
+  description: string;
+
+  @Column({ nullable: true })
+  video: string;
+
   @ManyToOne(() => Category, category => category.exercises)
   primaryCategory: Category;
 

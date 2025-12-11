@@ -1,16 +1,24 @@
-import { IsNotEmpty, IsOptional, IsString } from "class-validator";
+import { IsOptional, IsString, IsArray } from "class-validator";
 
 export class UpdateExerciseDto {
-  @IsNotEmpty()
-  @IsString()
   @IsOptional()
+  @IsString()
   name?: string;
+
+  @IsOptional()
+  @IsString()
+  description?: string;
+
+  @IsOptional()
+  @IsString()
+  video?: string;
 
   @IsOptional()
   @IsString()
   image?: string;
 
-  @IsString()
   @IsOptional()
+  @IsArray()
+  @IsString({ each: true })
   categories?: string[];
 }

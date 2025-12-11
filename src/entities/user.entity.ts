@@ -10,7 +10,7 @@ import { TrainingPlan } from './traininPlan.entity';
 import { UserPlan } from './userPlan.entity';
 import { Reservation } from './reservation.entity';
 import { AthleteInvitation } from './athlete-invitation.entity';
-import { RecurringReservation } from './recurring-reservation.entity';
+import { AthleteSchedule } from './athlete-schedule.entity';
 
 @Entity('user')
 export class User {
@@ -113,8 +113,8 @@ export class User {
   @OneToMany(() => AthleteInvitation, invitation => invitation.user)
   athleteInvitations: AthleteInvitation[];
 
-  @OneToMany(() => RecurringReservation, recurringReservation => recurringReservation.user)
-  recurringReservations: RecurringReservation[];
+  @OneToMany(() => AthleteSchedule, athleteSchedule => athleteSchedule.user)
+  athleteSchedules: AthleteSchedule[];
 
   @CreateDateColumn({ type: "timestamp", default: () => "CURRENT_TIMESTAMP(6)" })
   public created_at: Date;

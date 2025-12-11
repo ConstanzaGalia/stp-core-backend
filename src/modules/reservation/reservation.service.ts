@@ -6,13 +6,14 @@ import { TimeSlot } from 'src/entities/timeSlot.entity';
 import { ScheduleConfig } from 'src/entities/schedule-config.entity';
 import { ScheduleException } from 'src/entities/schedule-exception.entity';
 import { TimeSlotGeneration } from 'src/entities/time-slot-generation.entity';
-import { RecurringReservation } from 'src/entities/recurring-reservation.entity';
+import { AthleteSchedule, ScheduleFrequency, ScheduleEndType, ScheduleStatus } from 'src/entities/athlete-schedule.entity';
 import { UserPaymentSubscription, SubscriptionStatus } from 'src/entities/user-payment-subscription.entity';
 import { Repository, Between, In } from 'typeorm';
 import { CreateRecurringReservationDto, RecurringFrequency, RecurringEndType } from './dto/create-recurring-reservation.dto';
-import { RecurringStatus } from 'src/entities/recurring-reservation.entity';
 import { PaymentsService } from '../payments/payments.service';
 import { ClassUsage, ClassUsageType } from '../../entities/class-usage.entity';
+import { Payment, PaymentStatus } from '../../entities/payment.entity';
+import { WaitlistReservation, WaitlistStatus } from '../../entities/waitlist-reservation.entity';
 
 export interface RecurringGenerationSummary {
   createdReservations: number;
@@ -41,12 +42,16 @@ export class ReservationsService {
     private readonly scheduleExceptionRepository: Repository<ScheduleException>,
     @InjectRepository(TimeSlotGeneration)
     private readonly timeSlotGenerationRepository: Repository<TimeSlotGeneration>,
-    @InjectRepository(RecurringReservation)
-    private readonly recurringReservationRepository: Repository<RecurringReservation>,
+    @InjectRepository(AthleteSchedule)
+    private readonly athleteScheduleRepository: Repository<AthleteSchedule>,
     @InjectRepository(UserPaymentSubscription)
     private readonly subscriptionRepository: Repository<UserPaymentSubscription>,
     @InjectRepository(ClassUsage)
     private readonly classUsageRepository: Repository<ClassUsage>,
+    @InjectRepository(Payment)
+    private readonly paymentRepository: Repository<Payment>,
+    @InjectRepository(WaitlistReservation)
+    private readonly waitlistRepository: Repository<WaitlistReservation>,
     private readonly paymentsService: PaymentsService,
   ) {}
 
@@ -58,6 +63,49 @@ export class ReservationsService {
     const hours = parts[0] ?? '00';
     const minutes = parts[1] ?? '00';
     return `${hours.padStart(2, '0')}:${minutes.padStart(2, '0')}`;
+  }
+
+  /**
+   * Obtener clave de semana en formato YYYY-WW
+   */
+  private getWeekKey(date: Date): string {
+    const d = new Date(date);
+    d.setHours(0, 0, 0, 0);
+    // Obtener lunes de la semana
+    const day = d.getDay();
+    const diff = d.getDate() - day + (day === 0 ? -6 : 1); // Ajustar para que lunes sea el primer día
+    const monday = new Date(d.setDate(diff));
+    
+    // Calcular número de semana ISO
+    const startOfYear = new Date(monday.getFullYear(), 0, 1);
+    const days = Math.floor((monday.getTime() - startOfYear.getTime()) / (24 * 60 * 60 * 1000));
+    const weekNumber = Math.ceil((days + startOfYear.getDay() + 1) / 7);
+    
+    return `${monday.getFullYear()}-W${weekNumber.toString().padStart(2, '0')}`;
+  }
+
+  /**
+   * Obtener fecha de inicio de semana (lunes)
+   */
+  private getWeekStartDate(date: Date): Date {
+    const d = new Date(date);
+    d.setHours(0, 0, 0, 0);
+    const day = d.getDay();
+    const diff = d.getDate() - day + (day === 0 ? -6 : 1); // Ajustar para que lunes sea el primer día
+    const monday = new Date(d.setDate(diff));
+    monday.setHours(0, 0, 0, 0);
+    return monday;
+  }
+
+  /**
+   * Obtener fecha de fin de semana (domingo)
+   */
+  private getWeekEndDate(date: Date): Date {
+    const monday = this.getWeekStartDate(date);
+    const sunday = new Date(monday);
+    sunday.setDate(sunday.getDate() + 6);
+    sunday.setHours(23, 59, 59, 999);
+    return sunday;
   }
 
   /**
@@ -148,8 +196,35 @@ export class ReservationsService {
 
       return savedReservation;
     } else {
-      this.logger.warn(`createReservation -> timeSlot full id=${timeSlot.id}`);
-      throw new BadRequestException('Time slot is full');
+      // Si no hay cupo disponible, agregar a lista de espera
+      this.logger.warn(`createReservation -> timeSlot full id=${timeSlot.id}, adding to waitlist`);
+      
+      // Verificar si ya existe una entrada en lista de espera para este usuario y TimeSlot
+      const existingWaitlist = await this.waitlistRepository.findOne({
+        where: {
+          user: { id: userId },
+          timeSlot: { id: timeSlotId },
+          status: WaitlistStatus.PENDING
+        }
+      });
+
+      if (existingWaitlist) {
+        throw new BadRequestException('Ya estás en la lista de espera para este horario');
+      }
+
+      // Crear entrada en lista de espera
+      const waitlistEntry = this.waitlistRepository.create({
+        user: { id: userId } as any,
+        timeSlot: { id: timeSlotId } as any,
+        userId,
+        timeSlotId,
+        status: WaitlistStatus.PENDING
+      });
+
+      await this.waitlistRepository.save(waitlistEntry);
+      this.logger.log(`createReservation -> waitlist entry created for user=${userId}, timeSlot=${timeSlotId}`);
+
+      throw new BadRequestException('No hay cupo disponible en este horario. Has sido agregado a la lista de espera.');
     }
   }
 
@@ -183,8 +258,197 @@ export class ReservationsService {
 
     const timeSlot = reservation.timeSlot;
     timeSlot.reservedCount = Math.max(0, timeSlot.reservedCount - 1);
+    
+    // Si había asistencia marcada, también decrementar attendedCount
+    if (reservation.attendanceStatus === true) {
+      timeSlot.attendedCount = Math.max(0, (timeSlot.attendedCount || 0) - 1);
+    }
+    
     await this.timeSlotRepository.save(timeSlot);
     await this.reservationRepository.remove(reservation);
+
+    // Procesar lista de espera después de cancelar la reserva
+    try {
+      const waitlistResult = await this.processWaitlistForTimeSlot(timeSlot.id);
+      if (waitlistResult.createdReservations > 0) {
+        this.logger.log(`cancelReservation -> processed waitlist: ${waitlistResult.createdReservations} reservations created from waitlist`);
+      }
+      if (waitlistResult.errors.length > 0) {
+        this.logger.warn(`cancelReservation -> waitlist processing errors: ${waitlistResult.errors.join('; ')}`);
+      }
+    } catch (error) {
+      // No fallar la cancelación si hay error procesando lista de espera
+      this.logger.error(`cancelReservation -> error processing waitlist: ${error?.message}`, error?.stack);
+    }
+  }
+
+  /**
+   * Validar si se puede modificar una reserva
+   * Reglas:
+   * - 2 horas de anticipación antes del horario
+   * - Si newTimeSlotId está presente, validar que esté en la misma semana
+   * - Si tiene plan de 3x semana, no puede tener más de 3 reservas en la semana
+   */
+  async canModifyReservation(
+    reservationId: string,
+    userId: string,
+    newTimeSlotId?: string
+  ): Promise<{ canModify: boolean; reason?: string; canRecover?: boolean }> {
+    const reservation = await this.reservationRepository.findOne({
+      where: { id: reservationId },
+      relations: ['timeSlot', 'user', 'timeSlot.company']
+    });
+
+    if (!reservation) {
+      throw new BadRequestException('Reserva no encontrada');
+    }
+
+    if (reservation.user.id !== userId) {
+      throw new ForbiddenException('Solo puedes modificar tus propias reservas');
+    }
+
+    const timeSlot = reservation.timeSlot;
+    const timeSlotDate = new Date(timeSlot.date);
+    const [hours, minutes] = timeSlot.startTime.split(':').map(Number);
+    timeSlotDate.setHours(hours || 0, minutes || 0, 0, 0);
+
+    const now = new Date();
+    const oneHourBefore = new Date(timeSlotDate.getTime() - 1 * 60 * 60 * 1000);
+
+    // Validar anticipación de 1 hora
+    if (now >= oneHourBefore) {
+      return {
+        canModify: false,
+        reason: 'Solo puedes modificar tu reserva con al menos 1 hora de anticipación',
+      };
+    }
+
+    // Si se está cambiando a otro horario, validar recuperación semanal
+    if (newTimeSlotId) {
+      const activeSubscription = await this.getActiveSubscriptionForUser(userId);
+      if (!activeSubscription) {
+        return {
+          canModify: false,
+          reason: 'No tienes una suscripción activa',
+        };
+      }
+
+      const paymentPlan = activeSubscription.paymentPlan;
+      const classesPerWeek = paymentPlan?.classesPerWeek || 0;
+
+      // Obtener la semana actual (lunes a domingo)
+      const weekStart = this.getWeekStartDate(timeSlotDate);
+      const weekEnd = this.getWeekEndDate(timeSlotDate);
+
+      // Contar reservas de esta semana excluyendo la actual
+      const weekReservations = await this.reservationRepository.find({
+        where: {
+          user: { id: userId },
+          timeSlot: {
+            date: Between(weekStart, weekEnd),
+          },
+        },
+        relations: ['timeSlot'],
+      });
+
+      const reservationsThisWeek = weekReservations.filter((r) => r.id !== reservationId).length;
+
+      // Validar que el nuevo time slot esté en la misma semana
+      const newTimeSlot = await this.timeSlotRepository.findOne({
+        where: { id: newTimeSlotId },
+      });
+
+      if (!newTimeSlot) {
+        return {
+          canModify: false,
+          reason: 'El nuevo horario no existe',
+        };
+      }
+
+      const newTimeSlotDate = new Date(newTimeSlot.date);
+      if (newTimeSlotDate < weekStart || newTimeSlotDate > weekEnd) {
+        return {
+          canModify: true,
+          canRecover: false,
+          reason: 'Solo puedes recuperar clases dentro de la misma semana',
+        };
+      }
+
+      // Si tiene plan de 3 días y ya tiene 3 reservas esta semana, no puede recuperar
+      if (classesPerWeek === 3 && reservationsThisWeek >= 3) {
+        return {
+          canModify: true,
+          canRecover: false,
+          reason: 'Ya has usado todas tus clases de esta semana. Solo puedes recuperar clases dentro de la misma semana.',
+        };
+      }
+    }
+
+    return {
+      canModify: true,
+      canRecover: true,
+    };
+  }
+
+  /**
+   * Modificar reserva (cambiar horario del día)
+   */
+  async modifyReservation(
+    reservationId: string,
+    userId: string,
+    newTimeSlotId: string
+  ): Promise<Reservation> {
+    const validation = await this.canModifyReservation(reservationId, userId, newTimeSlotId);
+
+    if (!validation.canModify) {
+      throw new BadRequestException(validation.reason || 'No se puede modificar la reserva');
+    }
+
+    if (validation.canRecover === false) {
+      throw new BadRequestException(validation.reason || 'No se puede recuperar la clase');
+    }
+
+    const reservation = await this.reservationRepository.findOne({
+      where: { id: reservationId },
+      relations: ['timeSlot', 'user'],
+    });
+
+    if (!reservation) {
+      throw new BadRequestException('Reserva no encontrada');
+    }
+
+    const newTimeSlot = await this.timeSlotRepository.findOne({
+      where: { id: newTimeSlotId },
+      relations: ['reservations'],
+    });
+
+    if (!newTimeSlot) {
+      throw new BadRequestException('Nuevo horario no encontrado');
+    }
+
+    // Validar disponibilidad del nuevo horario
+    if (!newTimeSlot.isAvailable()) {
+      throw new BadRequestException('El nuevo horario no tiene disponibilidad');
+    }
+
+    const oldTimeSlot = reservation.timeSlot;
+
+    // Actualizar reserva
+    reservation.timeSlot = newTimeSlot;
+    reservation.timeSlotId = newTimeSlot.id;
+
+    // Actualizar contadores
+    oldTimeSlot.reservedCount = Math.max(0, (oldTimeSlot.reservedCount || 0) - 1);
+    newTimeSlot.reservedCount = (newTimeSlot.reservedCount || 0) + 1;
+
+    await this.timeSlotRepository.save([oldTimeSlot, newTimeSlot]);
+    const updatedReservation = await this.reservationRepository.save(reservation);
+
+    this.logger.log(
+      `modifyReservation -> reservation ${reservationId} modified from ${oldTimeSlot.id} to ${newTimeSlot.id}`
+    );
+
+    return updatedReservation;
   }
 
   async createTimeSlots(
@@ -433,18 +697,27 @@ export class ReservationsService {
   async getAvailableTimeSlots(companyId: string, startDate?: Date, endDate?: Date): Promise<any[]> {
     const timeSlots = await this.getTimeSlots(companyId, startDate, endDate);
     
-    return timeSlots.map(slot => ({
-      id: slot.id,
-      date: slot.date,
-      startTime: slot.startTime,
-      endTime: slot.endTime,
-      capacity: slot.capacity,
-      reservedCount: slot.reservations?.length || 0,
-      availableSpots: slot.capacity - (slot.reservations?.length || 0),
-      isAvailable: (slot.reservations?.length || 0) < slot.capacity,
-      dayOfWeek: new Date(slot.date).getDay(),
-      dayName: this.getDayName(new Date(slot.date).getDay()),
+    // Calcular estadísticas de asistencia para cada TimeSlot
+    const slotsWithStats = await Promise.all(timeSlots.map(async (slot) => {
+      const stats = await this.getAttendanceStats(slot.id);
+      const reservedCount = slot.reservedCount ?? (slot.reservations?.length || 0);
+      return {
+        id: slot.id,
+        date: slot.date,
+        startTime: slot.startTime,
+        endTime: slot.endTime,
+        capacity: slot.capacity,
+        reservedCount,
+        attendedCount: slot.attendedCount || 0,
+        availableSpots: slot.capacity - reservedCount,
+        isAvailable: reservedCount < slot.capacity,
+        dayOfWeek: new Date(slot.date).getDay(),
+        dayName: this.getDayName(new Date(slot.date).getDay()),
+        attendanceStats: stats
+      };
     }));
+    
+    return slotsWithStats;
   }
 
   getDayName(dayOfWeek: number): string {
@@ -509,8 +782,23 @@ export class ReservationsService {
     const totalStudents = reservationsWithUsers.filter(r => r.user && r.user.deletedAt === null).length;
     this.logger.log(`[getDailyReservationsForAdmin] Company: ${companyId}, Date: ${dateString}, TimeSlots: ${timeSlots.length}, Reservations: ${totalReservations}, Students: ${totalStudents}`);
 
+    // Obtener lista de espera para todos los TimeSlots
+    const waitlistCounts = new Map<string, number>();
+    if (timeSlotIds.length > 0) {
+      const waitlistEntries = await this.waitlistRepository.find({
+        where: {
+          timeSlot: { id: In(timeSlotIds) },
+          status: WaitlistStatus.PENDING
+        }
+      });
+      waitlistEntries.forEach(entry => {
+        const count = waitlistCounts.get(entry.timeSlotId) || 0;
+        waitlistCounts.set(entry.timeSlotId, count + 1);
+      });
+    }
+
     // Formatear la respuesta
-    return timeSlots.map(timeSlot => {
+    return Promise.all(timeSlots.map(async (timeSlot) => {
       const reservations = reservationsByTimeSlot.get(timeSlot.id) || [];
       
       // Filtrar reservas que tienen usuario válido (no eliminado y no null)
@@ -522,16 +810,23 @@ export class ReservationsService {
         return reservation.user.deletedAt === null || reservation.user.deletedAt === undefined;
       });
       
+      // Calcular estadísticas de asistencia
+      const stats = await this.getAttendanceStats(timeSlot.id);
+      const reservedCount = timeSlot.reservedCount || validReservations.length;
+      
       return {
         id: timeSlot.id,
         date: timeSlot.date,
         startTime: timeSlot.startTime,
         endTime: timeSlot.endTime,
         capacity: timeSlot.capacity,
-        reservedCount: timeSlot.reservedCount || validReservations.length,
-        availableSpots: timeSlot.capacity - (timeSlot.reservedCount || validReservations.length),
+        reservedCount,
+        attendedCount: timeSlot.attendedCount || 0,
+        availableSpots: timeSlot.capacity - reservedCount,
+        waitlistCount: waitlistCounts.get(timeSlot.id) || 0,
         durationMinutes: timeSlot.durationMinutes || 60,
         isIntermediateSlot: timeSlot.isIntermediateSlot || false,
+        attendanceStats: stats,
         students: validReservations.map(reservation => {
           const user = reservation.user;
           if (!user) {
@@ -555,7 +850,7 @@ export class ReservationsService {
         trainer: null,
         trainerName: null,
       };
-    });
+    }));
   }
 
   /**
@@ -574,12 +869,130 @@ export class ReservationsService {
       throw new BadRequestException('Reserva no encontrada');
     }
 
+    const timeSlot = await this.timeSlotRepository.findOne({
+      where: { id: reservation.timeSlotId },
+    });
+
+    if (!timeSlot) {
+      throw new BadRequestException('Time slot no encontrado');
+    }
+
+    // Guardar el estado anterior para calcular el cambio
+    const previousStatus = reservation.attendanceStatus;
     reservation.attendanceStatus = attendanceStatus;
     const updatedReservation = await this.reservationRepository.save(reservation);
+
+    // Actualizar attendedCount del TimeSlot
+    let attendedCountChange = 0;
+    if (previousStatus !== true && attendanceStatus === true) {
+      // Cambió a presente: incrementar
+      attendedCountChange = 1;
+    } else if (previousStatus === true && attendanceStatus !== true) {
+      // Cambió de presente a ausente o sin marcar: decrementar
+      attendedCountChange = -1;
+    }
+
+    if (attendedCountChange !== 0) {
+      const newAttendedCount = Math.max(0, (timeSlot.attendedCount || 0) + attendedCountChange);
+      // Validar que attendedCount nunca sea mayor que reservedCount
+      const maxAttendedCount = Math.min(newAttendedCount, timeSlot.reservedCount || 0);
+      timeSlot.attendedCount = maxAttendedCount;
+      await this.timeSlotRepository.save(timeSlot);
+      this.logger.log(`[updateAttendance] TimeSlot ${timeSlot.id} attendedCount updated: ${timeSlot.attendedCount - attendedCountChange} -> ${maxAttendedCount}`);
+    }
 
     this.logger.log(`[updateAttendance] Reservation ${reservationId} updated: attendanceStatus=${attendanceStatus}`);
 
     return updatedReservation;
+  }
+
+  /**
+   * Calcular estadísticas de asistencia para un TimeSlot
+   */
+  async getAttendanceStats(timeSlotId: string): Promise<{
+    totalReservations: number;
+    attendedCount: number;
+    absentCount: number;
+    notMarkedCount: number;
+  }> {
+    const reservations = await this.reservationRepository.find({
+      where: { timeSlotId },
+    });
+
+    const stats = {
+      totalReservations: reservations.length,
+      attendedCount: reservations.filter(r => r.attendanceStatus === true).length,
+      absentCount: reservations.filter(r => r.attendanceStatus === false).length,
+      notMarkedCount: reservations.filter(r => r.attendanceStatus === null).length,
+    };
+
+    return stats;
+  }
+
+  /**
+   * Procesar lista de espera para un TimeSlot cuando se libera un cupo
+   */
+  async processWaitlistForTimeSlot(timeSlotId: string): Promise<{ createdReservations: number; errors: string[] }> {
+    const timeSlot = await this.timeSlotRepository.findOne({
+      where: { id: timeSlotId },
+    });
+
+    if (!timeSlot) {
+      return { createdReservations: 0, errors: ['TimeSlot no encontrado'] };
+    }
+
+    // Si el TimeSlot está lleno, no procesar lista de espera
+    if (timeSlot.reservedCount >= timeSlot.capacity) {
+      return { createdReservations: 0, errors: [] };
+    }
+
+    const createdReservations: number[] = [];
+    const errors: string[] = [];
+
+    // Buscar primera entrada pendiente en lista de espera para este TimeSlot (FIFO)
+    const waitlistEntries = await this.waitlistRepository.find({
+      where: {
+        timeSlot: { id: timeSlotId },
+        status: WaitlistStatus.PENDING
+      },
+      relations: ['user', 'timeSlot'],
+      order: { createdAt: 'ASC' } // Primero en entrar, primero en salir
+    });
+
+    // Procesar hasta llenar los cupos disponibles
+    const availableSpots = timeSlot.capacity - timeSlot.reservedCount;
+    const entriesToProcess = waitlistEntries.slice(0, availableSpots);
+
+    for (const waitlistEntry of entriesToProcess) {
+      try {
+        // Intentar crear la reserva
+        const reservation = await this.createReservation(waitlistEntry.userId, timeSlotId);
+        
+        // Si tiene éxito, marcar waitlist como notified y eliminar
+        waitlistEntry.status = WaitlistStatus.NOTIFIED;
+        waitlistEntry.notifiedAt = new Date();
+        await this.waitlistRepository.save(waitlistEntry);
+        
+        // Eliminar la entrada de lista de espera después de crear la reserva
+        await this.waitlistRepository.remove(waitlistEntry);
+        
+        createdReservations.push(1);
+        this.logger.log(`processWaitlistForTimeSlot -> reservation created from waitlist for user=${waitlistEntry.userId}, timeSlot=${timeSlotId}`);
+      } catch (error) {
+        const errorMsg = `Error procesando lista de espera para usuario ${waitlistEntry.userId}: ${error?.message}`;
+        this.logger.error(`processWaitlistForTimeSlot -> ${errorMsg}`, error?.stack);
+        errors.push(errorMsg);
+        
+        // Si falla, cancelar la entrada de lista de espera
+        waitlistEntry.status = WaitlistStatus.CANCELLED;
+        await this.waitlistRepository.save(waitlistEntry);
+      }
+    }
+
+    return {
+      createdReservations: createdReservations.length,
+      errors
+    };
   }
 
   private formatDateToUTC(date: any): string {
@@ -1241,7 +1654,7 @@ export class ReservationsService {
   async createRecurringReservation(
     userId: string,
     createRecurringDto: CreateRecurringReservationDto
-  ): Promise<{ recurringReservation: RecurringReservation; generationSummary: RecurringGenerationSummary }> {
+  ): Promise<{ recurringReservation: AthleteSchedule; generationSummary: RecurringGenerationSummary }> {
     this.logger.debug(`createRecurringReservation -> userId=${userId}, days=${createRecurringDto.daysOfWeek?.join(',')}, startTime=${createRecurringDto.startTime}`);
     const { daysOfWeek, startTime, endTime, companyId, frequency, startDate, endType, endDate, maxOccurrences, notes } = createRecurringDto;
 
@@ -1250,13 +1663,20 @@ export class ReservationsService {
 
     // Obtener companyId del usuario si no se proporciona
     let finalCompanyId = companyId;
+    let activeSubscription: UserPaymentSubscription | null = null;
+    const isAdminCreating = !!companyId; // Si companyId está presente, es un admin creando para otro usuario
+    
     if (!finalCompanyId) {
       // Obtener la suscripción activa del usuario para obtener el companyId
-      const activeSubscription = await this.getActiveSubscriptionForUser(userId);
+      activeSubscription = await this.getActiveSubscriptionForUser(userId);
       if (!activeSubscription) {
         throw new BadRequestException('No tienes una suscripción activa. Necesitas especificar el companyId');
       }
       finalCompanyId = activeSubscription.company.id;
+    } else {
+      // Si companyId está presente, intentar obtener la suscripción pero no es obligatoria
+      // (puede que el admin esté creando reservas para un usuario que aún no tiene suscripción activa)
+      activeSubscription = await this.getActiveSubscriptionForUser(userId);
     }
 
     // Verificar que la empresa existe
@@ -1268,9 +1688,9 @@ export class ReservationsService {
       throw new BadRequestException('La empresa no existe');
     }
 
-    // Valores por defecto
-    const finalFrequency = frequency || RecurringFrequency.WEEKLY;
-    const finalEndType = endType || RecurringEndType.NEVER;
+    // Valores por defecto - mapear desde DTO a entidad
+    const finalFrequency = (frequency ? frequency as unknown as ScheduleFrequency : ScheduleFrequency.WEEKLY);
+    const finalEndType = (endType ? endType as unknown as ScheduleEndType : ScheduleEndType.NEVER);
     const today = new Date();
     today.setHours(0, 0, 0, 0);
     const finalStartDate = startDate ? new Date(startDate) : today;
@@ -1280,7 +1700,7 @@ export class ReservationsService {
       throw new BadRequestException('La fecha de inicio no puede ser anterior a hoy');
     }
 
-    if (finalEndType === RecurringEndType.DATE && endDate) {
+    if (finalEndType === ScheduleEndType.DATE && endDate) {
       const endDateObj = new Date(endDate);
       if (endDateObj <= finalStartDate) {
         throw new BadRequestException('La fecha de fin debe ser posterior a la fecha de inicio');
@@ -1291,7 +1711,7 @@ export class ReservationsService {
     const capacity = 1;
 
     // Crear la reserva recurrente
-    const recurringReservation = this.recurringReservationRepository.create({
+    const athleteSchedule = this.athleteScheduleRepository.create({
       frequency: finalFrequency,
       daysOfWeek: daysOfWeek.join(','),
       startTime: normalizedStartTime,
@@ -1299,36 +1719,42 @@ export class ReservationsService {
       capacity,
       startDate: finalStartDate,
       endType: finalEndType,
-      endDate: finalEndType === RecurringEndType.DATE && endDate ? new Date(endDate) : null,
-      maxOccurrences: finalEndType === RecurringEndType.COUNT ? maxOccurrences : null,
+      endDate: finalEndType === ScheduleEndType.DATE && endDate ? new Date(endDate) : null,
+      maxOccurrences: finalEndType === ScheduleEndType.COUNT ? maxOccurrences : null,
       currentOccurrences: 0,
-      status: RecurringStatus.ACTIVE,
+      status: ScheduleStatus.ACTIVE,
       notes,
       user: { id: userId } as any,
       company: { id: finalCompanyId } as any,
     });
 
-    const savedRecurringReservation = await this.recurringReservationRepository.save(recurringReservation);
+    const savedAthleteSchedule = await this.athleteScheduleRepository.save(athleteSchedule);
 
-    const generationSummary = await this.generateRecurringReservations(savedRecurringReservation.id);
+    const generationSummary = await this.generateRecurringReservations(savedAthleteSchedule.id);
 
     return {
-      recurringReservation: savedRecurringReservation,
+      recurringReservation: savedAthleteSchedule,
       generationSummary,
     };
   }
 
   /**
    * Generar reservas para una reserva recurrente
+   * @param customStartDate Fecha de inicio personalizada (opcional, para pagos)
+   * @param customEndDate Fecha de fin personalizada (opcional, para pagos)
    */
-  async generateRecurringReservations(recurringReservationId: string): Promise<RecurringGenerationSummary> {
+  async generateRecurringReservations(
+    recurringReservationId: string,
+    customStartDate?: Date,
+    customEndDate?: Date
+  ): Promise<RecurringGenerationSummary> {
     this.logger.debug(`generateRecurringReservations -> recurringReservationId=${recurringReservationId}`);
-    const recurringReservation = await this.recurringReservationRepository.findOne({
+    const athleteSchedule = await this.athleteScheduleRepository.findOne({
       where: { id: recurringReservationId },
       relations: ['user', 'company']
     });
 
-    if (!recurringReservation || recurringReservation.status !== RecurringStatus.ACTIVE) {
+    if (!athleteSchedule || athleteSchedule.status !== ScheduleStatus.ACTIVE) {
       this.logger.warn(`generateRecurringReservations -> reservation inactive or not found id=${recurringReservationId}`);
       return {
         createdReservations: 0,
@@ -1342,41 +1768,55 @@ export class ReservationsService {
 
     // Manejar daysOfWeek como string o array (TypeORM simple-array puede devolver ambos)
     let daysOfWeek: number[];
-    if (typeof recurringReservation.daysOfWeek === 'string') {
-      daysOfWeek = recurringReservation.daysOfWeek.split(',').map(Number);
-    } else if (Array.isArray(recurringReservation.daysOfWeek)) {
-      daysOfWeek = (recurringReservation.daysOfWeek as any[]).map(Number);
+    if (typeof athleteSchedule.daysOfWeek === 'string') {
+      daysOfWeek = athleteSchedule.daysOfWeek.split(',').map(Number);
+    } else if (Array.isArray(athleteSchedule.daysOfWeek)) {
+      daysOfWeek = (athleteSchedule.daysOfWeek as any[]).map(Number);
     } else {
       daysOfWeek = [];
     }
-    const startDate = new Date(recurringReservation.startDate);
+    const startDate = new Date(athleteSchedule.startDate);
     const today = new Date();
     today.setHours(0, 0, 0, 0);
 
     // Ajustar el rango de generación según la suscripción y la reserva recurrente
-    const activeSubscription = await this.getActiveSubscriptionForUser(recurringReservation.user.id);
+    const activeSubscription = await this.getActiveSubscriptionForUser(athleteSchedule.user.id);
     if (!activeSubscription) {
-      this.logger.warn(`generateRecurringReservations -> no active subscription for user=${recurringReservation.user.id}`);
+      this.logger.warn(`generateRecurringReservations -> no active subscription for user=${athleteSchedule.user.id}`);
       throw new BadRequestException('No tienes una suscripción activa para crear reservas recurrentes');
     }
 
     // Ajustar el rango de generación según la suscripción y la reserva recurrente
-    const periodStart = new Date(activeSubscription.periodStartDate);
-    periodStart.setHours(0, 0, 0, 0);
-    const periodEnd = new Date(activeSubscription.periodEndDate);
-    periodEnd.setHours(23, 59, 59, 999);
+    // Si se pasan fechas personalizadas (desde pago), usarlas; sino usar las de la suscripción
+    let periodStart: Date;
+    let periodEnd: Date;
+    
+    if (customStartDate && customEndDate) {
+      // Usar fechas del período de pago (fecha de pago a fecha de pago + 31 días)
+      periodStart = new Date(customStartDate);
+      periodStart.setHours(0, 0, 0, 0);
+      periodEnd = new Date(customEndDate);
+      periodEnd.setHours(23, 59, 59, 999);
+      this.logger.log(`generateRecurringReservations -> using custom dates: start=${periodStart.toISOString()}, end=${periodEnd.toISOString()}`);
+    } else {
+      // Usar fechas del período de la suscripción
+      periodStart = new Date(activeSubscription.periodStartDate);
+      periodStart.setHours(0, 0, 0, 0);
+      periodEnd = new Date(activeSubscription.periodEndDate);
+      periodEnd.setHours(23, 59, 59, 999);
+    }
 
     let endGenerationDate = new Date(periodEnd);
-    if (recurringReservation.endDate) {
-      const recurrenceEnd = new Date(recurringReservation.endDate);
+    if (athleteSchedule.endDate) {
+      const recurrenceEnd = new Date(athleteSchedule.endDate);
       recurrenceEnd.setHours(23, 59, 59, 999);
       if (recurrenceEnd.getTime() < endGenerationDate.getTime()) {
         endGenerationDate = recurrenceEnd;
       }
     }
 
-    let remainingOccurrences = recurringReservation.maxOccurrences
-      ? Math.max(recurringReservation.maxOccurrences - (recurringReservation.currentOccurrences || 0), 0)
+    let remainingOccurrences = athleteSchedule.maxOccurrences
+      ? Math.max(athleteSchedule.maxOccurrences - (athleteSchedule.currentOccurrences || 0), 0)
       : Number.MAX_SAFE_INTEGER;
 
     if (remainingOccurrences <= 0) {
@@ -1390,7 +1830,25 @@ export class ReservationsService {
       };
     }
 
-    const effectiveStartTimestamp = Math.max(today.getTime(), startDate.getTime(), periodStart.getTime());
+    // Si se están usando fechas personalizadas (desde pago), usar periodStart directamente
+    // Si no, usar la lógica normal que respeta lastGeneratedDate
+    let effectiveStartDate: Date;
+    if (customStartDate && customEndDate) {
+      // Para pagos, siempre empezar desde la fecha de pago (periodStart)
+      effectiveStartDate = periodStart;
+      this.logger.log(`generateRecurringReservations -> using payment start date: ${effectiveStartDate.toISOString()}`);
+    } else {
+      // Para generación normal, respetar lastGeneratedDate si existe
+      effectiveStartDate = startDate;
+      if (athleteSchedule.lastGeneratedDate) {
+        const lastGenerated = new Date(athleteSchedule.lastGeneratedDate);
+        lastGenerated.setDate(lastGenerated.getDate() + 1);
+        lastGenerated.setHours(0, 0, 0, 0);
+        effectiveStartDate = lastGenerated;
+      }
+    }
+
+    const effectiveStartTimestamp = Math.max(today.getTime(), effectiveStartDate.getTime(), periodStart.getTime());
     let currentDate = new Date(effectiveStartTimestamp);
     currentDate.setHours(0, 0, 0, 0);
 
@@ -1436,14 +1894,19 @@ export class ReservationsService {
 
     const nowGlobal = new Date();
     nowGlobal.setSeconds(0, 0);
-    const recurringStartTime = this.normalizeTimeString(recurringReservation.startTime);
-    const recurringEndTime = this.normalizeTimeString(recurringReservation.endTime);
+    const recurringStartTime = this.normalizeTimeString(athleteSchedule.startTime);
+    const recurringEndTime = this.normalizeTimeString(athleteSchedule.endTime);
+
+    // Contador semanal para respetar classesPerWeek
+    const weeklyReservationCount = new Map<string, number>();
+    const classesPerWeek = activeSubscription.paymentPlan?.classesPerWeek ?? 0;
 
     try {
-      this.logger.debug(`generateRecurringReservations -> start loop recurringId=${recurringReservationId}, remainingOccurrences=${remainingOccurrences}, remainingClasses=${remainingClassesPeriod}`);
+      this.logger.debug(`generateRecurringReservations -> start loop recurringId=${recurringReservationId}, remainingOccurrences=${remainingOccurrences}, remainingClasses=${remainingClassesPeriod}, classesPerWeek=${classesPerWeek}`);
+      // Aumentar límite de generación para permitir más reservas en un solo proceso
       while (
         currentDate.getTime() <= endGenerationDate.getTime() &&
-        generatedCount < 50 &&
+        generatedCount < 200 && // Aumentado de 50 a 200 para permitir generar más reservas
         remainingClassesPeriod > 0 &&
         remainingOccurrences > 0
       ) {
@@ -1487,13 +1950,13 @@ export class ReservationsService {
             date: slotDate,
               startTime: recurringStartTime,
               endTime: recurringEndTime,
-            company: { id: recurringReservation.company.id }
+            company: { id: athleteSchedule.company.id }
           },
           relations: ['reservations']
         });
 
         if (!timeSlot?.id) {
-          this.logger.verbose(`generateRecurringReservations -> no timeslot configured date=${slotDate.toISOString()} start=${recurringReservation.startTime}`);
+          this.logger.verbose(`generateRecurringReservations -> no timeslot configured date=${slotDate.toISOString()} start=${athleteSchedule.startTime}`);
           missingTimeSlotDates.push(slotDate.toISOString().split('T')[0]);
           currentDate.setDate(currentDate.getDate() + 1);
           continue;
@@ -1501,7 +1964,7 @@ export class ReservationsService {
 
           const existingReservation = await this.reservationRepository.findOne({
             where: {
-              user: { id: recurringReservation.user.id },
+              user: { id: athleteSchedule.user.id },
             timeSlot: { id: timeSlot.id }
           }
         });
@@ -1521,8 +1984,21 @@ export class ReservationsService {
           continue;
         }
 
+        // Validar límite semanal (classesPerWeek)
+        if (classesPerWeek > 0) {
+          const weekKey = this.getWeekKey(slotDate);
+          const currentWeekCount = weeklyReservationCount.get(weekKey) || 0;
+          
+          if (currentWeekCount >= classesPerWeek) {
+            this.logger.verbose(`generateRecurringReservations -> weekly limit reached week=${weekKey}, count=${currentWeekCount}, limit=${classesPerWeek}`);
+            skippedPastDates.push(slotDate.toISOString().split('T')[0]);
+            currentDate.setDate(currentDate.getDate() + 1);
+            continue;
+          }
+        }
+
               const reservation = this.reservationRepository.create({
-                user: { id: recurringReservation.user.id } as any,
+                user: { id: athleteSchedule.user.id } as any,
           timeSlot: { id: timeSlot.id } as any,
           timeSlotId: timeSlot.id,
         });
@@ -1545,7 +2021,15 @@ export class ReservationsService {
 
           remainingClassesPeriod--;
           remainingOccurrences--;
-              generatedCount++;
+          generatedCount++;
+          
+          // Actualizar contador semanal
+          if (classesPerWeek > 0) {
+            const weekKey = this.getWeekKey(slotDate);
+            const currentWeekCount = weeklyReservationCount.get(weekKey) || 0;
+            weeklyReservationCount.set(weekKey, currentWeekCount + 1);
+          }
+          
           lastGeneratedDate = new Date(slotDate);
         } catch (error) {
           await this.reservationRepository.delete({ id: savedReservation.id });
@@ -1555,9 +2039,9 @@ export class ReservationsService {
       currentDate.setDate(currentDate.getDate() + 1);
     }
 
-    await this.recurringReservationRepository.update(recurringReservationId, {
-      currentOccurrences: recurringReservation.currentOccurrences + generatedCount,
-        lastGeneratedDate: lastGeneratedDate ?? recurringReservation.lastGeneratedDate
+    await this.athleteScheduleRepository.update(recurringReservationId, {
+      currentOccurrences: athleteSchedule.currentOccurrences + generatedCount,
+        lastGeneratedDate: lastGeneratedDate ?? athleteSchedule.lastGeneratedDate
     });
     this.logger.log(`generateRecurringReservations -> completed recurringId=${recurringReservationId}, generated=${generatedCount}`);
     return {
@@ -1575,10 +2059,87 @@ export class ReservationsService {
   }
 
   /**
+   * Generar reservas automáticamente cuando se acredita el pago
+   * Basado en las reservas recurrentes activas del usuario
+   * @param paymentStartDate Fecha de inicio (fecha de pago)
+   * @param paymentEndDate Fecha de fin (fecha de pago + 31 días)
+   */
+  async generateReservationsFromRecurringOnPayment(
+    userId: string,
+    companyId: string,
+    subscriptionId: string,
+    paymentStartDate: Date,
+    paymentEndDate: Date
+  ): Promise<{ createdReservations: number; skippedDates: string[]; errors: string[] }> {
+    this.logger.log(`generateReservationsFromRecurringOnPayment -> userId=${userId}, companyId=${companyId}, subscriptionId=${subscriptionId}`);
+    
+    // 1. Obtener suscripción con relaciones
+    const subscription = await this.subscriptionRepository.findOne({
+      where: { id: subscriptionId },
+      relations: ['paymentPlan', 'user', 'company']
+    });
+
+    if (!subscription) {
+      throw new BadRequestException('Suscripción no encontrada');
+    }
+
+    // 2. Buscar todas las reservas recurrentes activas del usuario para esa empresa
+    const activeAthleteSchedules = await this.athleteScheduleRepository.find({
+      where: {
+        user: { id: userId },
+        company: { id: companyId },
+        status: ScheduleStatus.ACTIVE
+      },
+      relations: ['user', 'company']
+    });
+
+    if (activeAthleteSchedules.length === 0) {
+      this.logger.log(`generateReservationsFromRecurringOnPayment -> no active athlete schedules for user=${userId}`);
+      return { createdReservations: 0, skippedDates: [], errors: [] };
+    }
+
+    // 3. Generar reservas para cada horario del atleta
+    let totalCreated = 0;
+    const allSkippedDates: string[] = [];
+    const allErrors: string[] = [];
+
+    for (const athleteSchedule of activeAthleteSchedules) {
+      try {
+        // Pasar las fechas del período de pago (fecha de pago a fecha de pago + 31 días)
+        const summary = await this.generateRecurringReservations(
+          athleteSchedule.id,
+          paymentStartDate,
+          paymentEndDate
+        );
+        totalCreated += summary.createdReservations;
+        allSkippedDates.push(...summary.skippedPastDates);
+        allSkippedDates.push(...summary.noCapacityDates);
+        allSkippedDates.push(...summary.cannotBookDates);
+        allSkippedDates.push(...summary.duplicateDates);
+        allSkippedDates.push(...summary.missingTimeSlotDates);
+      } catch (error) {
+        const errorMsg = `Error generando reservas para horario del atleta ${athleteSchedule.id}: ${error?.message}`;
+        this.logger.error(`generateReservationsFromRecurringOnPayment -> ${errorMsg}`, error?.stack);
+        allErrors.push(errorMsg);
+      }
+    }
+
+    this.logger.log(
+      `generateReservationsFromRecurringOnPayment -> completed userId=${userId}, created=${totalCreated}, skipped=${allSkippedDates.length}, errors=${allErrors.length}`
+    );
+
+    return {
+      createdReservations: totalCreated,
+      skippedDates: [...new Set(allSkippedDates)], // Eliminar duplicados
+      errors: allErrors
+    };
+  }
+
+  /**
    * Obtener reservas recurrentes de un usuario
    */
-  async getUserRecurringReservations(userId: string): Promise<RecurringReservation[]> {
-    return await this.recurringReservationRepository.find({
+  async getUserRecurringReservations(userId: string): Promise<AthleteSchedule[]> {
+    return await this.athleteScheduleRepository.find({
       where: { 
         user: { id: userId }
       },
@@ -1590,8 +2151,8 @@ export class ReservationsService {
   /**
    * Obtener todas las reservas recurrentes de una empresa
    */
-  async getCompanyRecurringReservations(companyId: string): Promise<RecurringReservation[]> {
-    return await this.recurringReservationRepository.find({
+  async getCompanyRecurringReservations(companyId: string): Promise<AthleteSchedule[]> {
+    return await this.athleteScheduleRepository.find({
       where: { 
         company: { id: companyId }
       },
@@ -1606,7 +2167,7 @@ export class ReservationsService {
   async cancelRecurringReservation(recurringReservationId: string, userId: string, deleteReservations: boolean = true): Promise<{ message: string; deletedReservations: number; deletedTimeSlots: number; restoredClasses: number }> {
     this.logger.debug(`cancelRecurringReservation -> recurringId=${recurringReservationId}, userId=${userId}, deleteReservations=${deleteReservations}`);
     
-    const recurringReservation = await this.recurringReservationRepository.findOne({
+    const athleteSchedule = await this.athleteScheduleRepository.findOne({
       where: { 
         id: recurringReservationId,
         user: { id: userId }
@@ -1614,16 +2175,19 @@ export class ReservationsService {
       relations: ['company', 'user']
     });
 
-    if (!recurringReservation) {
-      this.logger.warn(`cancelRecurringReservation -> Recurring reservation not found: ${recurringReservationId}`);
-      throw new BadRequestException('Reserva recurrente no encontrada');
+    if (!athleteSchedule) {
+      this.logger.warn(`cancelRecurringReservation -> Athlete schedule not found: ${recurringReservationId}`);
+      throw new BadRequestException('Horario del atleta no encontrado');
     }
 
-    // Obtener la suscripción activa del usuario para restaurar clases
+    // Obtener la suscripción activa del usuario para restaurar clases (opcional)
     const activeSubscription = await this.getActiveSubscriptionForUser(userId);
-    if (!activeSubscription) {
-      this.logger.error(`cancelRecurringReservation -> No active subscription for user ${userId}`);
-      throw new BadRequestException('No tienes una suscripción activa');
+    
+    // Si no hay suscripción activa pero se quiere eliminar reservas, solo permitir eliminar el horario fijo
+    // sin restaurar clases
+    if (!activeSubscription && deleteReservations) {
+      this.logger.warn(`cancelRecurringReservation -> No active subscription for user ${userId}, will only delete schedule without restoring classes`);
+      // Continuar pero sin restaurar clases
     }
 
     let deletedReservationsCount = 0;
@@ -1631,25 +2195,25 @@ export class ReservationsService {
     let restoredClassesCount = 0;
 
     // Normalizar horarios de la reserva recurrente
-    const recurringStartTime = this.normalizeTimeString(recurringReservation.startTime);
-    const recurringEndTime = this.normalizeTimeString(recurringReservation.endTime);
+    const recurringStartTime = this.normalizeTimeString(athleteSchedule.startTime);
+    const recurringEndTime = this.normalizeTimeString(athleteSchedule.endTime);
     this.logger.debug(`cancelRecurringReservation -> recurring times: ${recurringStartTime}-${recurringEndTime}`);
 
     // Si se debe eliminar las reservas asociadas
     if (deleteReservations) {
       // Obtener los días de la semana de la reserva recurrente
       let daysOfWeek: number[];
-      if (typeof recurringReservation.daysOfWeek === 'string') {
-        daysOfWeek = recurringReservation.daysOfWeek.split(',').map(Number);
-      } else if (Array.isArray(recurringReservation.daysOfWeek)) {
-        daysOfWeek = (recurringReservation.daysOfWeek as any[]).map(Number);
+      if (typeof athleteSchedule.daysOfWeek === 'string') {
+        daysOfWeek = athleteSchedule.daysOfWeek.split(',').map(Number);
+      } else if (Array.isArray(athleteSchedule.daysOfWeek)) {
+        daysOfWeek = (athleteSchedule.daysOfWeek as any[]).map(Number);
       } else {
         daysOfWeek = [];
       }
       this.logger.debug(`cancelRecurringReservation -> daysOfWeek: ${daysOfWeek.join(',')}`);
 
       // Buscar todas las reservas del usuario que coincidan con los días y horarios de la reserva recurrente
-      const startDate = new Date(recurringReservation.startDate);
+      const startDate = new Date(athleteSchedule.startDate);
       startDate.setHours(0, 0, 0, 0);
       
       // Buscar todas las reservas del usuario
@@ -1694,7 +2258,7 @@ export class ReservationsService {
         }
 
         // Verificar que sea del mismo company
-        if (!reservation.timeSlot.company || reservation.timeSlot.company.id !== recurringReservation.company.id) {
+        if (!reservation.timeSlot.company || reservation.timeSlot.company.id !== athleteSchedule.company.id) {
           return false;
         }
 
@@ -1716,69 +2280,74 @@ export class ReservationsService {
 
       this.logger.debug(`cancelRecurringReservation -> reservation dates: ${Array.from(reservationDateMap.keys()).join(', ')}`);
 
-      // Buscar todos los ClassUsage del usuario para esta suscripción y tipo RESERVATION
-      const allClassUsages = await this.classUsageRepository.find({
-        where: {
-          user: { id: userId },
-          subscription: { id: activeSubscription.id },
-          type: ClassUsageType.RESERVATION
-        },
-        relations: ['user', 'subscription']
-      });
-      this.logger.debug(`cancelRecurringReservation -> found ${allClassUsages.length} class usages`);
+      // Solo restaurar clases si hay suscripción activa
+      if (activeSubscription) {
+        // Buscar todos los ClassUsage del usuario para esta suscripción y tipo RESERVATION
+        const allClassUsages = await this.classUsageRepository.find({
+          where: {
+            user: { id: userId },
+            subscription: { id: activeSubscription.id },
+            type: ClassUsageType.RESERVATION
+          },
+          relations: ['user', 'subscription']
+        });
+        this.logger.debug(`cancelRecurringReservation -> found ${allClassUsages.length} class usages`);
 
-      // Filtrar los ClassUsage que coincidan con las fechas de las reservas a eliminar
-      const classUsagesToRemove = allClassUsages.filter(classUsage => {
-        const usageDate = new Date(classUsage.usageDate);
-        usageDate.setHours(0, 0, 0, 0);
-        const usageDateKey = usageDate.toISOString().split('T')[0];
-        return reservationDateMap.has(usageDateKey);
-      });
-
-      this.logger.log(`cancelRecurringReservation -> found ${classUsagesToRemove.length} class usages to remove`);
-
-      // Eliminar los registros de ClassUsage
-      for (const classUsage of classUsagesToRemove) {
-        await this.classUsageRepository.remove(classUsage);
-        restoredClassesCount++;
-        this.logger.verbose(`cancelRecurringReservation -> removed classUsage id=${classUsage.id}, date=${classUsage.usageDate}`);
-      }
-
-      // Restaurar contadores de clases en la suscripción
-      if (restoredClassesCount > 0) {
-        // Recargar la suscripción para obtener valores actualizados
-        const updatedSubscription = await this.subscriptionRepository.findOne({
-          where: { id: activeSubscription.id },
-          relations: ['paymentPlan']
+        // Filtrar los ClassUsage que coincidan con las fechas de las reservas a eliminar
+        const classUsagesToRemove = allClassUsages.filter(classUsage => {
+          const usageDate = new Date(classUsage.usageDate);
+          usageDate.setHours(0, 0, 0, 0);
+          const usageDateKey = usageDate.toISOString().split('T')[0];
+          return reservationDateMap.has(usageDateKey);
         });
 
-        if (updatedSubscription) {
-          const classesPerWeek = updatedSubscription.paymentPlan?.classesPerWeek ?? 0;
-          const maxClassesPerPeriod = updatedSubscription.paymentPlan?.maxClassesPerPeriod ?? 0;
+        this.logger.log(`cancelRecurringReservation -> found ${classUsagesToRemove.length} class usages to remove`);
 
-          // Restaurar contadores semanales (restar de usadas, sumar a disponibles)
-          const previousUsedThisWeek = updatedSubscription.classesUsedThisWeek ?? 0;
-          const previousRemainingThisWeek = updatedSubscription.classesRemainingThisWeek ?? 0;
-
-          updatedSubscription.classesUsedThisWeek = Math.max(0, previousUsedThisWeek - restoredClassesCount);
-          updatedSubscription.classesRemainingThisWeek = Math.min(
-            classesPerWeek,
-            previousRemainingThisWeek + restoredClassesCount
-          );
-
-          // Restaurar contadores del período (restar de usadas, sumar a disponibles)
-          const previousUsedThisPeriod = updatedSubscription.classesUsedThisPeriod ?? 0;
-          const previousRemainingThisPeriod = updatedSubscription.classesRemainingThisPeriod ?? 0;
-
-          updatedSubscription.classesUsedThisPeriod = Math.max(0, previousUsedThisPeriod - restoredClassesCount);
-          updatedSubscription.classesRemainingThisPeriod = Math.min(
-            maxClassesPerPeriod,
-            previousRemainingThisPeriod + restoredClassesCount
-          );
-
-          await this.subscriptionRepository.save(updatedSubscription);
-          this.logger.log(`cancelRecurringReservation -> restored ${restoredClassesCount} classes. Weekly: ${previousUsedThisWeek}->${updatedSubscription.classesUsedThisWeek} used, ${previousRemainingThisWeek}->${updatedSubscription.classesRemainingThisWeek} remaining. Period: ${previousUsedThisPeriod}->${updatedSubscription.classesUsedThisPeriod} used, ${previousRemainingThisPeriod}->${updatedSubscription.classesRemainingThisPeriod} remaining`);
+        // Eliminar los registros de ClassUsage
+        for (const classUsage of classUsagesToRemove) {
+          await this.classUsageRepository.remove(classUsage);
+          restoredClassesCount++;
+          this.logger.verbose(`cancelRecurringReservation -> removed classUsage id=${classUsage.id}, date=${classUsage.usageDate}`);
         }
+
+        // Restaurar contadores de clases en la suscripción
+        if (restoredClassesCount > 0) {
+          // Recargar la suscripción para obtener valores actualizados
+          const updatedSubscription = await this.subscriptionRepository.findOne({
+            where: { id: activeSubscription.id },
+            relations: ['paymentPlan']
+          });
+
+          if (updatedSubscription) {
+            const classesPerWeek = updatedSubscription.paymentPlan?.classesPerWeek ?? 0;
+            const maxClassesPerPeriod = updatedSubscription.paymentPlan?.maxClassesPerPeriod ?? 0;
+
+            // Restaurar contadores semanales (restar de usadas, sumar a disponibles)
+            const previousUsedThisWeek = updatedSubscription.classesUsedThisWeek ?? 0;
+            const previousRemainingThisWeek = updatedSubscription.classesRemainingThisWeek ?? 0;
+
+            updatedSubscription.classesUsedThisWeek = Math.max(0, previousUsedThisWeek - restoredClassesCount);
+            updatedSubscription.classesRemainingThisWeek = Math.min(
+              classesPerWeek,
+              previousRemainingThisWeek + restoredClassesCount
+            );
+
+            // Restaurar contadores del período (restar de usadas, sumar a disponibles)
+            const previousUsedThisPeriod = updatedSubscription.classesUsedThisPeriod ?? 0;
+            const previousRemainingThisPeriod = updatedSubscription.classesRemainingThisPeriod ?? 0;
+
+            updatedSubscription.classesUsedThisPeriod = Math.max(0, previousUsedThisPeriod - restoredClassesCount);
+            updatedSubscription.classesRemainingThisPeriod = Math.min(
+              maxClassesPerPeriod,
+              previousRemainingThisPeriod + restoredClassesCount
+            );
+
+            await this.subscriptionRepository.save(updatedSubscription);
+            this.logger.log(`cancelRecurringReservation -> restored ${restoredClassesCount} classes. Weekly: ${previousUsedThisWeek}->${updatedSubscription.classesUsedThisWeek} used, ${previousRemainingThisWeek}->${updatedSubscription.classesRemainingThisWeek} remaining. Period: ${previousUsedThisPeriod}->${updatedSubscription.classesUsedThisPeriod} used, ${previousRemainingThisPeriod}->${updatedSubscription.classesRemainingThisPeriod} remaining`);
+          }
+        }
+      } else {
+        this.logger.log(`cancelRecurringReservation -> skipping class restoration (no active subscription)`);
       }
 
       // Eliminar las reservas y actualizar contadores de time slots
@@ -1827,7 +2396,7 @@ export class ReservationsService {
     }
 
     // Eliminar la reserva recurrente (no solo cancelarla)
-    await this.recurringReservationRepository.remove(recurringReservation);
+    await this.athleteScheduleRepository.remove(athleteSchedule);
     this.logger.log(`cancelRecurringReservation -> deleted recurring reservation id=${recurringReservationId}`);
 
     return {
@@ -1839,22 +2408,90 @@ export class ReservationsService {
   }
 
   /**
+   * Actualizar una reserva recurrente
+   */
+  async updateRecurringReservation(
+    recurringReservationId: string,
+    userId: string,
+    updateDto: any
+  ): Promise<AthleteSchedule> {
+    this.logger.debug(`updateRecurringReservation -> recurringId=${recurringReservationId}, userId=${userId}`);
+    
+    const athleteSchedule = await this.athleteScheduleRepository.findOne({
+      where: { 
+        id: recurringReservationId,
+        user: { id: userId }
+      },
+      relations: ['company', 'user']
+    });
+
+    if (!athleteSchedule) {
+      throw new BadRequestException('Horario del atleta no encontrado');
+    }
+
+    // Normalizar tiempos si se proporcionan
+    const normalizedStartTime = updateDto.startTime 
+      ? this.normalizeTimeString(updateDto.startTime)
+      : athleteSchedule.startTime;
+    
+    const normalizedEndTime = updateDto.endTime 
+      ? this.normalizeTimeString(updateDto.endTime)
+      : athleteSchedule.endTime;
+
+    // Preparar datos de actualización
+    const updateData: any = {};
+
+    if (updateDto.daysOfWeek && Array.isArray(updateDto.daysOfWeek)) {
+      updateData.daysOfWeek = updateDto.daysOfWeek.join(',');
+    }
+
+    if (updateDto.startTime) {
+      updateData.startTime = normalizedStartTime;
+    }
+
+    if (updateDto.endTime) {
+      updateData.endTime = normalizedEndTime;
+    }
+
+    if (updateDto.status) {
+      updateData.status = updateDto.status;
+    }
+
+    if (updateDto.notes !== undefined) {
+      updateData.notes = updateDto.notes;
+    }
+
+    // Actualizar el horario
+    await this.athleteScheduleRepository.update(recurringReservationId, updateData);
+
+    // Recargar y retornar el horario actualizado
+    const updatedSchedule = await this.athleteScheduleRepository.findOne({
+      where: { id: recurringReservationId },
+      relations: ['company', 'user']
+    });
+
+    this.logger.log(`updateRecurringReservation -> updated recurring reservation id=${recurringReservationId}`);
+
+    return updatedSchedule;
+  }
+
+  /**
    * Pausar una reserva recurrente
    */
   async pauseRecurringReservation(recurringReservationId: string, userId: string): Promise<void> {
-    const recurringReservation = await this.recurringReservationRepository.findOne({
+    const athleteSchedule = await this.athleteScheduleRepository.findOne({
       where: { 
         id: recurringReservationId,
         user: { id: userId }
       }
     });
 
-    if (!recurringReservation) {
-      throw new BadRequestException('Reserva recurrente no encontrada');
+    if (!athleteSchedule) {
+      throw new BadRequestException('Horario del atleta no encontrado');
     }
 
-    await this.recurringReservationRepository.update(recurringReservationId, {
-      status: RecurringStatus.PAUSED
+    await this.athleteScheduleRepository.update(recurringReservationId, {
+      status: ScheduleStatus.PAUSED
     });
   }
 
@@ -1862,22 +2499,141 @@ export class ReservationsService {
    * Reanudar una reserva recurrente
    */
   async resumeRecurringReservation(recurringReservationId: string, userId: string): Promise<void> {
-    const recurringReservation = await this.recurringReservationRepository.findOne({
+    const athleteSchedule = await this.athleteScheduleRepository.findOne({
       where: { 
         id: recurringReservationId,
         user: { id: userId }
       }
     });
 
-    if (!recurringReservation) {
-      throw new BadRequestException('Reserva recurrente no encontrada');
+    if (!athleteSchedule) {
+      throw new BadRequestException('Horario del atleta no encontrado');
     }
 
-    await this.recurringReservationRepository.update(recurringReservationId, {
-      status: RecurringStatus.ACTIVE
+    await this.athleteScheduleRepository.update(recurringReservationId, {
+      status: ScheduleStatus.ACTIVE
     });
 
     // Generar reservas pendientes
     await this.generateRecurringReservations(recurringReservationId);
+  }
+
+  /**
+   * Obtener lista de espera del usuario
+   */
+  async getUserWaitlist(userId: string) {
+    return await this.waitlistRepository.find({
+      where: {
+        user: { id: userId },
+        status: WaitlistStatus.PENDING
+      },
+      relations: ['timeSlot', 'user'],
+      order: { createdAt: 'ASC' }
+    });
+  }
+
+  /**
+   * Cancelar entrada de lista de espera
+   */
+  async cancelWaitlistEntry(waitlistId: string, userId: string) {
+    const waitlistEntry = await this.waitlistRepository.findOne({
+      where: { id: waitlistId },
+      relations: ['user']
+    });
+
+    if (!waitlistEntry) {
+      throw new BadRequestException('Entrada de lista de espera no encontrada');
+    }
+
+    if (waitlistEntry.userId !== userId) {
+      throw new ForbiddenException('Solo puedes cancelar tus propias entradas de lista de espera');
+    }
+
+    waitlistEntry.status = WaitlistStatus.CANCELLED;
+    await this.waitlistRepository.save(waitlistEntry);
+
+    return { message: 'Entrada de lista de espera cancelada exitosamente' };
+  }
+
+  /**
+   * Obtener lista de espera de un TimeSlot (admin)
+   */
+  async getTimeSlotWaitlist(timeSlotId: string) {
+    return await this.waitlistRepository.find({
+      where: {
+        timeSlot: { id: timeSlotId },
+        status: WaitlistStatus.PENDING
+      },
+      relations: ['user', 'timeSlot'],
+      order: { createdAt: 'ASC' }
+    });
+  }
+
+  /**
+   * Obtener alumnos de un TimeSlot (admin)
+   */
+  async getTimeSlotStudents(timeSlotId: string) {
+    const reservations = await this.reservationRepository.find({
+      where: { timeSlotId },
+      relations: ['user', 'timeSlot']
+    });
+
+    return reservations.map(reservation => ({
+      id: reservation.id,
+      userId: reservation.user.id,
+      nombre: reservation.user.name || '',
+      apellido: reservation.user.lastName || '',
+      email: reservation.user.email || '',
+      telefono: reservation.user.phoneNumber || '',
+      attendanceStatus: reservation.attendanceStatus,
+      fechaReserva: reservation.createdAt
+    })).sort((a, b) => {
+      // Ordenar por apellido y luego por nombre
+      const apellidoA = a.apellido.toLowerCase();
+      const apellidoB = b.apellido.toLowerCase();
+      if (apellidoA !== apellidoB) {
+        return apellidoA.localeCompare(apellidoB);
+      }
+      return a.nombre.toLowerCase().localeCompare(b.nombre.toLowerCase());
+    });
+  }
+
+  /**
+   * Obtener TimeSlots disponibles con cupo
+   */
+  async getAvailableTimeSlotsWithCapacity(
+    companyId: string,
+    startDate: string,
+    endDate: string,
+    minAvailableSpots: number = 1
+  ) {
+    const start = new Date(startDate);
+    start.setHours(0, 0, 0, 0);
+    const end = new Date(endDate);
+    end.setHours(23, 59, 59, 999);
+
+    const timeSlots = await this.timeSlotRepository.find({
+      where: {
+        company: { id: companyId },
+        date: Between(start, end)
+      },
+      relations: ['reservations', 'company']
+    });
+
+    // Filtrar solo los que tienen cupo disponible y cumplen con minAvailableSpots
+    const availableSlots = timeSlots
+      .map(slot => {
+        const reservedCount = slot.reservedCount ?? slot.reservations?.length ?? 0;
+        const availableSpots = slot.capacity - reservedCount;
+        return {
+          ...slot,
+          reservedCount,
+          availableSpots,
+          attendedCount: slot.attendedCount || 0
+        };
+      })
+      .filter(slot => slot.availableSpots >= minAvailableSpots);
+
+    return availableSlots;
   }
 }

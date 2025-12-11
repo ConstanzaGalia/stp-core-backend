@@ -1,4 +1,4 @@
-import { IsNotEmpty, IsOptional, IsString } from "class-validator";
+import { IsNotEmpty, IsOptional, IsString, IsArray } from "class-validator";
 
 export class CreateExerciseDto {
   @IsNotEmpty()
@@ -7,8 +7,18 @@ export class CreateExerciseDto {
 
   @IsOptional()
   @IsString()
+  description?: string;
+
+  @IsOptional()
+  @IsString()
+  video?: string;
+
+  @IsOptional()
+  @IsString()
   image?: string;
 
-  @IsString()
-  categories: string[];
+  @IsOptional()
+  @IsArray()
+  @IsString({ each: true })
+  categories?: string[];
 }

@@ -22,6 +22,9 @@ export class TimeSlot {
   @Column({ type: 'int', default: 0 })
   reservedCount: number;
 
+  @Column({ type: 'int', default: 0 })
+  attendedCount: number; // Contador de alumnos que asistieron
+
   @Column({ type: 'int', default: 60 })
   durationMinutes: number; // Duración del turno en minutos
 

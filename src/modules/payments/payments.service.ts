@@ -1,4 +1,4 @@
-import { Injectable, BadRequestException, NotFoundException } from '@nestjs/common';
+import { Injectable, BadRequestException, NotFoundException, Inject, forwardRef, Logger } from '@nestjs/common';
 import { InjectRepository } from '@nestjs/typeorm';
 import { Repository, Between, LessThanOrEqual } from 'typeorm';
 import { Payment, PaymentStatus, PaymentMethod } from '../../entities/payment.entity';
@@ -10,6 +10,11 @@ import { Company } from '../../entities/company.entity';
 import { SubscriptionSuspension } from '../../entities/subscription-suspension.entity';
 import { Reservation } from '../../entities/reservation.entity';
 import { TimeSlot } from '../../entities/timeSlot.entity';
+import { AthleteSchedule, ScheduleStatus } from '../../entities/athlete-schedule.entity';
+import { ScheduleConfig } from '../../entities/schedule-config.entity';
+import { ScheduleException } from '../../entities/schedule-exception.entity';
+import { TimeSlotGeneration } from '../../entities/time-slot-generation.entity';
+import { WaitlistReservation } from '../../entities/waitlist-reservation.entity';
 import { CreatePaymentPlanDto } from './dto/create-payment-plan.dto';
 import { CreateSubscriptionDto } from './dto/create-subscription.dto';
 import { CompletePaymentDto } from './dto/complete-payment.dto';
@@ -19,6 +24,8 @@ import { UpdateSuspensionDto } from './dto/update-suspension.dto';
 
 @Injectable()
 export class PaymentsService {
+  private readonly logger = new Logger(PaymentsService.name);
+
   constructor(
     @InjectRepository(Payment)
     private readonly paymentRepository: Repository<Payment>,
@@ -942,6 +949,90 @@ export class PaymentsService {
     subscription.pendingInstallments = 0;
     subscription.status = SubscriptionStatus.ACTIVE;
     await this.subscriptionRepository.save(subscription);
+
+    // Generar reservas automáticamente basadas en reservas recurrentes activas
+    // Implementar la lógica directamente aquí para evitar dependencia circular
+    try {
+      this.logger.log(`completePayment -> starting reservation generation for userId=${userId}, companyId=${companyId}, subscriptionId=${subscription.id}`);
+      
+      // Obtener repositorio de reservas recurrentes usando el manager de la suscripción
+      const athleteScheduleRepository = this.subscriptionRepository.manager.getRepository(AthleteSchedule);
+      const reservationRepository = this.subscriptionRepository.manager.getRepository(Reservation);
+
+      // Buscar todas las reservas recurrentes activas del usuario para esa empresa
+      const activeAthleteSchedules = await athleteScheduleRepository.find({
+        where: {
+          user: { id: userId },
+          company: { id: companyId },
+          status: ScheduleStatus.ACTIVE
+        },
+        relations: ['user', 'company']
+      });
+
+      this.logger.log(`completePayment -> found ${activeAthleteSchedules.length} active athlete schedules for user=${userId}`);
+
+      if (activeAthleteSchedules.length === 0) {
+        this.logger.log(`completePayment -> no active recurring reservations for user=${userId}, companyId=${companyId}`);
+        return {
+          subscription,
+          payment
+        };
+      }
+
+      // Obtener todos los repositorios necesarios usando el manager
+      const timeSlotRepository = this.subscriptionRepository.manager.getRepository(TimeSlot);
+      const classUsageRepository = this.subscriptionRepository.manager.getRepository(ClassUsage);
+      const scheduleConfigRepository = this.subscriptionRepository.manager.getRepository(ScheduleConfig);
+      const scheduleExceptionRepository = this.subscriptionRepository.manager.getRepository(ScheduleException);
+      const timeSlotGenerationRepository = this.subscriptionRepository.manager.getRepository(TimeSlotGeneration);
+      const waitlistRepository = this.subscriptionRepository.manager.getRepository(WaitlistReservation);
+      
+      // Obtener ReservationsService usando import dinámico
+      const { ReservationsService } = await import('../reservation/reservation.service');
+      
+      // Crear instancia del servicio con todas las dependencias necesarias
+      const reservationsService = new ReservationsService(
+        reservationRepository,
+        timeSlotRepository,
+        this.companyRepository,
+        scheduleConfigRepository,
+        scheduleExceptionRepository,
+        timeSlotGenerationRepository,
+        athleteScheduleRepository,
+        this.subscriptionRepository,
+        classUsageRepository,
+        this.paymentRepository,
+        waitlistRepository,
+        this // paymentsService - pasar this como referencia
+      );
+      
+      this.logger.log(`completePayment -> calling generateReservationsFromRecurringOnPayment for ${activeAthleteSchedules.length} athlete schedules`);
+      
+      // Usar la fecha de pago como inicio y fecha de pago + 31 días como fin
+      const paymentDate = payment.paidDate || new Date();
+      const periodEndDate = new Date(paymentDate);
+      periodEndDate.setDate(periodEndDate.getDate() + 31);
+      
+      this.logger.log(`completePayment -> paymentDate=${paymentDate.toISOString()}, periodEndDate=${periodEndDate.toISOString()}`);
+      
+      const result = await reservationsService.generateReservationsFromRecurringOnPayment(
+        userId,
+        companyId,
+        subscription.id,
+        paymentDate,
+        periodEndDate
+      );
+      
+      this.logger.log(`completePayment -> reservations generated: ${result.createdReservations} created, ${result.skippedDates.length} skipped, ${result.errors.length} errors for subscription=${subscription.id}`);
+      
+      if (result.errors.length > 0) {
+        this.logger.warn(`completePayment -> errors during reservation generation: ${result.errors.join('; ')}`);
+      }
+    } catch (error) {
+      // No fallar el pago si hay error en generación de reservas (solo loggear)
+      this.logger.error(`completePayment -> error generating reservations: ${error?.message}`, error?.stack);
+      this.logger.error(`completePayment -> error stack: ${error?.stack}`);
+    }
 
     return {
       subscription,

@@ -2,30 +2,30 @@ import { Entity, PrimaryGeneratedColumn, Column, ManyToOne, OneToMany, CreateDat
 import { User } from './user.entity';
 import { Company } from './company.entity';
 
-export enum RecurringFrequency {
+export enum ScheduleFrequency {
   WEEKLY = 'weekly',
   MONTHLY = 'monthly'
 }
 
-export enum RecurringEndType {
+export enum ScheduleEndType {
   DATE = 'date',
   COUNT = 'count',
   NEVER = 'never'
 }
 
-export enum RecurringStatus {
+export enum ScheduleStatus {
   ACTIVE = 'active',
   PAUSED = 'paused',
   CANCELLED = 'cancelled'
 }
 
-@Entity('recurring_reservations')
-export class RecurringReservation {
+@Entity('athlete_schedules')
+export class AthleteSchedule {
   @PrimaryGeneratedColumn('uuid')
   id: string;
 
-  @Column({ type: 'enum', enum: RecurringFrequency })
-  frequency: RecurringFrequency;
+  @Column({ type: 'enum', enum: ScheduleFrequency })
+  frequency: ScheduleFrequency;
 
   @Column({ type: 'simple-array' })
   daysOfWeek: string; // Ejemplo: "1,3,5" (Lunes, Miércoles, Viernes)
@@ -42,8 +42,8 @@ export class RecurringReservation {
   @Column({ type: 'date' })
   startDate: Date;
 
-  @Column({ type: 'enum', enum: RecurringEndType })
-  endType: RecurringEndType;
+  @Column({ type: 'enum', enum: ScheduleEndType })
+  endType: ScheduleEndType;
 
   @Column({ type: 'date', nullable: true })
   endDate: Date; // Solo si endType es 'date'
@@ -54,8 +54,8 @@ export class RecurringReservation {
   @Column({ type: 'int', default: 0 })
   currentOccurrences: number; // Contador de reservas creadas
 
-  @Column({ type: 'enum', enum: RecurringStatus, default: RecurringStatus.ACTIVE })
-  status: RecurringStatus;
+  @Column({ type: 'enum', enum: ScheduleStatus, default: ScheduleStatus.ACTIVE })
+  status: ScheduleStatus;
 
   @Column({ type: 'text', nullable: true })
   notes: string;
@@ -63,10 +63,10 @@ export class RecurringReservation {
   @Column({ type: 'date', nullable: true })
   lastGeneratedDate: Date; // Última fecha para la que se generaron reservas
 
-  @ManyToOne(() => User, user => user.recurringReservations, { onDelete: 'CASCADE' })
+  @ManyToOne(() => User, user => user.athleteSchedules, { onDelete: 'CASCADE' })
   user: User;
 
-  @ManyToOne(() => Company, company => company.recurringReservations, { onDelete: 'CASCADE' })
+  @ManyToOne(() => Company, company => company.athleteSchedules, { onDelete: 'CASCADE' })
   company: Company;
 
   @CreateDateColumn()

@@ -1,4 +1,4 @@
-import { Module } from '@nestjs/common';
+import { Module, forwardRef } from '@nestjs/common';
 import { TypeOrmModule } from '@nestjs/typeorm';
 import { PaymentsController } from './payments.controller';
 import { PaymentsService } from './payments.service';
@@ -11,6 +11,7 @@ import { Company } from '../../entities/company.entity';
 import { SubscriptionSuspension } from '../../entities/subscription-suspension.entity';
 import { Reservation } from '../../entities/reservation.entity';
 import { TimeSlot } from '../../entities/timeSlot.entity';
+import { ReservationsModule } from '../reservation/reservation.module';
 
 @Module({
   imports: [
@@ -24,10 +25,17 @@ import { TimeSlot } from '../../entities/timeSlot.entity';
       SubscriptionSuspension,
       Reservation,
       TimeSlot
-    ])
+    ]),
+    forwardRef(() => ReservationsModule)
   ],
   controllers: [PaymentsController],
-  providers: [PaymentsService],
+  providers: [
+    PaymentsService,
+    {
+      provide: 'PAYMENTS_SERVICE',
+      useExisting: PaymentsService
+    }
+  ],
   exports: [PaymentsService]
 })
 export class PaymentsModule {}
