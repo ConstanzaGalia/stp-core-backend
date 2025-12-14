@@ -156,3 +156,76 @@ export const inviteStudentEmail = (
   }
   return mail;
 };
+
+export const notifyTeachersAvailableClassesEmail = (
+  email: string,
+  trainerName: string,
+  studentName: string,
+  companyName: string,
+  availableClassesCount: number,
+  from: string
+) => {
+  if (!email || email.trim() === '') {
+    throw new Error('Email is required for teacher notification');
+  }
+
+  const mail = {
+    to: email.trim(),
+    subject: `⚠️ Clases no reservadas automáticamente - ${studentName}`,
+    from,
+    html: `
+      <!DOCTYPE html>
+      <html>
+        <head>
+          <meta charset="utf-8">
+          <title>Notificación de Clases Disponibles - STP</title>
+        </head>
+        <body style="font-family: Arial, sans-serif; margin: 0; padding: 0; background-color: #f4f4f4;">
+          <div style="max-width: 600px; margin: 0 auto; background-color: white; padding: 40px;">
+            <div style="text-align: center; margin-bottom: 30px;">
+              <h1 style="color: #333; margin: 0;">STP</h1>
+              <p style="color: #666; margin: 10px 0;">Entrenamiento Profesional</p>
+            </div>
+            
+            <h2 style="color: #333; text-align: center;">¡Hola ${trainerName}!</h2>
+            
+            <div style="background-color: #fff3cd; border-left: 4px solid #ffc107; padding: 20px; border-radius: 5px; margin: 30px 0;">
+              <h3 style="color: #856404; margin-top: 0;">⚠️ Atención Requerida</h3>
+              <p style="color: #856404; margin-bottom: 0; font-size: 16px;">
+                Después de procesar el pago de <strong>${studentName}</strong> en <strong>${companyName}</strong>, 
+                se crearon <strong>${availableClassesCount} clase${availableClassesCount !== 1 ? 's' : ''}</strong> 
+                que no pudieron reservarse automáticamente.
+              </p>
+            </div>
+            
+            <div style="background-color: #f8f9fa; padding: 30px; border-radius: 10px; margin: 30px 0;">
+              <h3 style="color: #333; margin-top: 0;">¿Qué significa esto?</h3>
+              <p style="color: #666; margin-bottom: 15px;">
+                Las clases no se pudieron reservar automáticamente debido a:
+              </p>
+              <ul style="color: #666; font-size: 14px; text-align: left; margin: 10px 0;">
+                <li><strong>Falta de cupo:</strong> Los turnos ya estaban completos</li>
+                <li><strong>Turnos no cargados:</strong> No se han generado los turnos para las fechas correspondientes</li>
+              </ul>
+              <p style="color: #666; margin-top: 20px; font-weight: bold;">
+                El alumno puede reservar estas clases manualmente hasta su fecha de vencimiento.
+              </p>
+            </div>
+            
+            <div style="background-color: #e7f3ff; padding: 20px; border-radius: 5px; margin: 20px 0;">
+              <p style="color: #004085; margin: 0; font-size: 14px;">
+                <strong>Recomendación:</strong> Verifica que los turnos estén cargados correctamente y que haya cupo disponible 
+                para evitar que esto vuelva a ocurrir.
+              </p>
+            </div>
+            
+            <p style="color: #666; text-align: center; font-size: 14px; margin-top: 30px;">
+              Este es un email automático del sistema STP.
+            </p>
+          </div>
+        </body>
+      </html>
+    `,
+  };
+  return mail;
+};

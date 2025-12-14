@@ -16,5 +16,6 @@ import { MailingModule } from '../mailer/mailing.module';
   ],
   controllers: [CompanyController],
   providers: [CompanyService, Pagination],
+  exports: [CompanyService]
 })
 export class CompanyModule {}

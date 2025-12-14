@@ -21,6 +21,10 @@ import { CompletePaymentDto } from './dto/complete-payment.dto';
 import { UpdatePaymentDto } from './dto/update-payment.dto';
 import { CreateSuspensionDto } from './dto/create-suspension.dto';
 import { UpdateSuspensionDto } from './dto/update-suspension.dto';
+import { MailingService } from '../mailer/mailing.service';
+import { CompanyService } from '../company/company.service';
+import { UserRole } from '../../common/enums/enums';
+import { notifyTeachersAvailableClassesEmail } from '../../utils/emailTemplates';
 
 @Injectable()
 export class PaymentsService {
@@ -45,6 +49,8 @@ export class PaymentsService {
     private readonly reservationRepository: Repository<Reservation>,
     @InjectRepository(TimeSlot)
     private readonly timeSlotRepository: Repository<TimeSlot>,
+    private readonly mailingService: MailingService,
+    private readonly companyService: CompanyService,
   ) {}
 
   // ===== PLANES DE PAGO =====
@@ -1057,6 +1063,48 @@ export class PaymentsService {
       
       if (result.errors.length > 0) {
         this.logger.warn(`completePayment -> errors during reservation generation: ${result.errors.join('; ')}`);
+      }
+
+      // Notificar a profesores si se crearon clases disponibles
+      if (result.availableClassesCreated > 0) {
+        try {
+          // Obtener información del alumno y la compañía
+          const student = await this.userRepository.findOne({ where: { id: userId } });
+          const company = await this.companyRepository.findOne({ 
+            where: { id: companyId },
+            relations: ['users']
+          });
+
+          if (student && company) {
+            // Obtener todos los profesores de la compañía
+            const trainers = await this.companyService.getAllCompanyTrainers(companyId);
+            
+            // Enviar email a cada profesor
+            for (const trainer of trainers) {
+              if (trainer.email && trainer.isActive) {
+                try {
+                  const mail = notifyTeachersAvailableClassesEmail(
+                    trainer.email,
+                    `${trainer.name} ${trainer.lastName}`,
+                    `${student.name} ${student.lastName}`,
+                    company.name,
+                    result.availableClassesCreated,
+                    process.env.RESEND_FROM_EMAIL || 'noreply@stp.com'
+                  );
+                  
+                  await this.mailingService.sendMail(mail);
+                  this.logger.log(`completePayment -> notification sent to trainer ${trainer.email} about ${result.availableClassesCreated} available classes`);
+                } catch (emailError) {
+                  this.logger.error(`completePayment -> error sending notification to trainer ${trainer.email}: ${emailError?.message}`);
+                  // No fallar el proceso si falla el email
+                }
+              }
+            }
+          }
+        } catch (notificationError) {
+          this.logger.error(`completePayment -> error notifying teachers: ${notificationError?.message}`);
+          // No fallar el proceso si falla la notificación
+        }
       }
     } catch (error) {
       // No fallar el pago si hay error en generación de reservas (solo loggear)

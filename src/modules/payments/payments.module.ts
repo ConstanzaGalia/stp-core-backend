@@ -12,6 +12,8 @@ import { SubscriptionSuspension } from '../../entities/subscription-suspension.e
 import { Reservation } from '../../entities/reservation.entity';
 import { TimeSlot } from '../../entities/timeSlot.entity';
 import { ReservationsModule } from '../reservation/reservation.module';
+import { MailingModule } from '../mailer/mailing.module';
+import { CompanyModule } from '../company/company.module';
 
 @Module({
   imports: [
@@ -26,7 +28,9 @@ import { ReservationsModule } from '../reservation/reservation.module';
       Reservation,
       TimeSlot
     ]),
-    forwardRef(() => ReservationsModule)
+    forwardRef(() => ReservationsModule),
+    MailingModule,
+    CompanyModule
   ],
   controllers: [PaymentsController],
   providers: [
