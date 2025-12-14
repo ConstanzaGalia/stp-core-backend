@@ -13,6 +13,7 @@ import { ScheduleException } from './schedule-exception.entity';
 import { TimeSlotGeneration } from './time-slot-generation.entity';
 import { AthleteInvitation } from './athlete-invitation.entity';
 import { AthleteSchedule } from './athlete-schedule.entity';
+import { AvailableClass } from './available-class.entity';
 
 @Entity('company')
 export class Company {
@@ -79,6 +80,9 @@ export class Company {
 
   @OneToMany(() => AthleteSchedule, athleteSchedule => athleteSchedule.company)
   athleteSchedules: AthleteSchedule[];
+
+  @OneToMany(() => AvailableClass, availableClass => availableClass.company)
+  availableClasses: AvailableClass[];
 
   @CreateDateColumn({ type: "timestamp", default: () => "CURRENT_TIMESTAMP(6)" })
   public created_at: Date;

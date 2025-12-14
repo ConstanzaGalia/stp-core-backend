@@ -787,9 +787,32 @@ export class PaymentsService {
       }
     }
 
-    // Calcular nuevo período mensual (30 días desde hoy)
-    const newPeriodStartDate = new Date(today);
-    const newPeriodEndDate = new Date(today);
+    // Calcular el inicio de semana (lunes) para usar como base del período
+    // Si ya existe weekStartDate y no ha pasado una semana completa, mantenerlo
+    // Si no existe o ya pasó una semana, calcular el nuevo lunes
+    let newWeekStart: Date;
+    if (subscription.weekStartDate) {
+      const existingWeekStart = new Date(subscription.weekStartDate);
+      existingWeekStart.setHours(0, 0, 0, 0);
+      const weekEnd = new Date(existingWeekStart);
+      weekEnd.setDate(weekEnd.getDate() + 6);
+      weekEnd.setHours(23, 59, 59, 999);
+      
+      // Si todavía estamos en la misma semana, mantener el weekStartDate existente
+      if (today <= weekEnd) {
+        newWeekStart = existingWeekStart;
+      } else {
+        // Si ya pasó la semana, calcular el nuevo lunes
+        newWeekStart = this.getWeekStartDate(today);
+      }
+    } else {
+      // Si no existe weekStartDate, calcular el lunes de la semana actual
+      newWeekStart = this.getWeekStartDate(today);
+    }
+    
+    // Usar weekStartDate como periodStartDate (no correr la fecha si el alumno se atrasó)
+    const newPeriodStartDate = new Date(newWeekStart);
+    const newPeriodEndDate = new Date(newPeriodStartDate);
     newPeriodEndDate.setDate(newPeriodEndDate.getDate() + 30);
 
     // Actualizar períodos
@@ -801,8 +824,7 @@ export class PaymentsService {
     subscription.classesUsedThisPeriod = 0;
     subscription.classesRemainingThisPeriod = paymentPlanToUse.maxClassesPerPeriod;
 
-    // Reiniciar contadores semanales (nueva semana del nuevo mes)
-    const newWeekStart = this.getWeekStartDate(today);
+    // Actualizar contadores semanales
     subscription.weekStartDate = newWeekStart;
     subscription.classesUsedThisWeek = 0;
     subscription.classesRemainingThisWeek = paymentPlanToUse.classesPerWeek;
@@ -987,6 +1009,10 @@ export class PaymentsService {
       const timeSlotGenerationRepository = this.subscriptionRepository.manager.getRepository(TimeSlotGeneration);
       const waitlistRepository = this.subscriptionRepository.manager.getRepository(WaitlistReservation);
       
+      // Obtener AvailableClass y su repositorio
+      const { AvailableClass } = await import('../../entities/available-class.entity');
+      const availableClassRepository = this.subscriptionRepository.manager.getRepository(AvailableClass);
+      
       // Obtener ReservationsService usando import dinámico
       const { ReservationsService } = await import('../reservation/reservation.service');
       
@@ -1003,24 +1029,28 @@ export class PaymentsService {
         classUsageRepository,
         this.paymentRepository,
         waitlistRepository,
+        availableClassRepository,
         this // paymentsService - pasar this como referencia
       );
       
       this.logger.log(`completePayment -> calling generateReservationsFromRecurringOnPayment for ${activeAthleteSchedules.length} athlete schedules`);
       
-      // Usar la fecha de pago como inicio y fecha de pago + 31 días como fin
-      const paymentDate = payment.paidDate || new Date();
-      const periodEndDate = new Date(paymentDate);
-      periodEndDate.setDate(periodEndDate.getDate() + 31);
+      // Usar periodStartDate de la suscripción como inicio (no la fecha de pago)
+      // Esto asegura que si el alumno se atrasó en pagar, su fecha de inicio no se corra
+      const periodStartDate = new Date(subscription.periodStartDate);
+      periodStartDate.setHours(0, 0, 0, 0);
+      const periodEndDate = new Date(subscription.periodEndDate);
+      periodEndDate.setHours(23, 59, 59, 999);
       
-      this.logger.log(`completePayment -> paymentDate=${paymentDate.toISOString()}, periodEndDate=${periodEndDate.toISOString()}`);
+      this.logger.log(`completePayment -> periodStartDate=${periodStartDate.toISOString()}, periodEndDate=${periodEndDate.toISOString()}`);
       
       const result = await reservationsService.generateReservationsFromRecurringOnPayment(
         userId,
         companyId,
         subscription.id,
-        paymentDate,
-        periodEndDate
+        periodStartDate,
+        periodEndDate,
+        payment.id
       );
       
       this.logger.log(`completePayment -> reservations generated: ${result.createdReservations} created, ${result.skippedDates.length} skipped, ${result.errors.length} errors for subscription=${subscription.id}`);

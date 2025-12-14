@@ -4,6 +4,7 @@ import { Company } from './company.entity';
 import { PaymentPlan } from './payment-plan.entity';
 import { Payment } from './payment.entity';
 import { ClassUsage } from './class-usage.entity';
+import { AvailableClass } from './available-class.entity';
 
 export enum SubscriptionStatus {
   ACTIVE = 'active',
@@ -79,6 +80,9 @@ export class UserPaymentSubscription {
 
   @OneToMany(() => ClassUsage, classUsage => classUsage.subscription)
   classUsages: ClassUsage[];
+
+  @OneToMany(() => AvailableClass, availableClass => availableClass.subscription)
+  availableClasses: AvailableClass[];
 
   @CreateDateColumn()
   createdAt: Date;

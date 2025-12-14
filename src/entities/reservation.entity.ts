@@ -1,6 +1,7 @@
-import { Entity, PrimaryGeneratedColumn, ManyToOne, CreateDateColumn, UpdateDateColumn, JoinColumn, Column } from 'typeorm';
+import { Entity, PrimaryGeneratedColumn, ManyToOne, OneToOne, CreateDateColumn, UpdateDateColumn, JoinColumn, Column } from 'typeorm';
 import { User } from './user.entity';
 import { TimeSlot } from './timeSlot.entity';
+import { AvailableClass } from './available-class.entity';
 
 @Entity()
 export class Reservation {
@@ -22,6 +23,9 @@ export class Reservation {
 
   @Column({ type: 'boolean', nullable: true, name: 'attendance_status' })
   attendanceStatus: boolean | null;
+
+  @OneToOne(() => AvailableClass, availableClass => availableClass.reservation, { nullable: true })
+  availableClass: AvailableClass;
 
   @CreateDateColumn()
   createdAt: Date;

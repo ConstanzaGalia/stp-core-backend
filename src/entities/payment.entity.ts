@@ -1,8 +1,9 @@
-import { Entity, PrimaryGeneratedColumn, Column, ManyToOne, JoinColumn } from 'typeorm';
+import { Entity, PrimaryGeneratedColumn, Column, ManyToOne, OneToMany, JoinColumn } from 'typeorm';
 import { User } from './user.entity';
 import { Company } from './company.entity';
 import { PaymentPlan } from './payment-plan.entity';
 import { UserPaymentSubscription } from './user-payment-subscription.entity';
+import { AvailableClass } from './available-class.entity';
 
 export enum PaymentStatus {
   PENDING = 'pending',
@@ -82,4 +83,7 @@ export class Payment {
   @ManyToOne(() => UserPaymentSubscription, subscription => subscription.payments, { onDelete: 'CASCADE' })
   @JoinColumn({ name: 'subscriptionId' })
   subscription: UserPaymentSubscription;
+
+  @OneToMany(() => AvailableClass, availableClass => availableClass.payment)
+  availableClasses: AvailableClass[];
 }

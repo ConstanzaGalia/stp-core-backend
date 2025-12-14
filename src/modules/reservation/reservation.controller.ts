@@ -412,6 +412,53 @@ export class ReservationsController {
   }
 
   /**
+   * Obtener el estado de un horario fijo (fechas con problemas)
+   * GET /reservations/recurring/:id/status
+   */
+  @Get('recurring/:id/status')
+  @UseGuards(AuthGuard('jwt'))
+  async getRecurringReservationStatus(
+    @Param('id') id: string,
+    @GetUser() user: User,
+    @Query('startDate') startDate?: string,
+    @Query('endDate') endDate?: string
+  ) {
+    // Verificar que el usuario sea el dueño del horario fijo
+    const athleteSchedules = await this.reservationsService.getUserRecurringReservations(user.id);
+    const schedule = athleteSchedules.find(s => s.id === id);
+    
+    if (!schedule) {
+      throw new ForbiddenException('No tienes permiso para ver este horario fijo');
+    }
+
+    const start = startDate ? new Date(startDate) : undefined;
+    const end = endDate ? new Date(endDate) : undefined;
+
+    return this.reservationsService.getRecurringReservationStatus(id, start, end);
+  }
+
+  /**
+   * Obtener clases disponibles del usuario
+   * GET /reservations/available-classes
+   */
+  @Get('available-classes')
+  @UseGuards(AuthGuard('jwt'))
+  async getAvailableClasses(@GetUser() user: User) {
+    return this.reservationsService.getUserAvailableClasses(user.id);
+  }
+
+  /**
+   * Obtener conteo de clases disponibles del usuario
+   * GET /reservations/available-classes/count
+   */
+  @Get('available-classes/count')
+  @UseGuards(AuthGuard('jwt'))
+  async getAvailableClassesCount(@GetUser() user: User) {
+    const count = await this.reservationsService.getAvailableClassesCount(user.id);
+    return { count };
+  }
+
+  /**
    * Actualizar una reserva recurrente
    * PUT /reservations/recurring/:id
    */

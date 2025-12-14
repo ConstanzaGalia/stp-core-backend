@@ -14,6 +14,7 @@ import { PaymentsService } from '../payments/payments.service';
 import { ClassUsage, ClassUsageType } from '../../entities/class-usage.entity';
 import { Payment, PaymentStatus } from '../../entities/payment.entity';
 import { WaitlistReservation, WaitlistStatus } from '../../entities/waitlist-reservation.entity';
+import { AvailableClass, AvailableClassReason, AvailableClassStatus } from '../../entities/available-class.entity';
 
 export interface RecurringGenerationSummary {
   createdReservations: number;
@@ -22,6 +23,7 @@ export interface RecurringGenerationSummary {
   cannotBookDates: string[];
   duplicateDates: string[];
   missingTimeSlotDates: string[];
+  availableClassesCreated: number;
 }
 
 
@@ -52,6 +54,8 @@ export class ReservationsService {
     private readonly paymentRepository: Repository<Payment>,
     @InjectRepository(WaitlistReservation)
     private readonly waitlistRepository: Repository<WaitlistReservation>,
+    @InjectRepository(AvailableClass)
+    private readonly availableClassRepository: Repository<AvailableClass>,
     private readonly paymentsService: PaymentsService,
   ) {}
 
@@ -177,7 +181,42 @@ export class ReservationsService {
       const savedReservation = await this.reservationRepository.save(reservation);
       this.logger.log(`createReservation -> reservation created id=${savedReservation.id}`);
 
-      // 5. Registrar el uso de clase automáticamente al reservar
+      // 5. Intentar consumir una clase disponible antes de registrar uso del período
+      const slotDate = new Date(timeSlot.date);
+      slotDate.setHours(0, 0, 0, 0);
+      
+      // Buscar una clase disponible válida
+      const availableClasses = await this.getUserAvailableClasses(userId);
+      const validAvailableClass = availableClasses.find(ac => {
+        const expiresAt = new Date(ac.expiresAt);
+        expiresAt.setHours(0, 0, 0, 0);
+        return ac.status === AvailableClassStatus.AVAILABLE && 
+               expiresAt >= slotDate &&
+               ac.subscription?.id === activeSubscription.id;
+      });
+
+      if (validAvailableClass) {
+        // Consumir la clase disponible
+        try {
+          validAvailableClass.status = AvailableClassStatus.USED;
+          validAvailableClass.usedAt = new Date();
+          validAvailableClass.reservation = savedReservation;
+          await this.availableClassRepository.save(validAvailableClass);
+          
+          // Vincular la reserva con la clase disponible
+          savedReservation.availableClass = validAvailableClass;
+          await this.reservationRepository.save(savedReservation);
+          
+          this.logger.log(`createReservation -> used available class id=${validAvailableClass.id} instead of period class`);
+          // NO registrar uso de clase del período, ya que se usó una clase disponible
+          return savedReservation;
+        } catch (error) {
+          this.logger.error(`createReservation -> error consuming available class: ${error?.message}`, error?.stack);
+          // Si falla, continuar con el registro normal de uso de clase
+        }
+      }
+
+      // 6. Si no hay clase disponible, registrar el uso de clase del período automáticamente al reservar
       try {
         await this.paymentsService.registerClassUsage(activeSubscription.id, {
           type: ClassUsageType.RESERVATION,
@@ -1742,11 +1781,15 @@ export class ReservationsService {
    * Generar reservas para una reserva recurrente
    * @param customStartDate Fecha de inicio personalizada (opcional, para pagos)
    * @param customEndDate Fecha de fin personalizada (opcional, para pagos)
+   * @param paymentId ID del pago que generó estas reservas (opcional)
+   * @param periodEndDate Fecha de vencimiento del período (opcional)
    */
   async generateRecurringReservations(
     recurringReservationId: string,
     customStartDate?: Date,
-    customEndDate?: Date
+    customEndDate?: Date,
+    paymentId?: string,
+    periodEndDate?: Date
   ): Promise<RecurringGenerationSummary> {
     this.logger.debug(`generateRecurringReservations -> recurringReservationId=${recurringReservationId}`);
     const athleteSchedule = await this.athleteScheduleRepository.findOne({
@@ -1763,6 +1806,7 @@ export class ReservationsService {
         cannotBookDates: [],
         duplicateDates: [],
         missingTimeSlotDates: [],
+        availableClassesCreated: 0,
       };
     }
 
@@ -1827,6 +1871,7 @@ export class ReservationsService {
         cannotBookDates: [],
         duplicateDates: [],
         missingTimeSlotDates: [],
+        availableClassesCreated: 0,
       };
     }
 
@@ -1860,6 +1905,7 @@ export class ReservationsService {
         cannotBookDates: [],
         duplicateDates: [],
         missingTimeSlotDates: [],
+        availableClassesCreated: 0,
       };
     }
 
@@ -1881,16 +1927,26 @@ export class ReservationsService {
         cannotBookDates: [],
         duplicateDates: [],
         missingTimeSlotDates: [],
+        availableClassesCreated: 0,
       };
     }
 
     let generatedCount = 0;
+    let availableClassesCreated = 0;
     let lastGeneratedDate: Date | null = null;
     const skippedPastDates: string[] = [];
     const noCapacityDates: string[] = [];
     const cannotBookDates: string[] = [];
     const duplicateDates: string[] = [];
     const missingTimeSlotDates: string[] = [];
+    
+    // OPTIMIZACIÓN: Agrupar clases disponibles y time slots para batch save
+    const availableClassesToCreate: AvailableClass[] = [];
+    const timeSlotsToUpdate: { id: string; reservedCount: number }[] = [];
+    
+    // OPTIMIZACIÓN: Agrupar ClassUsage para batch save y actualizar contadores al final
+    const classUsagesToCreate: any[] = [];
+    let totalClassesToRegister = 0;
 
     const nowGlobal = new Date();
     nowGlobal.setSeconds(0, 0);
@@ -1900,6 +1956,56 @@ export class ReservationsService {
     // Contador semanal para respetar classesPerWeek
     const weeklyReservationCount = new Map<string, number>();
     const classesPerWeek = activeSubscription.paymentPlan?.classesPerWeek ?? 0;
+
+    // OPTIMIZACIÓN: Pre-cargar datos fuera del loop
+    // 1. Cargar configuraciones de horarios una sola vez
+    const scheduleConfigs = await this.getScheduleConfigs(athleteSchedule.company.id);
+    const scheduleConfigsByDay = new Map<number, ScheduleConfig>();
+    scheduleConfigs.forEach(config => {
+      if (config.isActive) {
+        scheduleConfigsByDay.set(config.dayOfWeek, config);
+      }
+    });
+
+    // 2. Pre-cargar time slots para el rango de fechas en batch
+    const timeSlotsMap = new Map<string, TimeSlot>();
+    const timeSlotsBatch = await this.timeSlotRepository.find({
+      where: {
+        company: { id: athleteSchedule.company.id },
+        startTime: recurringStartTime,
+        endTime: recurringEndTime,
+        date: Between(periodStart, periodEnd)
+      },
+      relations: ['reservations']
+    });
+    timeSlotsBatch.forEach(ts => {
+      const dateKey = new Date(ts.date).toISOString().split('T')[0];
+      timeSlotsMap.set(dateKey, ts);
+    });
+
+    // 3. Pre-cargar reservas existentes del usuario para el rango de fechas
+    const existingReservationsSet = new Set<string>();
+    const existingReservations = await this.reservationRepository.find({
+      where: {
+        user: { id: athleteSchedule.user.id },
+        timeSlot: { id: In(timeSlotsBatch.map(ts => ts.id)) }
+      },
+      relations: ['timeSlot']
+    });
+    existingReservations.forEach(res => {
+      if (res.timeSlot) {
+        const dateKey = new Date(res.timeSlot.date).toISOString().split('T')[0];
+        existingReservationsSet.add(`${dateKey}-${res.timeSlot.startTime}-${res.timeSlot.endTime}`);
+      }
+    });
+
+    // 4. Cuando generamos desde pago, NO necesitamos validar canBook (ya sabemos que puede reservar)
+    // Solo validar si NO estamos generando desde pago
+    const isGeneratingFromPayment = !!(customStartDate && customEndDate);
+    const canBookGlobally = isGeneratingFromPayment ? true : await this.paymentsService.canUserBookClass(activeSubscription.id);
+    
+    // OPTIMIZACIÓN: Pre-cargar suscripción para actualizaciones batch
+    let subscriptionForBatchUpdate = activeSubscription;
 
     try {
       this.logger.debug(`generateRecurringReservations -> start loop recurringId=${recurringReservationId}, remainingOccurrences=${remainingOccurrences}, remainingClasses=${remainingClassesPeriod}, classesPerWeek=${classesPerWeek}`);
@@ -1936,40 +2042,211 @@ export class ReservationsService {
           continue;
         }
 
-        // Verificar que el usuario pueda reservar en esa fecha específica
+        // Verificar que el usuario pueda reservar (optimizado: solo si no estamos generando desde pago)
+        if (!canBookGlobally) {
+          // Si estamos generando desde pago, sabemos que puede reservar, pero validar fecha específica
+          if (customStartDate && customEndDate) {
+            // En generación desde pago, validar que la fecha esté dentro del período pagado
+            const slotDateOnly = new Date(slotDate);
+            slotDateOnly.setHours(0, 0, 0, 0);
+            if (slotDateOnly < periodStart || slotDateOnly > periodEnd) {
+              cannotBookDates.push(slotDate.toISOString().split('T')[0]);
+              currentDate.setDate(currentDate.getDate() + 1);
+              continue;
+            }
+          } else {
+            // Validación completa solo si no estamos generando desde pago
         const canBook = await this.paymentsService.canUserBookClass(activeSubscription.id, slotDate);
         if (!canBook) {
           this.logger.verbose(`generateRecurringReservations -> canBook=false subscription=${activeSubscription.id} date=${slotDate.toISOString()}`);
           cannotBookDates.push(slotDate.toISOString().split('T')[0]);
           currentDate.setDate(currentDate.getDate() + 1);
           continue;
+            }
+          }
         }
 
-        const timeSlot = await this.timeSlotRepository.findOne({
-          where: {
-            date: slotDate,
-              startTime: recurringStartTime,
-              endTime: recurringEndTime,
-            company: { id: athleteSchedule.company.id }
-          },
-          relations: ['reservations']
-        });
+        // OPTIMIZACIÓN: Usar time slot del mapa en lugar de query individual
+        const dateKey = slotDate.toISOString().split('T')[0];
+        let timeSlot = timeSlotsMap.get(dateKey);
 
         if (!timeSlot?.id) {
           this.logger.verbose(`generateRecurringReservations -> no timeslot configured date=${slotDate.toISOString()} start=${athleteSchedule.startTime}`);
-          missingTimeSlotDates.push(slotDate.toISOString().split('T')[0]);
+          
+          // OPTIMIZACIÓN: Usar configuraciones ya cargadas en lugar de query
+          try {
+            const dayOfWeek = slotDate.getDay();
+            const configForDay = scheduleConfigsByDay.get(dayOfWeek);
+            
+            if (configForDay) {
+              // Verificar si el horario del horario fijo coincide con algún rango de la configuración
+              const normalizedStartTime = this.normalizeTimeString(athleteSchedule.startTime);
+              const normalizedEndTime = this.normalizeTimeString(athleteSchedule.endTime);
+              const configStartTime = this.normalizeTimeString(configForDay.startTime);
+              const configEndTime = this.normalizeTimeString(configForDay.endTime);
+              
+              // Verificar que el horario del horario fijo esté dentro del rango configurado
+              if (normalizedStartTime >= configStartTime && normalizedEndTime <= configEndTime) {
+                // Generar el time slot para esta fecha específica
+                const year = slotDate.getFullYear();
+                const month = slotDate.getMonth();
+                const day = slotDate.getDate();
+                
+                const [startHour, startMinute] = normalizedStartTime.split(':').map(Number);
+                const [endHour, endMinute] = normalizedEndTime.split(':').map(Number);
+                
+                const slotStartTime = new Date(year, month, day, startHour, startMinute, 0, 0);
+                const slotEndTime = new Date(year, month, day, endHour, endMinute, 0, 0);
+                
+                const newTimeSlot = this.timeSlotRepository.create({
+            date: slotDate,
+                  startTime: normalizedStartTime,
+                  endTime: normalizedEndTime,
+                  capacity: configForDay.capacity,
+                  company: { id: athleteSchedule.company.id } as any,
+                  reservedCount: 0,
+                  durationMinutes: configForDay.slotDurationMinutes || 60,
+                  isIntermediateSlot: false
+                });
+                
+                const savedTimeSlot = await this.timeSlotRepository.save(newTimeSlot);
+                this.logger.log(`generateRecurringReservations -> auto-generated timeslot id=${savedTimeSlot.id} date=${slotDate.toISOString()}`);
+                
+                // OPTIMIZACIÓN: Agregar al mapa y recargar con relaciones para evitar queries futuras
+                const savedTimeSlotWithRelations = await this.timeSlotRepository.findOne({
+                  where: { id: savedTimeSlot.id },
+          relations: ['reservations']
+        });
+                if (savedTimeSlotWithRelations) {
+                  timeSlotsMap.set(dateKey, savedTimeSlotWithRelations);
+                }
+                
+                // Usar el time slot generado directamente
+                const generatedTimeSlot = savedTimeSlot;
+                
+                if (generatedTimeSlot) {
+                  // OPTIMIZACIÓN: Verificar duplicados usando el set pre-cargado
+                  const reservationKey = `${dateKey}-${recurringStartTime}-${recurringEndTime}`;
+                  if (existingReservationsSet.has(reservationKey)) {
+                    this.logger.verbose(`generateRecurringReservations -> reservation already exists timeSlot=${generatedTimeSlot.id}`);
+                    duplicateDates.push(slotDate.toISOString().split('T')[0]);
           currentDate.setDate(currentDate.getDate() + 1);
           continue;
         }
 
-          const existingReservation = await this.reservationRepository.findOne({
-            where: {
-              user: { id: athleteSchedule.user.id },
-            timeSlot: { id: timeSlot.id }
-          }
-        });
+                  const reservedCount = generatedTimeSlot.reservedCount ?? generatedTimeSlot.reservations?.length ?? 0;
+                  if (reservedCount >= generatedTimeSlot.capacity) {
+                    this.logger.verbose(`generateRecurringReservations -> timeSlot full id=${generatedTimeSlot.id}`);
+                    noCapacityDates.push(slotDate.toISOString().split('T')[0]);
+                    currentDate.setDate(currentDate.getDate() + 1);
+                    continue;
+                  }
 
-        if (existingReservation) {
+                  // Validar límite semanal (classesPerWeek)
+                  if (classesPerWeek > 0) {
+                    const weekKey = this.getWeekKey(slotDate);
+                    const currentWeekCount = weeklyReservationCount.get(weekKey) || 0;
+                    
+                    if (currentWeekCount >= classesPerWeek) {
+                      this.logger.verbose(`generateRecurringReservations -> weekly limit reached week=${weekKey}, count=${currentWeekCount}, limit=${classesPerWeek}`);
+                      skippedPastDates.push(slotDate.toISOString().split('T')[0]);
+                      currentDate.setDate(currentDate.getDate() + 1);
+                      continue;
+                    }
+                  }
+
+                  const reservation = this.reservationRepository.create({
+                    user: { id: athleteSchedule.user.id } as any,
+                    timeSlot: { id: generatedTimeSlot.id } as any,
+                    timeSlotId: generatedTimeSlot.id,
+                  });
+
+                  const savedReservation = await this.reservationRepository.save(reservation);
+                  this.logger.log(`generateRecurringReservations -> created reservation id=${savedReservation.id} date=${slotDate.toISOString()}`);
+
+                  // OPTIMIZACIÓN: Agrupar ClassUsage para batch save al final (no llamar registerClassUsage en el loop)
+                  if (isGeneratingFromPayment) {
+                    // Cuando generamos desde pago, crear ClassUsage directamente sin validaciones costosas
+                    classUsagesToCreate.push({
+                      type: ClassUsageType.RESERVATION,
+                      usageDate: slotDate,
+                      notes: `Reserva recurrente - ${recurringStartTime} a ${recurringEndTime}`,
+              user: { id: athleteSchedule.user.id },
+                      company: { id: athleteSchedule.company.id },
+                      subscription: { id: activeSubscription.id }
+                    });
+                    totalClassesToRegister++;
+                  } else {
+                    // Solo si NO es desde pago, usar el método completo
+                    try {
+                      await this.paymentsService.registerClassUsage(activeSubscription.id, {
+                        type: ClassUsageType.RESERVATION,
+                        usageDate: slotDate,
+                        notes: `Reserva recurrente - ${recurringStartTime} a ${recurringEndTime}`
+                      });
+                    } catch (error) {
+                      await this.reservationRepository.delete({ id: savedReservation.id });
+                      this.logger.error(`generateRecurringReservations -> error registering class usage date=${slotDate.toISOString()}: ${error?.message}`, error?.stack);
+                      currentDate.setDate(currentDate.getDate() + 1);
+                      continue;
+                    }
+                  }
+
+                  // OPTIMIZACIÓN: Agrupar update de time slot para batch update al final
+                  if (generatedTimeSlot) {
+                    generatedTimeSlot.reservedCount = reservedCount + 1;
+                    timeSlotsToUpdate.push({ id: generatedTimeSlot.id, reservedCount: generatedTimeSlot.reservedCount });
+                  }
+
+                  remainingClassesPeriod--;
+                  remainingOccurrences--;
+                  generatedCount++;
+                  
+                  // Actualizar contador semanal
+                  if (classesPerWeek > 0) {
+                    const weekKey = this.getWeekKey(slotDate);
+                    const currentWeekCount = weeklyReservationCount.get(weekKey) || 0;
+                    weeklyReservationCount.set(weekKey, currentWeekCount + 1);
+                  }
+                  
+                  lastGeneratedDate = new Date(slotDate);
+
+                  currentDate.setDate(currentDate.getDate() + 1);
+                  continue;
+                }
+              }
+            }
+          } catch (error) {
+            this.logger.warn(`generateRecurringReservations -> error auto-generating timeslot date=${slotDate.toISOString()}: ${error?.message}`);
+          }
+          
+          // Si no se pudo generar automáticamente, agregar a la lista de fechas faltantes
+          missingTimeSlotDates.push(slotDate.toISOString().split('T')[0]);
+          
+          // OPTIMIZACIÓN: Agrupar clase disponible para batch save al final
+          if (paymentId && periodEndDate && remainingClassesPeriod > 0) {
+            const availableClass = this.availableClassRepository.create({
+              intendedDate: slotDate,
+              reason: AvailableClassReason.MISSING_TIME_SLOT,
+              status: AvailableClassStatus.AVAILABLE,
+              expiresAt: periodEndDate,
+              user: { id: athleteSchedule.user.id } as any,
+              company: { id: athleteSchedule.company.id } as any,
+              subscription: { id: activeSubscription.id } as any,
+              payment: { id: paymentId } as any,
+              notes: `Clase no reservada automáticamente por falta de turnos cargados el ${slotDate.toISOString().split('T')[0]}`
+            });
+            availableClassesToCreate.push(availableClass);
+            availableClassesCreated++;
+          }
+          
+          currentDate.setDate(currentDate.getDate() + 1);
+          continue;
+        }
+
+        // OPTIMIZACIÓN: Verificar duplicados usando el set pre-cargado
+        const reservationKey = `${dateKey}-${recurringStartTime}-${recurringEndTime}`;
+        if (existingReservationsSet.has(reservationKey)) {
           this.logger.verbose(`generateRecurringReservations -> reservation already exists timeSlot=${timeSlot.id}`);
           duplicateDates.push(slotDate.toISOString().split('T')[0]);
           currentDate.setDate(currentDate.getDate() + 1);
@@ -1980,6 +2257,24 @@ export class ReservationsService {
         if (reservedCount >= timeSlot.capacity) {
           this.logger.verbose(`generateRecurringReservations -> timeSlot full id=${timeSlot.id}`);
           noCapacityDates.push(slotDate.toISOString().split('T')[0]);
+          
+          // OPTIMIZACIÓN: Agrupar clase disponible para batch save al final
+          if (paymentId && periodEndDate && remainingClassesPeriod > 0) {
+            const availableClass = this.availableClassRepository.create({
+              intendedDate: slotDate,
+              reason: AvailableClassReason.NO_CAPACITY,
+              status: AvailableClassStatus.AVAILABLE,
+              expiresAt: periodEndDate,
+              user: { id: athleteSchedule.user.id } as any,
+              company: { id: athleteSchedule.company.id } as any,
+              subscription: { id: activeSubscription.id } as any,
+              payment: { id: paymentId } as any,
+              notes: `Clase no reservada automáticamente por falta de cupo el ${slotDate.toISOString().split('T')[0]}`
+            });
+            availableClassesToCreate.push(availableClass);
+            availableClassesCreated++;
+          }
+          
           currentDate.setDate(currentDate.getDate() + 1);
           continue;
         }
@@ -2006,17 +2301,38 @@ export class ReservationsService {
         const savedReservation = await this.reservationRepository.save(reservation);
         this.logger.log(`generateRecurringReservations -> created reservation id=${savedReservation.id} date=${slotDate.toISOString()}`);
 
+        // OPTIMIZACIÓN: Agrupar ClassUsage para batch save al final (no llamar registerClassUsage en el loop)
+        if (isGeneratingFromPayment) {
+          // Cuando generamos desde pago, crear ClassUsage directamente sin validaciones costosas
+          classUsagesToCreate.push({
+            type: ClassUsageType.RESERVATION,
+            usageDate: slotDate,
+            notes: `Reserva recurrente - ${recurringStartTime} a ${recurringEndTime}`,
+            user: { id: athleteSchedule.user.id },
+            company: { id: athleteSchedule.company.id },
+            subscription: { id: activeSubscription.id }
+          });
+          totalClassesToRegister++;
+        } else {
+          // Solo si NO es desde pago, usar el método completo
         try {
           await this.paymentsService.registerClassUsage(activeSubscription.id, {
             type: ClassUsageType.RESERVATION,
             usageDate: slotDate,
             notes: `Reserva recurrente - ${recurringStartTime} a ${recurringEndTime}`
           });
-          this.logger.log(`generateRecurringReservations -> class usage registered subscription=${activeSubscription.id}`);
+          } catch (error) {
+            await this.reservationRepository.delete({ id: savedReservation.id });
+            this.logger.error(`generateRecurringReservations -> error registering class usage date=${slotDate.toISOString()}: ${error?.message}`, error?.stack);
+            currentDate.setDate(currentDate.getDate() + 1);
+            continue;
+          }
+        }
 
+        // OPTIMIZACIÓN: Agrupar update de time slot para batch update al final
           if (timeSlot) {
             timeSlot.reservedCount = reservedCount + 1;
-            await this.timeSlotRepository.update({ id: timeSlot.id }, { reservedCount: timeSlot.reservedCount });
+          timeSlotsToUpdate.push({ id: timeSlot.id, reservedCount: timeSlot.reservedCount });
           }
 
           remainingClassesPeriod--;
@@ -2031,19 +2347,73 @@ export class ReservationsService {
           }
           
           lastGeneratedDate = new Date(slotDate);
-        } catch (error) {
-          await this.reservationRepository.delete({ id: savedReservation.id });
-          this.logger.error(`generateRecurringReservations -> error registering class usage date=${slotDate.toISOString()}: ${error?.message}`, error?.stack);
-        }
 
-      currentDate.setDate(currentDate.getDate() + 1);
+        currentDate.setDate(currentDate.getDate() + 1);
+    }
+
+    // OPTIMIZACIÓN: Batch save de ClassUsage al final (solo cuando generamos desde pago)
+    if (isGeneratingFromPayment && classUsagesToCreate.length > 0) {
+      try {
+        const classUsages = classUsagesToCreate.map(cu => this.classUsageRepository.create(cu));
+        await this.classUsageRepository.save(classUsages.flat());
+        this.logger.log(`generateRecurringReservations -> batch saved ${classUsages.length} class usages`);
+        
+        // Actualizar contadores de la suscripción en batch (una sola vez)
+        if (totalClassesToRegister > 0) {
+          await this.subscriptionRepository.increment(
+            { id: activeSubscription.id },
+            'classesUsedThisPeriod',
+            totalClassesToRegister
+          );
+          await this.subscriptionRepository.decrement(
+            { id: activeSubscription.id },
+            'classesRemainingThisPeriod',
+            totalClassesToRegister
+          );
+          await this.subscriptionRepository.increment(
+            { id: activeSubscription.id },
+            'classesUsedThisWeek',
+            totalClassesToRegister
+          );
+          await this.subscriptionRepository.decrement(
+            { id: activeSubscription.id },
+            'classesRemainingThisWeek',
+            totalClassesToRegister
+          );
+          this.logger.log(`generateRecurringReservations -> batch updated subscription counters: +${totalClassesToRegister} classes`);
+        }
+        } catch (error) {
+        this.logger.error(`generateRecurringReservations -> error batch saving class usages: ${error?.message}`);
+      }
+    }
+
+    // OPTIMIZACIÓN: Batch save de clases disponibles al final
+    if (availableClassesToCreate.length > 0) {
+      try {
+        await this.availableClassRepository.save(availableClassesToCreate);
+        this.logger.log(`generateRecurringReservations -> batch saved ${availableClassesToCreate.length} available classes`);
+      } catch (error) {
+        this.logger.error(`generateRecurringReservations -> error batch saving available classes: ${error?.message}`);
+      }
+    }
+
+    // OPTIMIZACIÓN: Batch update de time slots al final
+    if (timeSlotsToUpdate.length > 0) {
+      try {
+        await Promise.all(timeSlotsToUpdate.map(ts => 
+          this.timeSlotRepository.update({ id: ts.id }, { reservedCount: ts.reservedCount })
+        ));
+        this.logger.log(`generateRecurringReservations -> batch updated ${timeSlotsToUpdate.length} time slots`);
+      } catch (error) {
+        this.logger.error(`generateRecurringReservations -> error batch updating time slots: ${error?.message}`);
+      }
     }
 
     await this.athleteScheduleRepository.update(recurringReservationId, {
       currentOccurrences: athleteSchedule.currentOccurrences + generatedCount,
         lastGeneratedDate: lastGeneratedDate ?? athleteSchedule.lastGeneratedDate
     });
-    this.logger.log(`generateRecurringReservations -> completed recurringId=${recurringReservationId}, generated=${generatedCount}`);
+    this.logger.log(`generateRecurringReservations -> completed recurringId=${recurringReservationId}, generated=${generatedCount}, availableClasses=${availableClassesCreated}`);
     return {
       createdReservations: generatedCount,
       skippedPastDates,
@@ -2051,6 +2421,7 @@ export class ReservationsService {
       cannotBookDates,
       duplicateDates,
       missingTimeSlotDates,
+      availableClassesCreated,
     };
   } catch (error) {
       this.logger.error(`generateRecurringReservations -> fatal error recurringId=${recurringReservationId}: ${error?.message}`, error?.stack);
@@ -2059,18 +2430,75 @@ export class ReservationsService {
   }
 
   /**
+   * Obtener clases disponibles del usuario
+   */
+  async getUserAvailableClasses(userId: string): Promise<AvailableClass[]> {
+    const today = new Date();
+    today.setHours(0, 0, 0, 0);
+
+    return await this.availableClassRepository.find({
+      where: {
+        user: { id: userId },
+        status: AvailableClassStatus.AVAILABLE
+      },
+      relations: ['payment', 'subscription', 'company'],
+      order: {
+        expiresAt: 'ASC',
+        intendedDate: 'ASC'
+      }
+    }).then(classes => 
+      classes.filter(ac => {
+        const expiresAt = new Date(ac.expiresAt);
+        expiresAt.setHours(0, 0, 0, 0);
+        return expiresAt >= today;
+      })
+    );
+  }
+
+  /**
+   * Obtener conteo de clases disponibles del usuario
+   */
+  async getAvailableClassesCount(userId: string): Promise<number> {
+    const today = new Date();
+    today.setHours(0, 0, 0, 0);
+
+    const count = await this.availableClassRepository.count({
+      where: {
+        user: { id: userId },
+        status: AvailableClassStatus.AVAILABLE
+      }
+    });
+
+    // Filtrar por expiresAt >= hoy
+    const allClasses = await this.availableClassRepository.find({
+      where: {
+        user: { id: userId },
+        status: AvailableClassStatus.AVAILABLE
+      }
+    });
+
+    return allClasses.filter(ac => {
+      const expiresAt = new Date(ac.expiresAt);
+      expiresAt.setHours(0, 0, 0, 0);
+      return expiresAt >= today;
+    }).length;
+  }
+
+  /**
    * Generar reservas automáticamente cuando se acredita el pago
    * Basado en las reservas recurrentes activas del usuario
    * @param paymentStartDate Fecha de inicio (fecha de pago)
    * @param paymentEndDate Fecha de fin (fecha de pago + 31 días)
+   * @param paymentId ID del pago que generó estas reservas
    */
   async generateReservationsFromRecurringOnPayment(
     userId: string,
     companyId: string,
     subscriptionId: string,
     paymentStartDate: Date,
-    paymentEndDate: Date
-  ): Promise<{ createdReservations: number; skippedDates: string[]; errors: string[] }> {
+    paymentEndDate: Date,
+    paymentId?: string
+  ): Promise<{ createdReservations: number; skippedDates: string[]; errors: string[]; availableClassesCreated: number }> {
     this.logger.log(`generateReservationsFromRecurringOnPayment -> userId=${userId}, companyId=${companyId}, subscriptionId=${subscriptionId}`);
     
     // 1. Obtener suscripción con relaciones
@@ -2095,11 +2523,32 @@ export class ReservationsService {
 
     if (activeAthleteSchedules.length === 0) {
       this.logger.log(`generateReservationsFromRecurringOnPayment -> no active athlete schedules for user=${userId}`);
-      return { createdReservations: 0, skippedDates: [], errors: [] };
+      return { createdReservations: 0, skippedDates: [], errors: [], availableClassesCreated: 0 };
     }
 
-    // 3. Generar reservas para cada horario del atleta
+    // 3. Obtener el pago y la fecha de vencimiento del período
+    let payment: Payment | null = null;
+    let periodEndDate: Date = paymentEndDate;
+    
+    if (paymentId) {
+      payment = await this.paymentRepository.findOne({
+        where: { id: paymentId },
+        relations: ['subscription']
+      });
+      
+      if (payment && payment.subscription) {
+        const subscription = await this.subscriptionRepository.findOne({
+          where: { id: payment.subscription.id }
+        });
+        if (subscription) {
+          periodEndDate = new Date(subscription.periodEndDate);
+        }
+      }
+    }
+
+    // 4. Generar reservas para cada horario del atleta
     let totalCreated = 0;
+    let totalAvailableClassesCreated = 0;
     const allSkippedDates: string[] = [];
     const allErrors: string[] = [];
 
@@ -2109,9 +2558,12 @@ export class ReservationsService {
         const summary = await this.generateRecurringReservations(
           athleteSchedule.id,
           paymentStartDate,
-          paymentEndDate
+          paymentEndDate,
+          paymentId,
+          periodEndDate
         );
         totalCreated += summary.createdReservations;
+        totalAvailableClassesCreated += summary.availableClassesCreated || 0;
         allSkippedDates.push(...summary.skippedPastDates);
         allSkippedDates.push(...summary.noCapacityDates);
         allSkippedDates.push(...summary.cannotBookDates);
@@ -2125,13 +2577,14 @@ export class ReservationsService {
     }
 
     this.logger.log(
-      `generateReservationsFromRecurringOnPayment -> completed userId=${userId}, created=${totalCreated}, skipped=${allSkippedDates.length}, errors=${allErrors.length}`
+      `generateReservationsFromRecurringOnPayment -> completed userId=${userId}, created=${totalCreated}, availableClasses=${totalAvailableClassesCreated}, skipped=${allSkippedDates.length}, errors=${allErrors.length}`
     );
 
     return {
       createdReservations: totalCreated,
       skippedDates: [...new Set(allSkippedDates)], // Eliminar duplicados
-      errors: allErrors
+      errors: allErrors,
+      availableClassesCreated: totalAvailableClassesCreated
     };
   }
 
@@ -2146,6 +2599,122 @@ export class ReservationsService {
       relations: ['company', 'user'],
       order: { createdAt: 'DESC' }
     });
+  }
+
+  /**
+   * Obtener el estado de los horarios fijos (fechas con problemas)
+   */
+  async getRecurringReservationStatus(
+    recurringReservationId: string,
+    startDate?: Date,
+    endDate?: Date
+  ): Promise<{
+    noCapacityDates: string[];
+    missingTimeSlotDates: string[];
+    canBookDates: string[];
+  }> {
+    const athleteSchedule = await this.athleteScheduleRepository.findOne({
+      where: { id: recurringReservationId },
+      relations: ['user', 'company']
+    });
+
+    if (!athleteSchedule || athleteSchedule.status !== ScheduleStatus.ACTIVE) {
+      return {
+        noCapacityDates: [],
+        missingTimeSlotDates: [],
+        canBookDates: []
+      };
+    }
+
+    const activeSubscription = await this.getActiveSubscriptionForUser(athleteSchedule.user.id);
+    if (!activeSubscription) {
+      return {
+        noCapacityDates: [],
+        missingTimeSlotDates: [],
+        canBookDates: []
+      };
+    }
+
+    // Usar fechas proporcionadas o del período de suscripción
+    const today = new Date();
+    today.setHours(0, 0, 0, 0);
+    
+    const periodStart = startDate ? new Date(startDate) : new Date(activeSubscription.periodStartDate);
+    periodStart.setHours(0, 0, 0, 0);
+    
+    const periodEnd = endDate ? new Date(endDate) : new Date(activeSubscription.periodEndDate);
+    periodEnd.setHours(23, 59, 59, 999);
+
+    // Ajustar para empezar desde hoy o desde el inicio del período (lo que sea mayor)
+    const effectiveStart = periodStart.getTime() > today.getTime() ? periodStart : today;
+    let currentDate = new Date(effectiveStart);
+    currentDate.setHours(0, 0, 0, 0);
+
+    const noCapacityDates: string[] = [];
+    const missingTimeSlotDates: string[] = [];
+    const canBookDates: string[] = [];
+
+    let daysOfWeek: number[];
+    if (typeof athleteSchedule.daysOfWeek === 'string') {
+      daysOfWeek = athleteSchedule.daysOfWeek.split(',').map(Number);
+    } else if (Array.isArray(athleteSchedule.daysOfWeek)) {
+      daysOfWeek = (athleteSchedule.daysOfWeek as any[]).map(Number);
+    } else {
+      daysOfWeek = [];
+    }
+
+    const recurringStartTime = this.normalizeTimeString(athleteSchedule.startTime);
+    const recurringEndTime = this.normalizeTimeString(athleteSchedule.endTime);
+
+    // Verificar hasta 60 días en el futuro
+    let daysChecked = 0;
+    while (currentDate.getTime() <= periodEnd.getTime() && daysChecked < 60) {
+      const dayOfWeek = currentDate.getDay();
+      
+      if (daysOfWeek.includes(dayOfWeek)) {
+        const slotDate = new Date(currentDate);
+        slotDate.setHours(0, 0, 0, 0);
+
+        // Verificar si puede reservar
+        const canBook = await this.paymentsService.canUserBookClass(activeSubscription.id, slotDate);
+        if (!canBook) {
+          currentDate.setDate(currentDate.getDate() + 1);
+          daysChecked++;
+          continue;
+        }
+
+        // Buscar el time slot
+        const timeSlot = await this.timeSlotRepository.findOne({
+          where: {
+            date: slotDate,
+            startTime: recurringStartTime,
+            endTime: recurringEndTime,
+            company: { id: athleteSchedule.company.id }
+          },
+          relations: ['reservations']
+        });
+
+        if (!timeSlot?.id) {
+          missingTimeSlotDates.push(slotDate.toISOString().split('T')[0]);
+        } else {
+          const reservedCount = timeSlot.reservedCount ?? timeSlot.reservations?.length ?? 0;
+          if (reservedCount >= timeSlot.capacity) {
+            noCapacityDates.push(slotDate.toISOString().split('T')[0]);
+          } else {
+            canBookDates.push(slotDate.toISOString().split('T')[0]);
+          }
+        }
+      }
+
+      currentDate.setDate(currentDate.getDate() + 1);
+      daysChecked++;
+    }
+
+    return {
+      noCapacityDates,
+      missingTimeSlotDates,
+      canBookDates
+    };
   }
 
   /**
