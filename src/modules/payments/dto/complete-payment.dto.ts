@@ -34,4 +34,8 @@ export class CompletePaymentDto {
   @IsDateString()
   @IsOptional()
   startDate?: string; // Fecha de inicio de la suscripción (opcional, por defecto hoy)
+
+  @IsDateString()
+  @IsOptional()
+  paidDate?: string; // Fecha del pago (opcional, por defecto hoy)
 }

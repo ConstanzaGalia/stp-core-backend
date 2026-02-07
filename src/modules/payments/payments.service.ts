@@ -281,9 +281,9 @@ export class PaymentsService {
 
   /**
    * Obtiene las clases vencidas (semanas pasadas sin usar)
+   * Optimizado: 1 sola query en lugar de 1 por semana
    */
   private async getExpiredClasses(subscription: UserPaymentSubscription): Promise<any[]> {
-    const expiredClasses = [];
     const today = new Date();
     today.setHours(0, 0, 0, 0);
     const currentWeekStart = this.getWeekStartDate(today);
@@ -300,35 +300,46 @@ export class PaymentsService {
       subscription.paymentPlan = subscriptionWithPlan.paymentPlan;
     }
 
-    // Obtener todas las semanas desde el inicio del período hasta hoy
     const periodStart = new Date(subscription.periodStartDate);
     periodStart.setHours(0, 0, 0, 0);
     const periodStartWeek = this.getWeekStartDate(periodStart);
 
-    // Iterar por cada semana desde el inicio del período hasta la semana pasada
+    // Una sola query: obtener TODOS los usos de clases desde el inicio del período hasta la semana actual
+    const rangeEnd = new Date(currentWeekStart);
+    rangeEnd.setDate(rangeEnd.getDate() - 1); // Último día antes de la semana actual
+    rangeEnd.setHours(23, 59, 59, 999);
+
+    const allClassUsages = await this.classUsageRepository.find({
+      where: {
+        subscription: { id: subscription.id },
+        usageDate: Between(periodStartWeek, rangeEnd)
+      },
+      select: ['usageDate']
+    });
+
+    // Agrupar por semana en memoria
+    const usageByWeek = new Map<string, number>();
+    for (const usage of allClassUsages) {
+      const usageDate = new Date(usage.usageDate);
+      const weekKey = this.getWeekStartDate(usageDate).toISOString().split('T')[0];
+      usageByWeek.set(weekKey, (usageByWeek.get(weekKey) || 0) + 1);
+    }
+
+    // Iterar semanas y calcular clases vencidas
+    const expiredClasses = [];
     let weekStart = new Date(periodStartWeek);
+    const classesAllowed = subscription.paymentPlan.classesPerWeek;
+
     while (weekStart < currentWeekStart) {
-      const weekEnd = new Date(weekStart);
-      weekEnd.setDate(weekEnd.getDate() + 6); // Domingo de esa semana
-      weekEnd.setHours(23, 59, 59, 999); // Incluir todo el día
-
-      // Verificar si hay clases usadas en esa semana
-      const classesInWeek = await this.classUsageRepository.find({
-        where: {
-          subscription: { id: subscription.id },
-          usageDate: Between(weekStart, weekEnd)
-        }
-      });
-
-      const classesUsed = classesInWeek.length;
-      const classesAllowed = subscription.paymentPlan.classesPerWeek;
+      const weekKey = weekStart.toISOString().split('T')[0];
+      const classesUsed = usageByWeek.get(weekKey) || 0;
       const classesExpired = Math.max(0, classesAllowed - classesUsed);
 
       if (classesExpired > 0) {
         const weekEndDate = new Date(weekStart);
-        weekEndDate.setDate(weekEndDate.getDate() + 6); // Domingo de esa semana
+        weekEndDate.setDate(weekEndDate.getDate() + 6);
         expiredClasses.push({
-          weekStart: weekStart.toISOString().split('T')[0],
+          weekStart: weekKey,
           weekEnd: weekEndDate.toISOString().split('T')[0],
           classesAllowed,
           classesUsed,
@@ -336,7 +347,6 @@ export class PaymentsService {
         });
       }
 
-      // Avanzar a la siguiente semana
       weekStart.setDate(weekStart.getDate() + 7);
     }
 
@@ -766,10 +776,13 @@ export class PaymentsService {
 
   /**
    * Reinicia los períodos y contadores mensuales de una suscripción
+   * @param paymentDate Fecha del pago (opcional, por defecto hoy)
    */
-  private async resetMonthlyPeriod(subscription: UserPaymentSubscription, newPaymentPlan?: PaymentPlan): Promise<UserPaymentSubscription> {
-    const today = new Date();
+  private async resetMonthlyPeriod(subscription: UserPaymentSubscription, newPaymentPlan?: PaymentPlan, paymentDate?: Date): Promise<UserPaymentSubscription> {
+    // Usar la fecha del pago si se proporciona, sino usar hoy
+    const today = paymentDate ? new Date(paymentDate) : new Date();
     today.setHours(0, 0, 0, 0);
+    this.logger.log(`resetMonthlyPeriod -> using paymentDate=${today.toISOString()}`);
 
     // Si se proporciona un nuevo plan, actualizarlo
     let paymentPlanToUse = subscription.paymentPlan;
@@ -853,7 +866,12 @@ export class PaymentsService {
 
   // ===== PAGO COMPLETO (SUSCRIPCIÓN + PAGO) =====
   async completePayment(completePaymentDto: CompletePaymentDto): Promise<{ subscription: UserPaymentSubscription; payment: Payment }> {
-    const { userId, paymentPlanId, companyId, amount, paymentMethod, discount, transactionId, notes, startDate } = completePaymentDto;
+    const { userId, paymentPlanId, companyId, amount, paymentMethod, discount, transactionId, notes, startDate, paidDate } = completePaymentDto;
+    
+    // Usar la fecha del pago proporcionada o la fecha actual
+    const paymentDate = paidDate ? new Date(paidDate) : new Date();
+    paymentDate.setHours(0, 0, 0, 0);
+    this.logger.log(`completePayment -> paymentDate=${paymentDate.toISOString()}, paidDate from DTO=${paidDate || 'not provided'}`);
 
     // 1. Obtener el nuevo plan de pago
     const newPaymentPlan = await this.paymentPlanRepository.findOne({
@@ -893,13 +911,16 @@ export class PaymentsService {
 
       // Siempre reiniciar el período cuando se paga una nueva cuota mensual
       // Esto asegura que cada pago mensual reinicie los contadores
-      subscription = await this.resetMonthlyPeriod(existingSubscription, planChanged ? newPaymentPlan : undefined);
+      // Pasar la fecha del pago para calcular el período correctamente
+      subscription = await this.resetMonthlyPeriod(existingSubscription, planChanged ? newPaymentPlan : undefined, paymentDate);
     } else {
       // Si no existe suscripción activa, crear una nueva
+      // Usar la fecha del pago como startDate si no se proporciona otra fecha
+      const subscriptionStartDate = startDate || paymentDate.toISOString().split('T')[0];
       const createSubscriptionDto: CreateSubscriptionDto = {
         userId,
         paymentPlanId,
-        startDate: startDate || new Date().toISOString().split('T')[0],
+        startDate: subscriptionStartDate,
         autoRenew: true
       };
 
@@ -960,10 +981,10 @@ export class PaymentsService {
       }
     }
 
-    // Actualizar el pago
+    // Actualizar el pago usando la fecha proporcionada
     pendingPayment.status = PaymentStatus.PAID;
     pendingPayment.paymentMethod = paymentMethod;
-    pendingPayment.paidDate = new Date();
+    pendingPayment.paidDate = paymentDate; // Usar la fecha del pago proporcionada
     pendingPayment.lateFee = lateFee;
     pendingPayment.discount = discount || 0;
     pendingPayment.totalAmount = pendingPayment.amount + lateFee - (discount || 0);
@@ -1492,18 +1513,8 @@ export class PaymentsService {
       };
     }
 
-    // Renovar contadores semanales si es necesario
-    await this.renewWeeklyCounters(subscription);
-
-    // Recargar la suscripción para obtener los valores actualizados
-    const updatedSubscription = await this.subscriptionRepository.findOne({
-      where: {
-        user: { id: userId },
-        company: { id: companyId },
-        status: SubscriptionStatus.ACTIVE
-      },
-      relations: ['user', 'paymentPlan', 'company', 'payments']
-    });
+    // Renovar contadores semanales si es necesario (actualiza en memoria)
+    const updatedSubscription = await this.renewWeeklyCounters(subscription);
 
     // Obtener clases vencidas
     const expiredClasses = await this.getExpiredClasses(updatedSubscription);

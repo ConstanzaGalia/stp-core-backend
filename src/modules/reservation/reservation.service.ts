@@ -1850,6 +1850,7 @@ export class ReservationsService {
       periodEnd.setHours(23, 59, 59, 999);
     }
 
+    // endGenerationDate debe incluir el último día del período (periodEnd ya tiene 23:59:59.999)
     let endGenerationDate = new Date(periodEnd);
     if (athleteSchedule.endDate) {
       const recurrenceEnd = new Date(athleteSchedule.endDate);
@@ -1858,6 +1859,8 @@ export class ReservationsService {
         endGenerationDate = recurrenceEnd;
       }
     }
+    
+    this.logger.log(`generateRecurringReservations -> periodStart=${periodStart.toISOString()}, periodEnd=${periodEnd.toISOString()}, endGenerationDate=${endGenerationDate.toISOString()}`);
 
     let remainingOccurrences = athleteSchedule.maxOccurrences
       ? Math.max(athleteSchedule.maxOccurrences - (athleteSchedule.currentOccurrences || 0), 0)
@@ -2025,8 +2028,10 @@ export class ReservationsService {
           continue;
         }
 
+        // Verificar si la fecha actual excede el período (inclusive del último día)
+        // periodEnd ya tiene las horas en 23:59:59.999, así que comparamos con >=
         if (currentDate.getTime() > periodEnd.getTime()) {
-          this.logger.verbose(`generateRecurringReservations -> reached period end date=${currentDate.toISOString()}`);
+          this.logger.verbose(`generateRecurringReservations -> reached period end date=${currentDate.toISOString()}, periodEnd=${periodEnd.toISOString()}`);
           break;
         }
 
@@ -2851,8 +2856,25 @@ export class ReservationsService {
       throw new BadRequestException('Horario del atleta no encontrado');
     }
 
+    // Si se cambian los días de la semana, resetear lastGeneratedDate para que se regeneren las reservas
+    // Esto asegura que cuando se procese un pago, se generen reservas con los nuevos días
+    if (updateDto.daysOfWeek && Array.isArray(updateDto.daysOfWeek)) {
+      const oldDaysOfWeek = typeof athleteSchedule.daysOfWeek === 'string' 
+        ? athleteSchedule.daysOfWeek.split(',').map(Number).sort()
+        : Array.isArray(athleteSchedule.daysOfWeek) 
+          ? [...athleteSchedule.daysOfWeek].map(Number).sort()
+          : [];
+      const newDaysOfWeek = [...updateDto.daysOfWeek].map(Number).sort();
+      
+      // Si los días cambiaron, resetear lastGeneratedDate
+      if (JSON.stringify(oldDaysOfWeek) !== JSON.stringify(newDaysOfWeek)) {
+        this.logger.log(`updateRecurringReservation -> daysOfWeek changed, resetting lastGeneratedDate for schedule=${recurringReservationId}`);
+        athleteSchedule.lastGeneratedDate = null;
+      }
+    }
+    
     // Normalizar tiempos si se proporcionan
-    const normalizedStartTime = updateDto.startTime 
+    const normalizedStartTime = updateDto.startTime
       ? this.normalizeTimeString(updateDto.startTime)
       : athleteSchedule.startTime;
     
@@ -2881,6 +2903,11 @@ export class ReservationsService {
 
     if (updateDto.notes !== undefined) {
       updateData.notes = updateDto.notes;
+    }
+    
+    // Si se reseteó lastGeneratedDate, incluirlo en la actualización
+    if (athleteSchedule.lastGeneratedDate === null) {
+      updateData.lastGeneratedDate = null;
     }
 
     // Actualizar el horario
