@@ -8,6 +8,7 @@ import { ClassUsage, ClassUsageType } from '../../entities/class-usage.entity';
 import { User } from '../../entities/user.entity';
 import { Company } from '../../entities/company.entity';
 import { SubscriptionSuspension } from '../../entities/subscription-suspension.entity';
+import { Expense } from '../../entities/expense.entity';
 import { Reservation } from '../../entities/reservation.entity';
 import { TimeSlot } from '../../entities/timeSlot.entity';
 import { AthleteSchedule, ScheduleStatus } from '../../entities/athlete-schedule.entity';
@@ -21,6 +22,7 @@ import { CompletePaymentDto } from './dto/complete-payment.dto';
 import { UpdatePaymentDto } from './dto/update-payment.dto';
 import { CreateSuspensionDto } from './dto/create-suspension.dto';
 import { UpdateSuspensionDto } from './dto/update-suspension.dto';
+import { CreateExpenseDto } from './dto/create-expense.dto';
 import { MailingService } from '../mailer/mailing.service';
 import { CompanyService } from '../company/company.service';
 import { UserRole } from '../../common/enums/enums';
@@ -45,6 +47,8 @@ export class PaymentsService {
     private readonly companyRepository: Repository<Company>,
     @InjectRepository(SubscriptionSuspension)
     private readonly suspensionRepository: Repository<SubscriptionSuspension>,
+    @InjectRepository(Expense)
+    private readonly expenseRepository: Repository<Expense>,
     @InjectRepository(Reservation)
     private readonly reservationRepository: Repository<Reservation>,
     @InjectRepository(TimeSlot)
@@ -623,6 +627,106 @@ export class PaymentsService {
         hasPaid: s.payments.some(p => p.status === PaymentStatus.PAID)
       }))
     };
+  }
+
+  // ===== INGRESOS, GASTOS Y BALANCE MENSUAL =====
+  async getMonthIncome(companyId: string, year: number, month: number): Promise<{ total: number; payments: any[] }> {
+    const startDate = new Date(year, month - 1, 1);
+    const endDate = new Date(year, month, 0, 23, 59, 59, 999);
+
+    const payments = await this.paymentRepository.find({
+      where: {
+        company: { id: companyId },
+        status: PaymentStatus.PAID,
+        paidDate: Between(startDate, endDate)
+      },
+      relations: ['user', 'paymentPlan']
+    });
+
+    const total = payments.reduce((sum, p) => sum + Number(p.totalAmount || 0), 0);
+
+    return {
+      total,
+      payments: payments.map(p => ({
+        id: p.id,
+        amount: Number(p.totalAmount),
+        date: p.paidDate,
+        user: p.user ? `${p.user.name} ${p.user.lastName}` : null,
+        planName: p.paymentPlan?.name || null
+      }))
+    };
+  }
+
+  async getMonthExpenses(companyId: string, year: number, month: number): Promise<{ total: number; expenses: any[] }> {
+    const startDate = new Date(year, month - 1, 1);
+    const endDate = new Date(year, month, 0, 23, 59, 59, 999);
+
+    const expenses = await this.expenseRepository.find({
+      where: {
+        company: { id: companyId },
+        date: Between(startDate, endDate)
+      },
+      order: { date: 'DESC' }
+    });
+
+    const total = expenses.reduce((sum, e) => sum + Number(e.amount || 0), 0);
+
+    return {
+      total,
+      expenses: expenses.map(e => ({
+        id: e.id,
+        amount: Number(e.amount),
+        date: e.date,
+        description: e.description,
+        category: e.category
+      }))
+    };
+  }
+
+  async getMonthBalance(companyId: string, year: number, month: number): Promise<{
+    income: number;
+    expenses: number;
+    balance: number;
+    incomeDetail: any[];
+    expensesDetail: any[];
+  }> {
+    const [incomeResult, expensesResult] = await Promise.all([
+      this.getMonthIncome(companyId, year, month),
+      this.getMonthExpenses(companyId, year, month)
+    ]);
+
+    return {
+      income: incomeResult.total,
+      expenses: expensesResult.total,
+      balance: incomeResult.total - expensesResult.total,
+      incomeDetail: incomeResult.payments,
+      expensesDetail: expensesResult.expenses
+    };
+  }
+
+  async createExpense(companyId: string, createExpenseDto: CreateExpenseDto): Promise<Expense> {
+    const company = await this.companyRepository.findOne({ where: { id: companyId } });
+    if (!company) {
+      throw new NotFoundException('Company not found');
+    }
+
+    const expense = this.expenseRepository.create({
+      ...createExpenseDto,
+      date: new Date(createExpenseDto.date),
+      company: { id: companyId }
+    });
+
+    return await this.expenseRepository.save(expense);
+  }
+
+  async deleteExpense(expenseId: string, companyId: string): Promise<void> {
+    const expense = await this.expenseRepository.findOne({
+      where: { id: expenseId, company: { id: companyId } }
+    });
+    if (!expense) {
+      throw new NotFoundException('Expense not found');
+    }
+    await this.expenseRepository.remove(expense);
   }
 
   // ===== UTILIDADES =====

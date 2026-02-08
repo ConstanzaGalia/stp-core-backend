@@ -36,6 +36,9 @@ export class AthleteInvitation {
   @Column({ type: 'timestamp', nullable: true })
   leftAt: Date; // Fecha en que salió del centro
 
+  @Column({ type: 'boolean', default: false, name: 'is_online' })
+  isOnline: boolean; // Atleta online: no ve turnos ni horario fijo
+
   // Relaciones
   @ManyToOne(() => User, user => user.athleteInvitations, { onDelete: 'CASCADE' })
   user: User;

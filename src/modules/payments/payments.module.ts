@@ -9,6 +9,7 @@ import { ClassUsage } from '../../entities/class-usage.entity';
 import { User } from '../../entities/user.entity';
 import { Company } from '../../entities/company.entity';
 import { SubscriptionSuspension } from '../../entities/subscription-suspension.entity';
+import { Expense } from '../../entities/expense.entity';
 import { Reservation } from '../../entities/reservation.entity';
 import { TimeSlot } from '../../entities/timeSlot.entity';
 import { ReservationsModule } from '../reservation/reservation.module';
@@ -25,6 +26,7 @@ import { CompanyModule } from '../company/company.module';
       User,
       Company,
       SubscriptionSuspension,
+      Expense,
       Reservation,
       TimeSlot
     ]),
