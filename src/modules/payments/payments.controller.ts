@@ -1,4 +1,4 @@
-import { Controller, Get, Post, Put, Delete, Body, Param, Query, UseGuards } from '@nestjs/common';
+import { Controller, Get, Post, Put, Delete, Body, Param, Query, UseGuards, BadRequestException } from '@nestjs/common';
 import { AuthGuard } from '@nestjs/passport';
 import { PaymentsService } from './payments.service';
 import { CreatePaymentPlanDto } from './dto/create-payment-plan.dto';
@@ -7,6 +7,7 @@ import { CompletePaymentDto } from './dto/complete-payment.dto';
 import { UpdatePaymentDto } from './dto/update-payment.dto';
 import { CreateSuspensionDto } from './dto/create-suspension.dto';
 import { UpdateSuspensionDto } from './dto/update-suspension.dto';
+import { CreateExpenseDto } from './dto/create-expense.dto';
 
 @Controller('payments')
 @UseGuards(AuthGuard('jwt'))
@@ -119,6 +120,38 @@ export class PaymentsController {
     @Query('endDate') endDate: string
   ) {
     return await this.paymentsService.getPeriodReport(companyId, startDate, endDate);
+  }
+
+  // ===== INGRESOS, GASTOS Y BALANCE MENSUAL =====
+  @Get('balance/:companyId')
+  async getMonthBalance(
+    @Param('companyId') companyId: string,
+    @Query('year') year: string,
+    @Query('month') month: string
+  ) {
+    const yearNum = parseInt(year, 10);
+    const monthNum = parseInt(month, 10);
+    if (isNaN(yearNum) || isNaN(monthNum) || monthNum < 1 || monthNum > 12) {
+      throw new BadRequestException('Invalid year or month');
+    }
+    return await this.paymentsService.getMonthBalance(companyId, yearNum, monthNum);
+  }
+
+  @Post('expenses/:companyId')
+  async createExpense(
+    @Param('companyId') companyId: string,
+    @Body() createExpenseDto: CreateExpenseDto
+  ) {
+    return await this.paymentsService.createExpense(companyId, createExpenseDto);
+  }
+
+  @Delete('expenses/:companyId/:expenseId')
+  async deleteExpense(
+    @Param('companyId') companyId: string,
+    @Param('expenseId') expenseId: string
+  ) {
+    await this.paymentsService.deleteExpense(expenseId, companyId);
+    return { message: 'Expense deleted successfully' };
   }
 
   // ===== UTILIDADES =====

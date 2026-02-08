@@ -6,7 +6,11 @@ import { User } from '../../entities/user.entity';
 import { Company } from '../../entities/company.entity';
 import { UserRole } from '../../common/enums/enums';
 import { MailingService } from '../mailer/mailing.service';
+import { EncryptService } from '../../services/bcrypt.service';
 import { inviteStudentEmail } from '../../utils/emailTemplates';
+import { CreateAthleteDto } from './dto/create-athlete.dto';
+
+const DEFAULT_ATHLETE_PASSWORD = 'EntrenamientoSTP1@';
 
 @Injectable()
 export class AthletesService {
@@ -18,6 +22,7 @@ export class AthletesService {
     @InjectRepository(Company)
     private readonly companyRepository: Repository<Company>,
     private readonly mailingService: MailingService,
+    private readonly encryptService: EncryptService,
   ) {}
 
   // === MÉTODOS PARA ATLETAS ===
@@ -208,6 +213,82 @@ export class AthletesService {
   }
 
   // === MÉTODOS PARA EMPRESAS ===
+
+  /**
+   * El entrenador/director crea un atleta directamente vinculado al centro.
+   * La cuenta queda verificada y con contraseña temporal.
+   */
+  async createAthleteForCompany(
+    companyId: string,
+    createAthleteDto: CreateAthleteDto,
+  ): Promise<{ user: User; invitation: AthleteInvitation }> {
+    const { name, lastName, email, isOnline = false } = createAthleteDto;
+
+    // Verificar que el centro existe
+    const company = await this.companyRepository.findOne({
+      where: { id: companyId }
+    });
+    if (!company) {
+      throw new NotFoundException('Company not found');
+    }
+
+    // Verificar si el email ya está registrado
+    const existingUser = await this.userRepository.findOne({ where: { email } });
+    if (existingUser) {
+      const existingInvitation = await this.invitationRepository.findOne({
+        where: {
+          user: { id: existingUser.id },
+          company: { id: companyId }
+        }
+      });
+      if (existingInvitation?.status === InvitationStatus.APPROVED) {
+        throw new ConflictException('Este atleta ya está registrado y vinculado al centro');
+      }
+      if (existingInvitation?.status === InvitationStatus.PENDING) {
+        throw new ConflictException('Este atleta ya tiene una solicitud pendiente');
+      }
+      // Si existe pero no está vinculado, vincularlo
+      if (existingUser.role === UserRole.ATHLETE) {
+        const invitation = this.invitationRepository.create({
+          user: existingUser,
+          company: { id: companyId },
+          status: InvitationStatus.APPROVED,
+          approvedAt: new Date(),
+          isOnline: isOnline ?? false,
+        });
+        const savedInvitation = await this.invitationRepository.save(invitation);
+        await this.addUserToCompany(existingUser.id, companyId);
+        return { user: existingUser, invitation: savedInvitation };
+      }
+      throw new ConflictException('El email ya está registrado con otro rol');
+    }
+
+    // Crear nuevo usuario atleta (verificado, sin activeToken)
+    const passwordEncrypted = await this.encryptService.encryptedData(DEFAULT_ATHLETE_PASSWORD);
+    const newUser = this.userRepository.create({
+      name,
+      lastName,
+      email,
+      password: passwordEncrypted,
+      role: UserRole.ATHLETE,
+      isActive: true,
+      activeToken: null,
+    });
+    const savedUser = await this.userRepository.save(newUser);
+
+    // Crear invitación aprobada y vincular al centro
+    const invitation = this.invitationRepository.create({
+      user: savedUser,
+      company: { id: companyId },
+      status: InvitationStatus.APPROVED,
+      approvedAt: new Date(),
+      isOnline: isOnline ?? false,
+    });
+    const savedInvitation = await this.invitationRepository.save(invitation);
+    await this.addUserToCompany(savedUser.id, companyId);
+
+    return { user: savedUser, invitation: savedInvitation };
+  }
 
   /**
    * La empresa ve solicitudes pendientes
@@ -446,6 +527,31 @@ export class AthletesService {
     await this.removeUserFromCompany(athleteId, companyId);
 
     return updatedInvitation;
+  }
+
+  /**
+   * Actualizar si el atleta es online o no (para ocultar turnos/horario fijo)
+   */
+  async updateAthleteOnlineStatus(
+    companyId: string,
+    athleteId: string,
+    isOnline: boolean,
+  ): Promise<AthleteInvitation> {
+    const invitation = await this.invitationRepository.findOne({
+      where: {
+        company: { id: companyId },
+        user: { id: athleteId },
+        status: InvitationStatus.APPROVED,
+      },
+      relations: ['user'],
+    });
+
+    if (!invitation) {
+      throw new NotFoundException('Athlete not found in this company');
+    }
+
+    invitation.isOnline = isOnline;
+    return await this.invitationRepository.save(invitation);
   }
 
   // === MÉTODOS AUXILIARES PRIVADOS ===

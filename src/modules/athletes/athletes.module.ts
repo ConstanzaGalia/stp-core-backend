@@ -7,19 +7,20 @@ import { User } from '../../entities/user.entity';
 import { Company } from '../../entities/company.entity';
 import { AuthModule } from '../auth/auth.module';
 import { MailingModule } from '../mailer/mailing.module';
+import { EncryptService } from '../../services/bcrypt.service';
 
 @Module({
   imports: [
     TypeOrmModule.forFeature([
       AthleteInvitation,
-      User, 
+      User,
       Company
     ]),
     AuthModule,
     MailingModule
   ],
   controllers: [AthletesController],
-  providers: [AthletesService],
+  providers: [AthletesService, EncryptService],
   exports: [AthletesService]
 })
 export class AthletesModule {}

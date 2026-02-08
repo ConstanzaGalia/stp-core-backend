@@ -1,4 +1,4 @@
-import { Controller, Get, Post, Put, Delete, Param, Body, UseGuards } from '@nestjs/common';
+import { Controller, Get, Post, Put, Patch, Delete, Param, Body, UseGuards } from '@nestjs/common';
 import { AuthGuard } from '@nestjs/passport';
 import { GetUser } from '../auth/get-user.decorator';
 import { User } from '../../entities/user.entity';
@@ -6,7 +6,10 @@ import { AthletesService } from './athletes.service';
 import { UserRole } from '../../common/enums/enums';
 import { RequestJoinDto } from './dto/request-join-dto';
 import { ResponseInvitationDto } from './dto/response-invitation-dto';
+import { CreateAthleteDto } from './dto/create-athlete.dto';
 import { ForbiddenException } from '@nestjs/common';
+
+const STAFF_ROLES = [UserRole.STP_ADMIN, UserRole.DIRECTOR, UserRole.TRAINER, UserRole.SUB_TRAINER];
 
 @Controller('athletes')
 export class AthletesController {
@@ -85,6 +88,28 @@ export class AthletesController {
 
   // === ENDPOINTS PARA COMPAÑÍAS ===
 
+  @Post('company/:companyId/create-athlete')
+  @UseGuards(AuthGuard('jwt'))
+  async createAthlete(
+    @Param('companyId') companyId: string,
+    @Body() createAthleteDto: CreateAthleteDto,
+    @GetUser() user: User
+  ) {
+    if (!STAFF_ROLES.includes(user.role)) {
+      throw new ForbiddenException('Solo entrenadores o directores pueden crear atletas');
+    }
+    const result = await this.athletesService.createAthleteForCompany(companyId, createAthleteDto);
+    return {
+      message: 'Atleta creado correctamente. Contraseña temporal: EntrenamientoSTP1@',
+      user: {
+        id: result.user.id,
+        name: result.user.name,
+        lastName: result.user.lastName,
+        email: result.user.email,
+      },
+    };
+  }
+
   @Get('company/:companyId/pending')
   @UseGuards(AuthGuard('jwt'))
   async getPendingInvitations(@Param('companyId') companyId: string, @GetUser() companyUser: User) {
@@ -133,6 +158,20 @@ export class AthletesController {
     @Param('athleteId') athleteId: string
   ) {
     return await this.athletesService.checkAthleteInCompany(companyId, athleteId);
+  }
+
+  @Patch('company/:companyId/athletes/:athleteId/online')
+  @UseGuards(AuthGuard('jwt'))
+  async updateAthleteOnline(
+    @Param('companyId') companyId: string,
+    @Param('athleteId') athleteId: string,
+    @Body('isOnline') isOnline: boolean,
+    @GetUser() user: User
+  ) {
+    if (!STAFF_ROLES.includes(user.role)) {
+      throw new ForbiddenException('Solo entrenadores o directores pueden actualizar el estado online');
+    }
+    return await this.athletesService.updateAthleteOnlineStatus(companyId, athleteId, isOnline);
   }
 
   @Delete('company/:companyId/athletes/:athleteId')
