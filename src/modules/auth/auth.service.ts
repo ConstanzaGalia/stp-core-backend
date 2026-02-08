@@ -150,10 +150,10 @@ export class AuthService {
     }
   }
 
-  async activateUser(activateUserDto: ActivateUserDTO, id: string): Promise<User> {
+  async activateUser(activateUserDto: ActivateUserDTO): Promise<User> {
     try {
       const { token } = activateUserDto;
-      const user = await this.userRepository.findOne({where: {id: id, activeToken: token, isActive: false}});
+      const user = await this.userRepository.findOne({where: {activeToken: token, isActive: false}});
       if (!user) {
         throw new UnprocessableEntityException(
           'User not found or is already active',

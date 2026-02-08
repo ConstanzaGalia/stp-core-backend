@@ -88,14 +88,12 @@ export class AuthController {
     });
   }
 
-  @UseGuards(AuthGuard('jwt'))
   @Post('/activate-account')
   async activateAccount(
-    @Request() req,
     @Res() res,
     @Body() activateUserDto: ActivateUserDTO,
   ): Promise<ActivateResponseDto> {
-    const user = await this.authService.activateUser(activateUserDto, req.user.id);
+    const user = await this.authService.activateUser(activateUserDto);
     const payload: JwtPayload = {
       id: user.id,
       email: user.email,
