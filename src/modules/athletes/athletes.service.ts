@@ -7,7 +7,7 @@ import { Company } from '../../entities/company.entity';
 import { UserRole } from '../../common/enums/enums';
 import { MailingService } from '../mailer/mailing.service';
 import { EncryptService } from '../../services/bcrypt.service';
-import { inviteStudentEmail } from '../../utils/emailTemplates';
+import { inviteStudentEmail, approvalStudentEmail } from '../../utils/emailTemplates';
 import { CreateAthleteDto } from './dto/create-athlete.dto';
 
 const DEFAULT_ATHLETE_PASSWORD = 'EntrenamientoSTP1@';
@@ -335,23 +335,17 @@ export class AthletesService {
     // Agregar al centro
     await this.addUserToCompany(invitation.user.id, companyId);
 
-    // Enviar email de confirmación
+    // Enviar email al alumno confirmando que ya forma parte del centro
     try {
-      const mail = inviteStudentEmail(
+      const dashboardUrl = `${process.env.FRONTEND_URL || 'http://localhost:3000'}/dashboard-atleta`;
+      const mail = approvalStudentEmail(
         invitation.user.email,
         invitation.user.name,
         invitation.company.name,
-        `${process.env.FRONTEND_URL || 'http://localhost:3000'}/dashboard`,
-        process.env.RESEND_FROM_EMAIL || 'noreply@stp.com'
+        dashboardUrl,
+        process.env.RESEND_FROM_EMAIL || 'noreply@stp.com',
+        companyResponse
       );
-      
-      // Modificar el template para confrmación en lugar de invitación
-      mail.subject = `¡Tu solicitud ha sido aprobada por ${invitation.company.name}!`;
-      mail.html = mail.html.replace(
-        'te invita a formar parte de su centro de entrenamiento',
-        'ha aprobado tu solicitud ' + (companyResponse ? `: "${companyResponse}"` : '')
-      );
-
       await this.mailingService.sendMail(mail);
     } catch (error) {
       console.error('Error sending approval email:', error);

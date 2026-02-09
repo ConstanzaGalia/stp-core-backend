@@ -3,17 +3,32 @@ import { AuthGuard } from '@nestjs/passport';
 import { GetUser } from '../auth/get-user.decorator';
 import { User } from '../../entities/user.entity';
 import { AthletesService } from './athletes.service';
+import { CompanyService } from '../company/company.service';
 import { UserRole } from '../../common/enums/enums';
 import { RequestJoinDto } from './dto/request-join-dto';
 import { ResponseInvitationDto } from './dto/response-invitation-dto';
 import { CreateAthleteDto } from './dto/create-athlete.dto';
 import { ForbiddenException } from '@nestjs/common';
 
-const STAFF_ROLES = [UserRole.STP_ADMIN, UserRole.DIRECTOR, UserRole.TRAINER, UserRole.SUB_TRAINER];
+const STAFF_ROLES = [UserRole.STP_ADMIN, UserRole.DIRECTOR, UserRole.TRAINER, UserRole.SUB_TRAINER, UserRole.SECRETARIA];
 
 @Controller('athletes')
 export class AthletesController {
-  constructor(private readonly athletesService: AthletesService) {}
+  constructor(
+    private readonly athletesService: AthletesService,
+    private readonly companyService: CompanyService,
+  ) {}
+
+  private async ensureUserBelongsToCompany(user: User, companyId: string): Promise<void> {
+    if (!STAFF_ROLES.includes(user.role)) {
+      throw new ForbiddenException('No tienes permiso para gestionar solicitudes de este centro');
+    }
+    const companies = await this.companyService.findCompaniesByUser(user.id);
+    const belongs = companies.some((c) => c.id === companyId);
+    if (!belongs) {
+      throw new ForbiddenException('No perteneces a este centro');
+    }
+  }
 
   // === ENDPOINTS PARA ATLETAS ===
 
@@ -113,7 +128,7 @@ export class AthletesController {
   @Get('company/:companyId/pending')
   @UseGuards(AuthGuard('jwt'))
   async getPendingInvitations(@Param('companyId') companyId: string, @GetUser() companyUser: User) {
-    // Verificar que el usuario pertenece a la empresa y tiene permisos
+    await this.ensureUserBelongsToCompany(companyUser, companyId);
     return await this.athletesService.getPendingInvitations(companyId);
   }
 
@@ -122,8 +137,10 @@ export class AthletesController {
   async approveInvitation(
     @Param('companyId') companyId: string,
     @Param('invitationId') invitationId: string,
-    @Body() responseDto: ResponseInvitationDto
+    @Body() responseDto: ResponseInvitationDto,
+    @GetUser() user: User
   ) {
+    await this.ensureUserBelongsToCompany(user, companyId);
     return await this.athletesService.approveInvitation(
       companyId,
       invitationId,
@@ -136,8 +153,10 @@ export class AthletesController {
   async rejectInvitation(
     @Param('companyId') companyId: string,
     @Param('invitationId') invitationId: string,
-    @Body() responseDto: ResponseInvitationDto
+    @Body() responseDto: ResponseInvitationDto,
+    @GetUser() user: User
   ) {
+    await this.ensureUserBelongsToCompany(user, companyId);
     return await this.athletesService.rejectInvitation(
       companyId,
       invitationId,

@@ -3,6 +3,7 @@ export enum UserRole {
   DIRECTOR = 'DIRECTOR',
   TRAINER = 'TRAINER',
   SUB_TRAINER = 'SUB_TRAINER',
+  SECRETARIA = 'SECRETARIA',
   ATHLETE = 'ATHLETE',
 }
 

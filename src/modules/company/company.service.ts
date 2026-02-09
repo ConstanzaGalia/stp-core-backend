@@ -74,7 +74,7 @@ export class CompanyService {
         where: {
           users: {
             id: userId,
-            role: In([UserRole.TRAINER, UserRole.DIRECTOR]),
+            role: In([UserRole.TRAINER, UserRole.DIRECTOR, UserRole.SECRETARIA]),
           },
         },
         relations: ['users'],

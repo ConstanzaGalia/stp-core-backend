@@ -157,6 +157,61 @@ export const inviteStudentEmail = (
   return mail;
 };
 
+/**
+ * Email cuando el centro aprueba la solicitud del alumno (ya forma parte del centro).
+ * Mismo estilo que el correo de verificación (registerEmail).
+ */
+export const approvalStudentEmail = (
+  email: string,
+  name: string,
+  companyName: string,
+  dashboardUrl: string,
+  from: string,
+  companyMessage?: string
+) => {
+  if (!email || email.trim() === '') {
+    throw new Error('Email is required for approval notification');
+  }
+  const mail = {
+    to: email.trim(),
+    subject: `¡Tu solicitud fue aprobada! Ya formás parte de ${companyName}`,
+    from,
+    html: `
+      <!DOCTYPE html>
+      <html>
+        <head>
+          <meta charset="utf-8">
+          <title>Solicitud aprobada - STP</title>
+        </head>
+        <body style="font-family: Arial, sans-serif; margin: 0; padding: 0; background-color: #f4f4f4;">
+          <div style="max-width: 600px; margin: 0 auto; background-color: white; padding: 40px;">
+            <div style="text-align: center; margin-bottom: 30px;">
+              <h1 style="color: #333; margin: 0;">STP</h1>
+              <p style="color: #666; margin: 10px 0;">Entrenamiento Profesional</p>
+            </div>
+            
+            <h2 style="color: #333; text-align: center;">¡Hola ${name}!</h2>
+            <h3 style="color: #555; text-align: center;">Tu solicitud para unirte a ${companyName} fue aprobada</h3>
+            
+            <div style="background-color: #f8f9fa; padding: 30px; border-radius: 10px; text-align: center; margin: 30px 0;">
+              <p style="color: #666; margin-bottom: 20px;">Ya formás parte del centro de entrenamiento. Hacé click en el botón para acceder a tu panel de atleta:</p>
+              ${companyMessage ? `<p style="color: #555; margin-bottom: 20px; font-style: italic;">"${companyMessage}"</p>` : ''}
+              <a href="${dashboardUrl}" style="background-color: #007bff; color: white; padding: 15px 30px; text-decoration: none; border-radius: 5px; font-size: 16px; font-weight: bold; display: inline-block;">
+                Ir a mi dashboard
+              </a>
+            </div>
+            
+            <p style="color: #666; text-align: center; font-size: 14px;">
+              Si no solicitaste unirte a este centro, podés ignorar este email.
+            </p>
+          </div>
+        </body>
+      </html>
+    `,
+  };
+  return mail;
+};
+
 export const notifyTeachersAvailableClassesEmail = (
   email: string,
   trainerName: string,
