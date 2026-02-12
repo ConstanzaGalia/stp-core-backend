@@ -26,10 +26,10 @@ export class ClassUsage {
   @Column({ type: 'boolean', default: false })
   isExpired: boolean; // Si la clase expiró sin usar
 
-  @ManyToOne(() => User, user => user.classUsages)
+  @ManyToOne(() => User, user => user.classUsages, { onDelete: 'CASCADE' })
   user: User;
 
-  @ManyToOne(() => Company, company => company.classUsages)
+  @ManyToOne(() => Company, company => company.classUsages, { onDelete: 'CASCADE' })
   company: Company;
 
   @ManyToOne(() => UserPaymentSubscription, subscription => subscription.classUsages)

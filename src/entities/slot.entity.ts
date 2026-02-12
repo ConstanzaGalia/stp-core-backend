@@ -13,9 +13,9 @@ export class Slot {
   @Column()
   time: string;
 
-  @ManyToOne(() => User, user => user.slots)
+  @ManyToOne(() => User, user => user.slots, { onDelete: 'CASCADE' })
   user: User;
 
-  @ManyToOne(() => Company, company => company.slots)
+  @ManyToOne(() => Company, company => company.slots, { onDelete: 'CASCADE' })
   company: Company;
 }

@@ -31,7 +31,7 @@ export class TimeSlot {
   @Column({ type: 'boolean', default: false })
   isIntermediateSlot: boolean; // Indica si es un turno intermedio/superpuesto
 
-  @ManyToOne(() => Company, company => company.timeSlots)
+  @ManyToOne(() => Company, company => company.timeSlots, { onDelete: 'CASCADE' })
   company: Company;
 
   @OneToMany(() => Reservation, reservation => reservation.timeSlot)

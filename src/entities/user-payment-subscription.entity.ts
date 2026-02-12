@@ -66,10 +66,10 @@ export class UserPaymentSubscription {
   @Column({ type: 'text', nullable: true })
   notes: string; // Notas sobre la suscripción
 
-  @ManyToOne(() => User, user => user.paymentSubscriptions)
+  @ManyToOne(() => User, user => user.paymentSubscriptions, { onDelete: 'CASCADE' })
   user: User;
 
-  @ManyToOne(() => Company, company => company.userPaymentSubscriptions)
+  @ManyToOne(() => Company, company => company.userPaymentSubscriptions, { onDelete: 'CASCADE' })
   company: Company;
 
   @ManyToOne(() => PaymentPlan, paymentPlan => paymentPlan.userSubscriptions)

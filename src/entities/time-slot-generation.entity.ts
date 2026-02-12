@@ -24,7 +24,7 @@ export class TimeSlotGeneration {
   @Column({ type: 'int', default: 0 })
   daysWithoutConfig: number;
 
-  @ManyToOne(() => Company, company => company.timeSlotGenerations)
+  @ManyToOne(() => Company, company => company.timeSlotGenerations, { onDelete: 'CASCADE' })
   company: Company;
 
   @CreateDateColumn()

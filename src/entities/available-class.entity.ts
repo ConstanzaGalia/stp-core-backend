@@ -40,10 +40,10 @@ export class AvailableClass {
   @Column({ type: 'text', nullable: true })
   notes: string; // Notas adicionales
 
-  @ManyToOne(() => User, user => user.availableClasses)
+  @ManyToOne(() => User, user => user.availableClasses, { onDelete: 'CASCADE' })
   user: User;
 
-  @ManyToOne(() => Company, company => company.availableClasses)
+  @ManyToOne(() => Company, company => company.availableClasses, { onDelete: 'CASCADE' })
   company: Company;
 
   @ManyToOne(() => UserPaymentSubscription, subscription => subscription.availableClasses)

@@ -33,7 +33,7 @@ export class ScheduleConfig {
   @Column({ type: 'boolean', default: true })
   isActive: boolean;
 
-  @ManyToOne(() => Company, company => company.scheduleConfigs)
+  @ManyToOne(() => Company, company => company.scheduleConfigs, { onDelete: 'CASCADE' })
   company: Company;
 
   @CreateDateColumn()
