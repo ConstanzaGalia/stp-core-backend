@@ -47,7 +47,7 @@ export class PaymentPlan {
   @Column({ type: 'int', default: 0 })
   maxRolloverClasses: number; // Máximo de clases que pueden pasar al siguiente mes
 
-  @ManyToOne(() => Company, company => company.paymentPlans)
+  @ManyToOne(() => Company, company => company.paymentPlans, { onDelete: 'CASCADE' })
   company: Company;
 
   @OneToMany(() => Payment, payment => payment.paymentPlan)

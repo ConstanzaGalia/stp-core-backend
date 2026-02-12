@@ -27,7 +27,7 @@ export class ScheduleException {
   @Column({ type: 'boolean', default: true })
   isActive: boolean; // Si la excepción está activa
 
-  @ManyToOne(() => Company, company => company.scheduleExceptions)
+  @ManyToOne(() => Company, company => company.scheduleExceptions, { onDelete: 'CASCADE' })
   company: Company;
 
   @CreateDateColumn()

@@ -13,9 +13,9 @@ export class TrainingPlan {
   @Column()
   description: string;
 
-  @ManyToOne(() => User, user => user.trainingPlans)
+  @ManyToOne(() => User, user => user.trainingPlans, { onDelete: 'CASCADE' })
   user: User;
 
-  @ManyToOne(() => Company, company => company.trainingPlans)
+  @ManyToOne(() => Company, company => company.trainingPlans, { onDelete: 'CASCADE' })
   company: Company;
 }
