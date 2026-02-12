@@ -7,6 +7,7 @@ import { User } from 'src/entities/user.entity';
 import { TypeOrmModule } from '@nestjs/typeorm';
 import { AuthModule } from '../auth/auth.module';
 import { MailingModule } from '../mailer/mailing.module';
+import { EncryptService } from 'src/services/bcrypt.service';
 
 @Module({
   imports: [
@@ -15,7 +16,7 @@ import { MailingModule } from '../mailer/mailing.module';
     MailingModule
   ],
   controllers: [CompanyController],
-  providers: [CompanyService, Pagination],
+  providers: [CompanyService, Pagination, EncryptService],
   exports: [CompanyService]
 })
 export class CompanyModule {}

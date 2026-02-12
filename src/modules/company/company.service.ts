@@ -18,10 +18,19 @@ import { User } from 'src/entities/user.entity';
 import { UserRole } from 'src/common/enums/enums';
 import { AssociateTrainerDto } from './dto/associate-trainer.dto';
 import { JoinCompanyDto } from './dto/join-company.dto';
+import { AddStaffDto } from './dto/add-staff.dto';
 import { TrainerResponseDto } from './dto/trainer-response.dto';
 import { TrainerDetailResponseDto } from './dto/trainer-detail-response.dto';
 import { MailingService } from '../mailer/mailing.service';
 import { inviteStudentEmail } from '../../utils/emailTemplates';
+import { EncryptService } from 'src/services/bcrypt.service';
+
+const STAFF_ROLES = [
+  UserRole.TRAINER,
+  UserRole.SUB_TRAINER,
+  UserRole.DIRECTOR,
+  UserRole.SECRETARIA,
+];
 
 @Injectable()
 export class CompanyService {
@@ -32,6 +41,7 @@ export class CompanyService {
     private readonly userRepository: Repository<User>,
     private pagination: Pagination,
     private readonly mailingService: MailingService,
+    private readonly encryptService: EncryptService,
   ) {}
   public async create(createCompanyDto: CreateCompanyDto, user: User) {
     try {
@@ -224,20 +234,19 @@ export class CompanyService {
     );
 
     if (!director) {
-      throw new ForbiddenException('Only directors can remove trainers from companies');
+      throw new ForbiddenException('Only directors can remove staff from companies');
     }
 
-    // Verificar que el entrenador existe en la empresa
-    const trainer = company.users.find(user => 
-      user.id === trainerId && 
-      (user.role === UserRole.TRAINER || user.role === UserRole.SUB_TRAINER)
+    // Verificar que el miembro existe en la empresa (cualquier rol de staff)
+    const staffMember = company.users.find(user => 
+      user.id === trainerId && STAFF_ROLES.includes(user.role)
     );
 
-    if (!trainer) {
-      throw new NotFoundException('Trainer not found in this company');
+    if (!staffMember) {
+      throw new NotFoundException('Miembro del equipo no encontrado en este centro');
     }
 
-    // Remover el entrenador de la empresa
+    // Remover el miembro de la empresa
     company.users = company.users.filter(user => user.id !== trainerId);
     await this.companyRepository.save(company);
   }
@@ -380,7 +389,7 @@ export class CompanyService {
     };
   }
 
-  // Método para obtener todos los entrenadores de un centro
+  // Método para obtener todo el personal del centro (entrenadores, directores, secretarias)
   public async getAllCompanyTrainers(companyId: string): Promise<TrainerResponseDto[]> {
     // Verificar que la empresa existe
     const company = await this.companyRepository.findOne({
@@ -397,25 +406,183 @@ export class CompanyService {
       throw new BadRequestException('Company is not active');
     }
 
-    // Filtrar solo entrenadores (TRAINER y SUB_TRAINER)
-    const trainers = company.users.filter(user => 
-      user.role === UserRole.TRAINER || user.role === UserRole.SUB_TRAINER
+    // Filtrar todo el staff: entrenadores, directores, secretarias (excluir atletas)
+    const staff = company.users.filter(user => STAFF_ROLES.includes(user.role));
+
+    // Mapear a DTO de respuesta (incluye specialty/experience para compatibilidad con frontend)
+    return staff.map(member => ({
+      id: member.id,
+      email: member.email,
+      name: member.name,
+      lastName: member.lastName,
+      role: member.role,
+      isActive: member.isActive,
+      phoneNumber: member.phoneNumber,
+      country: member.country,
+      city: member.city,
+      imageProfile: member.imageProfile,
+      associationDate: member.created_at,
+      specialty: member.specialty,
+      experience: member.experienceYears?.toString(),
+      status: member.isActive ? 'active' : 'inactive',
+      athletesCount: 0, // Se puede calcular si se necesita
+    }));
+  }
+
+  // Método para añadir un miembro del equipo al centro (con rol)
+  public async addStaffToCompany(
+    companyId: string,
+    addStaffDto: AddStaffDto,
+  ): Promise<TrainerResponseDto> {
+    const company = await this.companyRepository.findOne({
+      where: { id: companyId },
+      relations: ['users'],
+    });
+
+    if (!company) {
+      throw new NotFoundException('Company not found');
+    }
+
+    if (company.isDelete) {
+      throw new BadRequestException('Company is not active');
+    }
+
+    let user = await this.userRepository.findOne({
+      where: { email: addStaffDto.email },
+    });
+
+    if (user) {
+      // Usuario existente: asociar al centro y actualizar rol si es staff
+      const isAlreadyInCompany = company.users.some(u => u.id === user.id);
+      if (isAlreadyInCompany) {
+        throw new ConflictException('Este usuario ya pertenece al centro');
+      }
+
+      if (user.role === UserRole.ATHLETE) {
+        throw new BadRequestException('No se puede agregar un atleta como miembro del equipo. Use la sección de atletas.');
+      }
+
+      // Actualizar rol si el nuevo rol es diferente y es un rol de staff
+      if (STAFF_ROLES.includes(addStaffDto.role) && user.role !== addStaffDto.role) {
+        user.role = addStaffDto.role;
+        if (addStaffDto.specialty && (user.role === UserRole.TRAINER || user.role === UserRole.SUB_TRAINER)) {
+          user.specialty = addStaffDto.specialty;
+        }
+        if (addStaffDto.experience && (user.role === UserRole.TRAINER || user.role === UserRole.SUB_TRAINER)) {
+          user.experienceYears = parseInt(addStaffDto.experience, 10) || undefined;
+        }
+        if (addStaffDto.phone) {
+          user.phoneNumber = parseInt(addStaffDto.phone.replace(/\D/g, ''), 10) || user.phoneNumber;
+        }
+        await this.userRepository.save(user);
+      }
+
+      company.users.push(user);
+      await this.companyRepository.save(company);
+
+      return {
+        id: user.id,
+        email: user.email,
+        name: user.name,
+        lastName: user.lastName,
+        role: user.role,
+        isActive: user.isActive,
+        phoneNumber: user.phoneNumber,
+        country: user.country,
+        city: user.city,
+        imageProfile: user.imageProfile,
+        associationDate: user.created_at,
+        specialty: user.specialty,
+        experience: user.experienceYears?.toString(),
+        status: user.isActive ? 'active' : 'inactive',
+        athletesCount: 0,
+      };
+    }
+
+    // Usuario nuevo: crear y asociar (requiere contraseña)
+    if (!addStaffDto.password || addStaffDto.password.length < 8) {
+      throw new BadRequestException('Para crear un nuevo usuario se requiere una contraseña de al menos 8 caracteres');
+    }
+
+    const passwordEncrypted = await this.encryptService.encryptedData(addStaffDto.password);
+    const newUser = this.userRepository.create({
+      name: addStaffDto.name,
+      lastName: addStaffDto.lastName || addStaffDto.name,
+      email: addStaffDto.email,
+      password: passwordEncrypted,
+      role: addStaffDto.role,
+      phoneNumber: addStaffDto.phone ? parseInt(addStaffDto.phone.replace(/\D/g, ''), 10) : undefined,
+      specialty: addStaffDto.specialty,
+      experienceYears: addStaffDto.experience ? parseInt(addStaffDto.experience, 10) : undefined,
+      isActive: false, // Requiere activación
+    });
+
+    const savedUser = await this.userRepository.save(newUser);
+    company.users.push(savedUser);
+    await this.companyRepository.save(company);
+
+    return {
+      id: savedUser.id,
+      email: savedUser.email,
+      name: savedUser.name,
+      lastName: savedUser.lastName,
+      role: savedUser.role,
+      isActive: savedUser.isActive,
+      phoneNumber: savedUser.phoneNumber,
+      country: savedUser.country,
+      city: savedUser.city,
+      imageProfile: savedUser.imageProfile,
+      associationDate: savedUser.created_at,
+      specialty: savedUser.specialty,
+      experience: savedUser.experienceYears?.toString(),
+      status: savedUser.isActive ? 'active' : 'inactive',
+      athletesCount: 0,
+    };
+  }
+
+  // Método para actualizar el rol de un miembro del equipo
+  public async updateStaffRole(
+    companyId: string,
+    staffId: string,
+    newRole: UserRole.TRAINER | UserRole.SUB_TRAINER | UserRole.DIRECTOR | UserRole.SECRETARIA,
+  ): Promise<TrainerResponseDto> {
+    const company = await this.companyRepository.findOne({
+      where: { id: companyId },
+      relations: ['users'],
+    });
+
+    if (!company) {
+      throw new NotFoundException('Company not found');
+    }
+
+    const staffMember = company.users.find(
+      u => u.id === staffId && STAFF_ROLES.includes(u.role),
     );
 
-    // Mapear a DTO de respuesta
-    return trainers.map(trainer => ({
-      id: trainer.id,
-      email: trainer.email,
-      name: trainer.name,
-      lastName: trainer.lastName,
-      role: trainer.role,
-      isActive: trainer.isActive,
-      phoneNumber: trainer.phoneNumber,
-      country: trainer.country,
-      city: trainer.city,
-      imageProfile: trainer.imageProfile,
-      associationDate: trainer.created_at, // Usar fecha de creación como aproximación
-    }));
+    if (!staffMember) {
+      throw new NotFoundException('Miembro del equipo no encontrado en este centro');
+    }
+
+    if (!STAFF_ROLES.includes(newRole)) {
+      throw new BadRequestException('Rol inválido');
+    }
+
+    staffMember.role = newRole;
+    await this.userRepository.save(staffMember);
+
+    return {
+      id: staffMember.id,
+      email: staffMember.email,
+      name: staffMember.name,
+      lastName: staffMember.lastName,
+      role: staffMember.role,
+      isActive: staffMember.isActive,
+      phoneNumber: staffMember.phoneNumber,
+      country: staffMember.country,
+      city: staffMember.city,
+      imageProfile: staffMember.imageProfile,
+      associationDate: staffMember.created_at,
+    };
   }
 
   // Método para obtener todos los alumnos de un centro
@@ -769,7 +936,7 @@ export class CompanyService {
     }));
   }
 
-  // Método para obtener información detallada de un entrenador específico
+  // Método para obtener información detallada de un miembro del equipo (entrenador, director, secretaria)
   public async getTrainerDetail(
     companyId: string,
     trainerId: string,
@@ -789,33 +956,31 @@ export class CompanyService {
       throw new BadRequestException('Company is not active');
     }
 
-    // Buscar el entrenador específico en la empresa
-    const trainer = company.users.find(user => 
-      user.id === trainerId && 
-      (user.role === UserRole.TRAINER || user.role === UserRole.SUB_TRAINER)
+    // Buscar el miembro del equipo en la empresa (cualquier rol de staff)
+    const member = company.users.find(user => 
+      user.id === trainerId && STAFF_ROLES.includes(user.role)
     );
 
-    if (!trainer) {
-      throw new NotFoundException('Trainer not found in this company');
+    if (!member) {
+      throw new NotFoundException('Miembro del equipo no encontrado en este centro');
     }
 
-    // Retornar información detallada del entrenador
     return {
-      id: trainer.id,
-      email: trainer.email,
-      name: trainer.name,
-      lastName: trainer.lastName,
-      role: trainer.role,
-      isActive: trainer.isActive,
-      phoneNumber: trainer.phoneNumber,
-      country: trainer.country,
-      city: trainer.city,
-      imageProfile: trainer.imageProfile,
-      associationDate: trainer.created_at,
+      id: member.id,
+      email: member.email,
+      name: member.name,
+      lastName: member.lastName,
+      role: member.role,
+      isActive: member.isActive,
+      phoneNumber: member.phoneNumber,
+      country: member.country,
+      city: member.city,
+      imageProfile: member.imageProfile,
+      associationDate: member.created_at,
       companyId: company.id,
       companyName: company.name,
-      createdAt: trainer.created_at,
-      updatedAt: trainer.updated_at,
+      createdAt: member.created_at,
+      updatedAt: member.updated_at,
     };
   }
 
