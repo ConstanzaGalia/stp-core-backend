@@ -7,6 +7,7 @@ import { User } from '../../entities/user.entity';
 import { Company } from '../../entities/company.entity';
 import { AuthModule } from '../auth/auth.module';
 import { MailingModule } from '../mailer/mailing.module';
+import { CompanyModule } from '../company/company.module';
 import { EncryptService } from '../../services/bcrypt.service';
 
 @Module({
@@ -17,7 +18,8 @@ import { EncryptService } from '../../services/bcrypt.service';
       Company
     ]),
     AuthModule,
-    MailingModule
+    MailingModule,
+    CompanyModule
   ],
   controllers: [AthletesController],
   providers: [AthletesService, EncryptService],
