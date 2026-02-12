@@ -12,4 +12,8 @@ export class TrainerResponseDto {
   city?: string;
   imageProfile?: string;
   associationDate?: Date;
+  specialty?: string;
+  experience?: string;
+  status?: string;
+  athletesCount?: number;
 } 

@@ -9,11 +9,13 @@ import {
   UseGuards,
   Query,
   Req,
+  BadRequestException,
 } from '@nestjs/common';
 import { CompanyService } from './company.service';
 import { CreateCompanyDto } from './dto/create-company.dto';
 import { UpdateCompanyDto } from './dto/update-company.dto';
 import { AssociateTrainerDto } from './dto/associate-trainer.dto';
+import { AddStaffDto } from './dto/add-staff.dto';
 import { JoinCompanyDto } from './dto/join-company.dto';
 import { TrainerResponseDto } from './dto/trainer-response.dto';
 import { TrainerDetailResponseDto } from './dto/trainer-detail-response.dto';
@@ -22,6 +24,7 @@ import { PaginationQueryDto } from 'src/common/pagination/DTOs/pagination-query.
 import { PaginatedListDto } from 'src/common/pagination/DTOs/paginated-list.dto';
 import { GetUser } from '../auth/get-user.decorator';
 import { User } from 'src/entities/user.entity';
+import { UserRole } from 'src/common/enums/enums';
 
 @Controller('company')
 export class CompanyController {
@@ -124,11 +127,48 @@ export class CompanyController {
     return await this.companyService.joinCompanyAsTrainer(companyId, joinCompanyDto);
   }
 
-  // Endpoints para obtener entrenadores del centro
+  // Endpoints para obtener entrenadores/staff del centro
   @Get(':companyId/trainers/all')
   @UseGuards(AuthGuard('jwt'))
   public async getAllCompanyTrainers(@Param('companyId') companyId: string) {
     return await this.companyService.getAllCompanyTrainers(companyId);
+  }
+
+  @Post(':companyId/trainers')
+  @UseGuards(AuthGuard('jwt'))
+  public async addStaffToCompany(
+    @Param('companyId') companyId: string,
+    @Body() addStaffDto: AddStaffDto,
+  ) {
+    const result = await this.companyService.addStaffToCompany(
+      companyId,
+      addStaffDto,
+    );
+    return { data: result };
+  }
+
+  @Patch(':companyId/trainers/:trainerId/role')
+  @UseGuards(AuthGuard('jwt'))
+  public async updateStaffRole(
+    @Param('companyId') companyId: string,
+    @Param('trainerId') trainerId: string,
+    @Body() body: { role: UserRole },
+  ) {
+    const validRoles = [
+      UserRole.TRAINER,
+      UserRole.SUB_TRAINER,
+      UserRole.DIRECTOR,
+      UserRole.SECRETARIA,
+    ];
+    if (!validRoles.includes(body.role)) {
+      throw new BadRequestException('Rol inválido');
+    }
+    const result = await this.companyService.updateStaffRole(
+      companyId,
+      trainerId,
+      body.role as UserRole.TRAINER | UserRole.SUB_TRAINER | UserRole.DIRECTOR | UserRole.SECRETARIA,
+    );
+    return { data: result };
   }
 
   @Get(':companyId/trainers')
