@@ -184,6 +184,11 @@ export class PaymentsController {
     return await this.paymentsService.getStudentsWithPayments(companyId);
   }
 
+  @Get('company/:companyId/overdue')
+  async getOverduePayments(@Param('companyId') companyId: string) {
+    return await this.paymentsService.getOverduePayments(companyId);
+  }
+
   // ===== GESTIÓN DE PAGOS INDIVIDUALES =====
   @Put('payment/:paymentId')
   async updatePayment(
