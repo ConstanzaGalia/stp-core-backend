@@ -170,6 +170,16 @@ export class AthletesController {
     return await this.athletesService.getCompanyAthletes(companyId);
   }
 
+  @Get('company/:companyId/birthdays-today')
+  @UseGuards(AuthGuard('jwt'))
+  async getBirthdaysToday(
+    @Param('companyId') companyId: string,
+    @GetUser() user: User,
+  ) {
+    await this.ensureUserBelongsToCompany(user, companyId);
+    return await this.athletesService.getBirthdaysToday(companyId);
+  }
+
   @Get('company/:companyId/check-athlete/:athleteId')
   @UseGuards(AuthGuard('jwt'))
   async checkAthleteInCompany(

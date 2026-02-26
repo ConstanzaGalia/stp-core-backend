@@ -756,6 +756,38 @@ export class PaymentsService {
   }
 
   // ===== GESTIÓN DE ALUMNOS Y PAGOS =====
+  /**
+   * Obtiene las cuotas vencidas del centro (pagos pendientes con fecha de vencimiento ya pasada).
+   */
+  async getOverduePayments(companyId: string): Promise<any[]> {
+    const today = new Date();
+    today.setHours(23, 59, 59, 999);
+
+    const overduePayments = await this.paymentRepository.find({
+      where: {
+        company: { id: companyId },
+        status: PaymentStatus.PENDING,
+        dueDate: LessThanOrEqual(today),
+      },
+      relations: ['user', 'subscription', 'subscription.paymentPlan', 'company'],
+      order: { dueDate: 'ASC' },
+    });
+
+    return overduePayments.map((p) => ({
+      id: p.id,
+      amount: p.amount,
+      totalAmount: p.totalAmount,
+      lateFee: p.lateFee,
+      dueDate: p.dueDate,
+      status: p.status,
+      instalmentNumber: p.instalmentNumber,
+      studentId: p.user?.id,
+      studentName: p.user ? `${p.user.name || ''} ${p.user.lastName || ''}`.trim() : '',
+      paymentPlanName: p.subscription?.paymentPlan?.name,
+      subscriptionId: p.subscription?.id,
+    }));
+  }
+
   async getStudentsWithPayments(companyId: string): Promise<any[]> {
     const subscriptions = await this.subscriptionRepository.find({
       where: { company: { id: companyId } },
@@ -1144,6 +1176,10 @@ export class PaymentsService {
       const { AvailableClass } = await import('../../entities/available-class.entity');
       const availableClassRepository = this.subscriptionRepository.manager.getRepository(AvailableClass);
       
+      // Obtener AthleteInvitation y su repositorio
+      const { AthleteInvitation } = await import('../../entities/athlete-invitation.entity');
+      const athleteInvitationRepository = this.subscriptionRepository.manager.getRepository(AthleteInvitation);
+      
       // Obtener ReservationsService usando import dinámico
       const { ReservationsService } = await import('../reservation/reservation.service');
       
@@ -1161,6 +1197,7 @@ export class PaymentsService {
         this.paymentRepository,
         waitlistRepository,
         availableClassRepository,
+        athleteInvitationRepository,
         this // paymentsService - pasar this como referencia
       );
       

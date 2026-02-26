@@ -396,6 +396,34 @@ export class AthletesService {
   }
 
   /**
+   * Atletas del centro que cumplen años hoy
+   */
+  async getBirthdaysToday(companyId: string): Promise<{ id: string; name: string; lastName: string }[]> {
+    const invitations = await this.invitationRepository.find({
+      where: {
+        company: { id: companyId },
+        status: InvitationStatus.APPROVED
+      },
+      relations: ['user'],
+    });
+    const today = new Date();
+    const todayMonth = today.getMonth();
+    const todayDate = today.getDate();
+    return invitations
+      .filter((inv) => {
+        const dob = inv.user?.dateOfBirth;
+        if (!dob) return false;
+        const d = dob instanceof Date ? dob : new Date(dob);
+        return d.getMonth() === todayMonth && d.getDate() === todayDate;
+      })
+      .map((inv) => ({
+        id: inv.user!.id,
+        name: inv.user!.name || '',
+        lastName: inv.user!.lastName || '',
+      }));
+  }
+
+  /**
    * Verificar si un atleta específico está suscrito a un centro (para empresas)
    */
   async checkAthleteInCompany(companyId: string, athleteId: string) {

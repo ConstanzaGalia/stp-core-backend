@@ -14,6 +14,8 @@ import { TimeSlotGeneration } from './time-slot-generation.entity';
 import { AthleteInvitation } from './athlete-invitation.entity';
 import { AthleteSchedule } from './athlete-schedule.entity';
 import { AvailableClass } from './available-class.entity';
+import { Product } from './product.entity';
+import { Sale } from './sale.entity';
 
 @Entity('company')
 export class Company {
@@ -83,6 +85,12 @@ export class Company {
 
   @OneToMany(() => AvailableClass, availableClass => availableClass.company)
   availableClasses: AvailableClass[];
+
+  @OneToMany(() => Product, product => product.company)
+  products: Product[];
+
+  @OneToMany(() => Sale, sale => sale.company)
+  sales: Sale[];
 
   @CreateDateColumn({ type: "timestamp", default: () => "CURRENT_TIMESTAMP(6)" })
   public created_at: Date;

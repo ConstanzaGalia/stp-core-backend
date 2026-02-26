@@ -12,6 +12,7 @@ import { ExerciseModule } from './modules/exercise/exercise.module';
 import { ReservationsModule } from './modules/reservation/reservation.module';
 import { PaymentsModule } from './modules/payments/payments.module';
 import { AthletesModule } from './modules/athletes/athletes.module';
+import { ProductsModule } from './modules/products/products.module';
 
 
 @Module({
@@ -41,6 +42,7 @@ import { AthletesModule } from './modules/athletes/athletes.module';
     ReservationsModule,
     PaymentsModule,
     AthletesModule,
+    ProductsModule,
   ],
   controllers: [],
   providers: [Pagination],
