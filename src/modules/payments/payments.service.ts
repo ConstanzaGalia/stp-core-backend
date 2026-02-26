@@ -1176,6 +1176,10 @@ export class PaymentsService {
       const { AvailableClass } = await import('../../entities/available-class.entity');
       const availableClassRepository = this.subscriptionRepository.manager.getRepository(AvailableClass);
       
+      // Obtener AthleteInvitation y su repositorio
+      const { AthleteInvitation } = await import('../../entities/athlete-invitation.entity');
+      const athleteInvitationRepository = this.subscriptionRepository.manager.getRepository(AthleteInvitation);
+      
       // Obtener ReservationsService usando import dinámico
       const { ReservationsService } = await import('../reservation/reservation.service');
       
@@ -1193,6 +1197,7 @@ export class PaymentsService {
         this.paymentRepository,
         waitlistRepository,
         availableClassRepository,
+        athleteInvitationRepository,
         this // paymentsService - pasar this como referencia
       );
       

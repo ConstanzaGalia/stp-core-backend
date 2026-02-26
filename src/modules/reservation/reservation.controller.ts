@@ -379,10 +379,17 @@ export class ReservationsController {
     @GetUser() user: User,
     @Body() createRecurringDto: CreateRecurringReservationDto & { userId?: string }
   ): Promise<{ recurringReservation: AthleteSchedule; generationSummary: RecurringGenerationSummary }> {
-    // Si userId está presente y el usuario es admin, crear para ese usuario
+    // Si userId está presente y el usuario es staff (admin, director, trainer, secretaria), crear para ese usuario
     // De lo contrario, usar el usuario autenticado
-    const targetUserId = createRecurringDto.userId && (user.role === UserRole.STP_ADMIN || user.role === UserRole.DIRECTOR || user.role === UserRole.TRAINER) 
-      ? createRecurringDto.userId 
+    const canCreateForOther = [
+      UserRole.STP_ADMIN,
+      UserRole.DIRECTOR,
+      UserRole.TRAINER,
+      UserRole.SUB_TRAINER,
+      UserRole.SECRETARIA,
+    ].includes(user.role);
+    const targetUserId = createRecurringDto.userId && canCreateForOther
+      ? createRecurringDto.userId
       : user.id;
     
     // Remover userId del DTO antes de pasarlo al servicio
@@ -399,6 +406,19 @@ export class ReservationsController {
   @UseGuards(AuthGuard('jwt'))
   async getUserRecurringReservations(@GetUser() user: User): Promise<AthleteSchedule[]> {
     return this.reservationsService.getUserRecurringReservations(user.id);
+  }
+
+  /**
+   * Obtener reservas recurrentes de un atleta en un centro (admin/secretaria viendo perfil)
+   * GET /reservations/recurring/company/:companyId/user/:userId
+   */
+  @Get('recurring/company/:companyId/user/:userId')
+  @UseGuards(AuthGuard('jwt'))
+  async getRecurringReservationsForUserInCompany(
+    @Param('companyId') companyId: string,
+    @Param('userId') userId: string
+  ): Promise<AthleteSchedule[]> {
+    return this.reservationsService.getRecurringReservationsForUserInCompany(userId, companyId);
   }
 
   /**

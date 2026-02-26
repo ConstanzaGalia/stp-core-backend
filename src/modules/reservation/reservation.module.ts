@@ -13,6 +13,7 @@ import { ClassUsage } from 'src/entities/class-usage.entity';
 import { Payment } from 'src/entities/payment.entity';
 import { WaitlistReservation } from 'src/entities/waitlist-reservation.entity';
 import { AvailableClass } from 'src/entities/available-class.entity';
+import { AthleteInvitation } from 'src/entities/athlete-invitation.entity';
 import { ReservationsController } from './reservation.controller';
 import { ReservationsService } from './reservation.service';
 import { PaymentsModule } from '../payments/payments.module';
@@ -20,7 +21,7 @@ import { PaymentsModule } from '../payments/payments.module';
 
 @Module({
   imports: [
-    TypeOrmModule.forFeature([Reservation, TimeSlot, User, Company, ScheduleConfig, ScheduleException, TimeSlotGeneration, AthleteSchedule, UserPaymentSubscription, ClassUsage, Payment, WaitlistReservation, AvailableClass]), 
+    TypeOrmModule.forFeature([Reservation, TimeSlot, User, Company, ScheduleConfig, ScheduleException, TimeSlotGeneration, AthleteSchedule, UserPaymentSubscription, ClassUsage, Payment, WaitlistReservation, AvailableClass, AthleteInvitation]), 
     forwardRef(() => PaymentsModule),
   ],
   controllers: [ReservationsController],

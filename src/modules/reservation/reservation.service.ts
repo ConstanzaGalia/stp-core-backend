@@ -8,6 +8,7 @@ import { ScheduleException } from 'src/entities/schedule-exception.entity';
 import { TimeSlotGeneration } from 'src/entities/time-slot-generation.entity';
 import { AthleteSchedule, ScheduleFrequency, ScheduleEndType, ScheduleStatus } from 'src/entities/athlete-schedule.entity';
 import { UserPaymentSubscription, SubscriptionStatus } from 'src/entities/user-payment-subscription.entity';
+import { AthleteInvitation, InvitationStatus } from 'src/entities/athlete-invitation.entity';
 import { Repository, Between, In } from 'typeorm';
 import { CreateRecurringReservationDto, RecurringFrequency, RecurringEndType } from './dto/create-recurring-reservation.dto';
 import { PaymentsService } from '../payments/payments.service';
@@ -56,6 +57,8 @@ export class ReservationsService {
     private readonly waitlistRepository: Repository<WaitlistReservation>,
     @InjectRepository(AvailableClass)
     private readonly availableClassRepository: Repository<AvailableClass>,
+    @InjectRepository(AthleteInvitation)
+    private readonly athleteInvitationRepository: Repository<AthleteInvitation>,
     private readonly paymentsService: PaymentsService,
   ) {}
 
@@ -1708,10 +1711,23 @@ export class ReservationsService {
     if (!finalCompanyId) {
       // Obtener la suscripción activa del usuario para obtener el companyId
       activeSubscription = await this.getActiveSubscriptionForUser(userId);
-      if (!activeSubscription) {
-        throw new BadRequestException('No tienes una suscripción activa. Necesitas especificar el companyId');
+      if (activeSubscription) {
+        finalCompanyId = activeSubscription.company.id;
+      } else {
+        // Sin suscripción: intentar obtener el centro desde la invitación aprobada (alumno vinculado al centro)
+        const approvedInvitations = await this.athleteInvitationRepository.find({
+          where: { user: { id: userId }, status: InvitationStatus.APPROVED },
+          relations: ['company'],
+        });
+        if (approvedInvitations.length === 1) {
+          finalCompanyId = approvedInvitations[0].company.id;
+          this.logger.debug(`createRecurringReservation -> companyId from invitation: ${finalCompanyId}`);
+        } else if (approvedInvitations.length > 1) {
+          throw new BadRequestException('Tienes más de un centro vinculado. Indica el companyId del centro donde quieres el horario.');
+        } else {
+          throw new BadRequestException('No estás vinculado a ningún centro. Necesitas ser aprobado en un centro o indicar el companyId.');
+        }
       }
-      finalCompanyId = activeSubscription.company.id;
     } else {
       // Si companyId está presente, intentar obtener la suscripción pero no es obligatoria
       // (puede que el admin esté creando reservas para un usuario que aún no tiene suscripción activa)
@@ -1826,8 +1842,18 @@ export class ReservationsService {
     // Ajustar el rango de generación según la suscripción y la reserva recurrente
     const activeSubscription = await this.getActiveSubscriptionForUser(athleteSchedule.user.id);
     if (!activeSubscription) {
-      this.logger.warn(`generateRecurringReservations -> no active subscription for user=${athleteSchedule.user.id}`);
-      throw new BadRequestException('No tienes una suscripción activa para crear reservas recurrentes');
+      // Sin suscripción activa: se permite crear el horario fijo pero no se generan reservas.
+      // Las reservas se generarán cuando se active la suscripción (pago) vía generateReservationsFromRecurringOnPayment.
+      this.logger.log(`generateRecurringReservations -> no active subscription for user=${athleteSchedule.user.id}, skipping reservation generation`);
+      return {
+        createdReservations: 0,
+        skippedPastDates: [],
+        noCapacityDates: [],
+        cannotBookDates: [],
+        duplicateDates: [],
+        missingTimeSlotDates: [],
+        availableClassesCreated: 0,
+      };
     }
 
     // Ajustar el rango de generación según la suscripción y la reserva recurrente
@@ -2573,6 +2599,20 @@ export class ReservationsService {
       missingTimeSlotDates,
       canBookDates
     };
+  }
+
+  /**
+   * Obtener reservas recurrentes de un usuario en un centro (para admin viendo perfil de atleta)
+   */
+  async getRecurringReservationsForUserInCompany(userId: string, companyId: string): Promise<AthleteSchedule[]> {
+    return await this.athleteScheduleRepository.find({
+      where: {
+        user: { id: userId },
+        company: { id: companyId }
+      },
+      relations: ['company', 'user'],
+      order: { createdAt: 'DESC' }
+    });
   }
 
   /**
