@@ -31,7 +31,8 @@ async function bootstrap() {
     forbidNonWhitelisted: true, // Rechaza requests con propiedades no permitidas
   }));
   app.useLogger(['error', 'warn', 'log', 'debug', 'verbose']);
-  await app.listen(AppModule.port);
-  console.log(`Server running on port ${AppModule.port}`);
+  const port = process.env.PORT || 3000;
+  await app.listen(port);
+  console.log(`Server running on port ${port}`);
 }
 bootstrap();
