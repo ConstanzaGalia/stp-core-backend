@@ -47,9 +47,4 @@ import { ProductsModule } from './modules/products/products.module';
   controllers: [],
   providers: [Pagination],
 })
-export class AppModule {
-  static port: number;
-  constructor(private readonly configService: ConfigService){
-    AppModule.port = +this.configService.get('PORT')
-  }
-}
+export class AppModule {}
