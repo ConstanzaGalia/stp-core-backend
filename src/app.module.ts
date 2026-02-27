@@ -13,6 +13,7 @@ import { ReservationsModule } from './modules/reservation/reservation.module';
 import { PaymentsModule } from './modules/payments/payments.module';
 import { AthletesModule } from './modules/athletes/athletes.module';
 import { ProductsModule } from './modules/products/products.module';
+import { HealthModule } from './modules/health/health.module';
 
 
 @Module({
@@ -35,6 +36,7 @@ import { ProductsModule } from './modules/products/products.module';
       },
     }),
 
+    HealthModule,
     AuthModule,
     MailingModule,
     CompanyModule,
