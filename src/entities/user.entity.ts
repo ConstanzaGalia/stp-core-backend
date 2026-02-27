@@ -36,7 +36,7 @@ export class User {
   password: string;
 
   @ApiProperty()
-  @Column({type: 'enum', enum: UserRole, default: UserRole.TRAINER})
+  @Column({ type: 'enum', enum: UserRole, enumName: 'user_role_enum', default: UserRole.TRAINER })
   role: UserRole;
 
   @ApiProperty()
