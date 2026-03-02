@@ -10,6 +10,7 @@ import { AthleteSchedule, ScheduleFrequency, ScheduleEndType, ScheduleStatus } f
 import { UserPaymentSubscription, SubscriptionStatus } from 'src/entities/user-payment-subscription.entity';
 import { AthleteInvitation, InvitationStatus } from 'src/entities/athlete-invitation.entity';
 import { Repository, Between, In } from 'typeorm';
+import { UserRole } from 'src/common/enums/enums';
 import { CreateRecurringReservationDto, RecurringFrequency, RecurringEndType } from './dto/create-recurring-reservation.dto';
 import { PaymentsService } from '../payments/payments.service';
 import { ClassUsage, ClassUsageType } from '../../entities/class-usage.entity';
@@ -70,6 +71,36 @@ export class ReservationsService {
     const hours = parts[0] ?? '00';
     const minutes = parts[1] ?? '00';
     return `${hours.padStart(2, '0')}:${minutes.padStart(2, '0')}`;
+  }
+
+  /**
+   * Busca un horario fijo por id y verifica que el caller tenga permiso (dueño del horario o staff del centro).
+   * @throws BadRequestException si no existe
+   * @throws ForbiddenException si no tiene permiso
+   */
+  private async findAthleteScheduleWithPermission(
+    recurringReservationId: string,
+    callerId: string,
+  ): Promise<AthleteSchedule> {
+    const athleteSchedule = await this.athleteScheduleRepository.findOne({
+      where: { id: recurringReservationId },
+      relations: ['company', 'user'],
+    });
+    if (!athleteSchedule) {
+      throw new BadRequestException('Horario del atleta no encontrado');
+    }
+    if (athleteSchedule.user?.id === callerId) {
+      return athleteSchedule;
+    }
+    const STAFF_ROLES = [UserRole.STP_ADMIN, UserRole.DIRECTOR, UserRole.TRAINER, UserRole.SUB_TRAINER, UserRole.SECRETARIA];
+    const company = await this.companyRepository.findOne({
+      where: { id: athleteSchedule.company?.id },
+      relations: ['users'],
+    });
+    if (!company?.users?.some((u) => u.id === callerId && STAFF_ROLES.includes(u.role))) {
+      throw new ForbiddenException('No tienes permiso para modificar este horario fijo');
+    }
+    return athleteSchedule;
   }
 
   /**
@@ -2633,27 +2664,20 @@ export class ReservationsService {
    */
   async cancelRecurringReservation(recurringReservationId: string, userId: string, deleteReservations: boolean = true): Promise<{ message: string; deletedReservations: number; deletedTimeSlots: number; restoredClasses: number }> {
     this.logger.debug(`cancelRecurringReservation -> recurringId=${recurringReservationId}, userId=${userId}, deleteReservations=${deleteReservations}`);
-    
-    const athleteSchedule = await this.athleteScheduleRepository.findOne({
-      where: { 
-        id: recurringReservationId,
-        user: { id: userId }
-      },
-      relations: ['company', 'user']
-    });
 
-    if (!athleteSchedule) {
-      this.logger.warn(`cancelRecurringReservation -> Athlete schedule not found: ${recurringReservationId}`);
+    const athleteSchedule = await this.findAthleteScheduleWithPermission(recurringReservationId, userId);
+    const athleteId = athleteSchedule.user?.id;
+    if (!athleteId) {
       throw new BadRequestException('Horario del atleta no encontrado');
     }
 
-    // Obtener la suscripción activa del usuario para restaurar clases (opcional)
-    const activeSubscription = await this.getActiveSubscriptionForUser(userId);
+    // Obtener la suscripción activa del atleta (dueño del horario) para restaurar clases (opcional)
+    const activeSubscription = await this.getActiveSubscriptionForUser(athleteId);
     
     // Si no hay suscripción activa pero se quiere eliminar reservas, solo permitir eliminar el horario fijo
     // sin restaurar clases
     if (!activeSubscription && deleteReservations) {
-      this.logger.warn(`cancelRecurringReservation -> No active subscription for user ${userId}, will only delete schedule without restoring classes`);
+      this.logger.warn(`cancelRecurringReservation -> No active subscription for user ${athleteId}, will only delete schedule without restoring classes`);
       // Continuar pero sin restaurar clases
     }
 
@@ -2683,10 +2707,10 @@ export class ReservationsService {
       const startDate = new Date(athleteSchedule.startDate);
       startDate.setHours(0, 0, 0, 0);
       
-      // Buscar todas las reservas del usuario
+      // Buscar todas las reservas del atleta (dueño del horario)
       const userReservations = await this.reservationRepository.find({
         where: {
-          user: { id: userId }
+          user: { id: athleteId }
         },
         relations: ['timeSlot', 'timeSlot.company']
       });
@@ -2749,10 +2773,10 @@ export class ReservationsService {
 
       // Solo restaurar clases si hay suscripción activa
       if (activeSubscription) {
-        // Buscar todos los ClassUsage del usuario para esta suscripción y tipo RESERVATION
+        // Buscar todos los ClassUsage del atleta para esta suscripción y tipo RESERVATION
         const allClassUsages = await this.classUsageRepository.find({
           where: {
-            user: { id: userId },
+            user: { id: athleteId },
             subscription: { id: activeSubscription.id },
             type: ClassUsageType.RESERVATION
           },
@@ -2883,18 +2907,8 @@ export class ReservationsService {
     updateDto: any
   ): Promise<AthleteSchedule> {
     this.logger.debug(`updateRecurringReservation -> recurringId=${recurringReservationId}, userId=${userId}`);
-    
-    const athleteSchedule = await this.athleteScheduleRepository.findOne({
-      where: { 
-        id: recurringReservationId,
-        user: { id: userId }
-      },
-      relations: ['company', 'user']
-    });
 
-    if (!athleteSchedule) {
-      throw new BadRequestException('Horario del atleta no encontrado');
-    }
+    const athleteSchedule = await this.findAthleteScheduleWithPermission(recurringReservationId, userId);
 
     // Si se cambian los días de la semana, resetear lastGeneratedDate para que se regeneren las reservas
     // Esto asegura que cuando se procese un pago, se generen reservas con los nuevos días
@@ -2926,7 +2940,8 @@ export class ReservationsService {
     const updateData: any = {};
 
     if (updateDto.daysOfWeek && Array.isArray(updateDto.daysOfWeek)) {
-      updateData.daysOfWeek = updateDto.daysOfWeek.join(',');
+      const uniqueDays = [...new Set(updateDto.daysOfWeek.map(Number).filter((n) => !Number.isNaN(n) && n >= 0 && n <= 6))].sort((a, b) => a - b);
+      updateData.daysOfWeek = uniqueDays.join(',');
     }
 
     if (updateDto.startTime) {
@@ -2968,16 +2983,7 @@ export class ReservationsService {
    * Pausar una reserva recurrente
    */
   async pauseRecurringReservation(recurringReservationId: string, userId: string): Promise<void> {
-    const athleteSchedule = await this.athleteScheduleRepository.findOne({
-      where: { 
-        id: recurringReservationId,
-        user: { id: userId }
-      }
-    });
-
-    if (!athleteSchedule) {
-      throw new BadRequestException('Horario del atleta no encontrado');
-    }
+    await this.findAthleteScheduleWithPermission(recurringReservationId, userId);
 
     await this.athleteScheduleRepository.update(recurringReservationId, {
       status: ScheduleStatus.PAUSED
@@ -2988,16 +2994,7 @@ export class ReservationsService {
    * Reanudar una reserva recurrente
    */
   async resumeRecurringReservation(recurringReservationId: string, userId: string): Promise<void> {
-    const athleteSchedule = await this.athleteScheduleRepository.findOne({
-      where: { 
-        id: recurringReservationId,
-        user: { id: userId }
-      }
-    });
-
-    if (!athleteSchedule) {
-      throw new BadRequestException('Horario del atleta no encontrado');
-    }
+    await this.findAthleteScheduleWithPermission(recurringReservationId, userId);
 
     await this.athleteScheduleRepository.update(recurringReservationId, {
       status: ScheduleStatus.ACTIVE

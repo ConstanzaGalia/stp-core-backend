@@ -1,7 +1,23 @@
 import { IsArray, IsString, IsOptional, IsInt, Min, Max, IsEnum } from 'class-validator';
+import { Transform } from 'class-transformer';
 import { ScheduleStatus } from 'src/entities/athlete-schedule.entity';
 
+function toDaysOfWeekArray(value: unknown): number[] | undefined {
+  if (value == null) return undefined;
+  if (Array.isArray(value)) {
+    return value.map((v) => (typeof v === 'string' ? Number(v) : Number(v))).filter((n) => !Number.isNaN(n));
+  }
+  if (typeof value === 'string') {
+    return value
+      .split(',')
+      .map((s) => Number(s.trim()))
+      .filter((n) => !Number.isNaN(n));
+  }
+  return undefined;
+}
+
 export class UpdateRecurringReservationDto {
+  @Transform(({ value }) => toDaysOfWeekArray(value))
   @IsArray()
   @IsOptional()
   @IsInt({ each: true })
