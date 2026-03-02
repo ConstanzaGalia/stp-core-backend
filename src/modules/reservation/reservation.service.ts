@@ -2940,7 +2940,7 @@ export class ReservationsService {
     const updateData: any = {};
 
     if (updateDto.daysOfWeek && Array.isArray(updateDto.daysOfWeek)) {
-      const uniqueDays = [...new Set(updateDto.daysOfWeek.map(Number).filter((n) => !Number.isNaN(n) && n >= 0 && n <= 6))].sort((a, b) => a - b);
+      const uniqueDays = [...new Set(updateDto.daysOfWeek.map(Number).filter((n): n is number => !Number.isNaN(n) && n >= 0 && n <= 6))].sort((a: number, b: number) => a - b);
       updateData.daysOfWeek = uniqueDays.join(',');
     }
 
