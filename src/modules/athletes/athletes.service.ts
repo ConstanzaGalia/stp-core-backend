@@ -407,14 +407,14 @@ export class AthletesService {
       relations: ['user'],
     });
     const today = new Date();
-    const todayStr = `${today.getUTCFullYear()}-${String(today.getUTCMonth() + 1).padStart(2, '0')}-${String(today.getUTCDate()).padStart(2, '0')}`;
+    const todayMMDD = `${String(today.getUTCMonth() + 1).padStart(2, '0')}-${String(today.getUTCDate()).padStart(2, '0')}`;
     return invitations
       .filter((inv) => {
         const dob = inv.user?.dateOfBirth;
         if (!dob) return false;
         const d = dob instanceof Date ? dob : new Date(dob);
-        const dobStr = `${d.getUTCFullYear()}-${String(d.getUTCMonth() + 1).padStart(2, '0')}-${String(d.getUTCDate()).padStart(2, '0')}`;
-        return dobStr === todayStr;
+        const dobMMDD = `${String(d.getUTCMonth() + 1).padStart(2, '0')}-${String(d.getUTCDate()).padStart(2, '0')}`;
+        return dobMMDD === todayMMDD;
       })
       .map((inv) => ({
         id: inv.user!.id,
