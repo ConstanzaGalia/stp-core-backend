@@ -1,7 +1,7 @@
 import { Injectable, BadRequestException, NotFoundException, Inject, forwardRef, Logger } from '@nestjs/common';
 import { InjectRepository } from '@nestjs/typeorm';
-import { Repository, Between, LessThanOrEqual } from 'typeorm';
-import { Payment, PaymentStatus, PaymentMethod } from '../../entities/payment.entity';
+import { Repository, Between, LessThanOrEqual, Not, IsNull } from 'typeorm';
+import { Payment, PaymentStatus, PaymentMethod, PaymentConcept } from '../../entities/payment.entity';
 import { PaymentPlan } from '../../entities/payment-plan.entity';
 import { UserPaymentSubscription, SubscriptionStatus } from '../../entities/user-payment-subscription.entity';
 import { ClassUsage, ClassUsageType } from '../../entities/class-usage.entity';
@@ -19,6 +19,7 @@ import { WaitlistReservation } from '../../entities/waitlist-reservation.entity'
 import { CreatePaymentPlanDto } from './dto/create-payment-plan.dto';
 import { CreateSubscriptionDto } from './dto/create-subscription.dto';
 import { CompletePaymentDto } from './dto/complete-payment.dto';
+import { CreatePaymentDto } from './dto/create-payment.dto';
 import { UpdatePaymentDto } from './dto/update-payment.dto';
 import { CreateSuspensionDto } from './dto/create-suspension.dto';
 import { UpdateSuspensionDto } from './dto/update-suspension.dto';
@@ -26,7 +27,6 @@ import { CreateExpenseDto } from './dto/create-expense.dto';
 import { MailingService } from '../mailer/mailing.service';
 import { CompanyService } from '../company/company.service';
 import { UserRole } from '../../common/enums/enums';
-import { notifyTeachersAvailableClassesEmail } from '../../utils/emailTemplates';
 
 @Injectable()
 export class PaymentsService {
@@ -652,7 +652,8 @@ export class PaymentsService {
         amount: Number(p.totalAmount),
         date: p.paidDate,
         user: p.user ? `${p.user.name} ${p.user.lastName}` : null,
-        planName: p.paymentPlan?.name || null
+        planName: p.paymentPlan?.name || null,
+        concept: p.concept
       }))
     };
   }
@@ -757,7 +758,7 @@ export class PaymentsService {
 
   // ===== GESTIÓN DE ALUMNOS Y PAGOS =====
   /**
-   * Obtiene las cuotas vencidas del centro (pagos pendientes con fecha de vencimiento ya pasada).
+   * Obtiene las cuotas vencidas del centro (solo mensualidades pendientes vencidas; no incluye matrículas).
    */
   async getOverduePayments(companyId: string): Promise<any[]> {
     const today = new Date();
@@ -768,6 +769,7 @@ export class PaymentsService {
         company: { id: companyId },
         status: PaymentStatus.PENDING,
         dueDate: LessThanOrEqual(today),
+        concept: Not(PaymentConcept.MATRICULA), // Matrículas se listan en la lista general de pagos, no aquí
       },
       relations: ['user', 'subscription', 'subscription.paymentPlan', 'company'],
       order: { dueDate: 'ASC' },
@@ -792,8 +794,8 @@ export class PaymentsService {
     const subscriptions = await this.subscriptionRepository.find({
       where: { company: { id: companyId } },
       relations: [
-        'user', 
-        'paymentPlan', 
+        'user',
+        'paymentPlan',
         'payments',
         'company'
       ],
@@ -802,7 +804,7 @@ export class PaymentsService {
       }
     });
 
-    return Promise.all(subscriptions.map(async (subscription) => {
+    const studentsResult = await Promise.all(subscriptions.map(async (subscription) => {
       const pendingPayment = subscription.payments.find(p => p.status === PaymentStatus.PENDING);
       
       // Ordenar todos los pagos del más reciente al más antiguo
@@ -821,6 +823,7 @@ export class PaymentsService {
           transactionId: payment.transactionId,
           notes: payment.notes,
           instalmentNumber: payment.instalmentNumber,
+          concept: payment.concept,
           sortDate: payment.paidDate || payment.dueDate
         }))
         .sort((a, b) => {
@@ -869,6 +872,7 @@ export class PaymentsService {
           transactionId: payment.transactionId,
           notes: payment.notes,
           instalmentNumber: payment.instalmentNumber,
+          concept: payment.concept,
           isOverdue: payment.dueDate ? new Date(payment.dueDate) < new Date() && payment.status === PaymentStatus.PENDING : false,
           isSuspended: isSuspended
         };
@@ -908,6 +912,88 @@ export class PaymentsService {
         paidPayments: subscription.payments.filter(p => p.status === PaymentStatus.PAID).length
       };
     }));
+
+    // Incluir matrículas sin suscripción (alumno nuevo que solo pagó matrícula)
+    const standaloneMatriculas = await this.paymentRepository.find({
+      where: {
+        company: { id: companyId },
+        subscription: IsNull(),
+        concept: PaymentConcept.MATRICULA
+      },
+      relations: ['user', 'paymentPlan', 'company']
+    });
+
+    const studentById = new Map<string, any>(studentsResult.map(s => [s.studentId, s]));
+
+    for (const payment of standaloneMatriculas) {
+      const user = payment.user;
+      if (!user) continue;
+
+      const paymentItem = {
+        id: payment.id,
+        amount: payment.amount,
+        totalAmount: payment.totalAmount,
+        status: payment.status,
+        paymentMethod: payment.paymentMethod,
+        dueDate: payment.dueDate,
+        paidDate: payment.paidDate,
+        lateFee: payment.lateFee,
+        discount: payment.discount,
+        transactionId: payment.transactionId,
+        notes: payment.notes,
+        instalmentNumber: payment.instalmentNumber,
+        concept: payment.concept,
+        isOverdue: payment.dueDate ? new Date(payment.dueDate) < new Date() && payment.status === PaymentStatus.PENDING : false,
+        isSuspended: false
+      };
+
+      const existing = studentById.get(user.id);
+      if (existing) {
+        existing.payments.push(paymentItem);
+        existing.payments.sort((a: any, b: any) => {
+          const dateA = (a.paidDate || a.dueDate) ? new Date(a.paidDate || a.dueDate).getTime() : 0;
+          const dateB = (b.paidDate || b.dueDate) ? new Date(b.paidDate || b.dueDate).getTime() : 0;
+          return dateB - dateA;
+        });
+        existing.totalPayments = (existing.totalPayments ?? 0) + 1;
+        if (payment.status === PaymentStatus.PAID) {
+          existing.paidPayments = (existing.paidPayments ?? 0) + 1;
+        }
+      } else {
+        const pendingPayment = payment.status === PaymentStatus.PENDING ? payment : null;
+        const newStudent = {
+          studentId: user.id,
+          studentName: `${user.name ?? ''} ${user.lastName ?? ''}`.trim() || '—',
+          studentEmail: user.email ?? null,
+          studentPhone: user.phoneNumber ?? null,
+          subscriptionId: null,
+          planName: payment.paymentPlan?.name ?? 'Matrícula',
+          planPrice: null,
+          subscriptionStatus: null,
+          periodStartDate: null,
+          periodEndDate: null,
+          classesUsed: null,
+          classesRemaining: null,
+          maxClasses: null,
+          pendingPayment: pendingPayment ? {
+            id: pendingPayment.id,
+            amount: pendingPayment.amount,
+            dueDate: pendingPayment.dueDate,
+            lateFee: pendingPayment.lateFee,
+            isOverdue: pendingPayment.dueDate ? new Date(pendingPayment.dueDate) < new Date() : false,
+            isSuspended: false
+          } : null,
+          payments: [paymentItem],
+          activeSuspensions: [],
+          totalPayments: 1,
+          paidPayments: payment.status === PaymentStatus.PAID ? 1 : 0
+        };
+        studentsResult.push(newStudent);
+        studentById.set(user.id, newStudent);
+      }
+    }
+
+    return studentsResult;
   }
 
   /**
@@ -965,9 +1051,10 @@ export class PaymentsService {
       newWeekStart = this.getWeekStartDate(today);
     }
     
-    // Usar weekStartDate como periodStartDate (no correr la fecha si el alumno se atrasó)
-    const newPeriodStartDate = new Date(newWeekStart);
-    const newPeriodEndDate = new Date(newPeriodStartDate);
+    // Período desde la fecha del pago: si el alumno paga un día (o unos días) tarde,
+    // el período empieza ese día y vence 30 días después. Ej: pago 23 feb → vencimiento 23 mar, 12 clases en ese rango.
+    const newPeriodStartDate = new Date(today);
+    const newPeriodEndDate = new Date(today);
     newPeriodEndDate.setDate(newPeriodEndDate.getDate() + 30);
 
     // Actualizar períodos
@@ -1002,11 +1089,15 @@ export class PaymentsService {
 
   // ===== PAGO COMPLETO (SUSCRIPCIÓN + PAGO) =====
   async completePayment(completePaymentDto: CompletePaymentDto): Promise<{ subscription: UserPaymentSubscription; payment: Payment }> {
-    const { userId, paymentPlanId, companyId, amount, paymentMethod, discount, transactionId, notes, startDate, paidDate } = completePaymentDto;
-    
-    // Usar la fecha del pago proporcionada o la fecha actual
-    const paymentDate = paidDate ? new Date(paidDate) : new Date();
-    paymentDate.setHours(0, 0, 0, 0);
+    const { paymentId: completedPaymentId, userId, paymentPlanId, companyId, amount, paymentMethod, discount, transactionId, notes, startDate, paidDate } = completePaymentDto;
+
+    // Completar un pago específico por ID (ej. matrícula u otro pago ya creado)
+    if (completedPaymentId) {
+      return this.completePaymentById(completePaymentDto, completedPaymentId);
+    }
+
+    // Usar la fecha del pago proporcionada (parseada como día en UTC para evitar desfase) o la fecha actual
+    const paymentDate = paidDate ? this.parseDateOnlyAsNoonUTC(paidDate) : new Date();
     this.logger.log(`completePayment -> paymentDate=${paymentDate.toISOString()}, paidDate from DTO=${paidDate || 'not provided'}`);
 
     // 1. Obtener el nuevo plan de pago
@@ -1129,6 +1220,11 @@ export class PaymentsService {
 
     const payment = await this.paymentRepository.save(pendingPayment);
 
+    // Matrícula solo se registra como pago; no activa suscripción ni genera clases
+    if (payment.concept === PaymentConcept.MATRICULA) {
+      return { subscription, payment };
+    }
+
     // Marcar cuota como pagada
     subscription.paidInstallments = 1;
     subscription.pendingInstallments = 0;
@@ -1226,48 +1322,7 @@ export class PaymentsService {
       if (result.errors.length > 0) {
         this.logger.warn(`completePayment -> errors during reservation generation: ${result.errors.join('; ')}`);
       }
-
-      // Notificar a profesores si se crearon clases disponibles
-      if (result.availableClassesCreated > 0) {
-        try {
-          // Obtener información del alumno y la compañía
-          const student = await this.userRepository.findOne({ where: { id: userId } });
-          const company = await this.companyRepository.findOne({ 
-            where: { id: companyId },
-            relations: ['users']
-          });
-
-          if (student && company) {
-            // Obtener todos los profesores de la compañía
-            const trainers = await this.companyService.getAllCompanyTrainers(companyId);
-            
-            // Enviar email a cada profesor
-            for (const trainer of trainers) {
-              if (trainer.email && trainer.isActive) {
-                try {
-                  const mail = notifyTeachersAvailableClassesEmail(
-                    trainer.email,
-                    `${trainer.name} ${trainer.lastName}`,
-                    `${student.name} ${student.lastName}`,
-                    company.name,
-                    result.availableClassesCreated,
-                    process.env.RESEND_FROM_EMAIL || 'noreply@stp.com'
-                  );
-                  
-                  await this.mailingService.sendMail(mail);
-                  this.logger.log(`completePayment -> notification sent to trainer ${trainer.email} about ${result.availableClassesCreated} available classes`);
-                } catch (emailError) {
-                  this.logger.error(`completePayment -> error sending notification to trainer ${trainer.email}: ${emailError?.message}`);
-                  // No fallar el proceso si falla el email
-                }
-              }
-            }
-          }
-        } catch (notificationError) {
-          this.logger.error(`completePayment -> error notifying teachers: ${notificationError?.message}`);
-          // No fallar el proceso si falla la notificación
-        }
-      }
+      // Notificación por email a profesores (clases disponibles) desactivada
     } catch (error) {
       // No fallar el pago si hay error en generación de reservas (solo loggear)
       this.logger.error(`completePayment -> error generating reservations: ${error?.message}`, error?.stack);
@@ -1280,7 +1335,168 @@ export class PaymentsService {
     };
   }
 
+  /**
+   * Completa un pago específico por ID (ej. matrícula). Si el concepto es MATRICULA no activa suscripción ni genera clases.
+   * Si el pago no tiene suscripción (matrícula de alumno nuevo), solo se marca como pagado.
+   */
+  private async completePaymentById(dto: CompletePaymentDto, paymentId: string): Promise<{ subscription: UserPaymentSubscription | null; payment: Payment }> {
+    const payment = await this.paymentRepository.findOne({
+      where: { id: paymentId },
+      relations: ['subscription', 'subscription.user', 'subscription.company', 'subscription.paymentPlan', 'user', 'company']
+    });
+    if (!payment) throw new NotFoundException('Payment not found');
+    // Validar por user/company del pago (funciona con o sin suscripción)
+    const paymentUserId = payment.subscription ? payment.subscription.user.id : (payment as any).user?.id;
+    const paymentCompanyId = payment.subscription ? payment.subscription.company.id : (payment as any).company?.id;
+    if (!paymentUserId || !paymentCompanyId || paymentUserId !== dto.userId || paymentCompanyId !== dto.companyId) {
+      throw new BadRequestException('Payment does not belong to this user and company');
+    }
+    if (payment.status !== PaymentStatus.PENDING) {
+      throw new BadRequestException('Payment is not pending');
+    }
+
+    const paymentDate = dto.paidDate ? this.parseDateOnlyAsNoonUTC(dto.paidDate) : new Date();
+    let lateFee = 0;
+    if (payment.subscription?.paymentPlan && payment.dueDate && payment.dueDate < new Date()) {
+      const daysLate = Math.floor((new Date().getTime() - payment.dueDate.getTime()) / (1000 * 60 * 60 * 24));
+      const plan = payment.subscription.paymentPlan;
+      const gracePeriod = plan?.gracePeriodDays || 0;
+      if (daysLate > gracePeriod && plan?.lateFeePercentage) {
+        lateFee = (Number(payment.amount) * plan.lateFeePercentage) / 100;
+      }
+    }
+
+    payment.status = PaymentStatus.PAID;
+    payment.paymentMethod = dto.paymentMethod;
+    payment.paidDate = paymentDate;
+    payment.lateFee = lateFee;
+    payment.discount = dto.discount ?? 0;
+    payment.totalAmount = Number(payment.amount) + lateFee - (dto.discount ?? 0);
+    payment.transactionId = dto.transactionId ?? payment.transactionId;
+    payment.notes = dto.notes ?? payment.notes;
+    const savedPayment = await this.paymentRepository.save(payment);
+
+    // Matrícula o pago sin suscripción: solo registrar, no activar ni generar clases
+    if (savedPayment.concept === PaymentConcept.MATRICULA || !payment.subscription) {
+      return { subscription: payment.subscription ?? null, payment: savedPayment };
+    }
+
+    const subscription = payment.subscription;
+    const userId = subscription.user.id;
+    const companyId = subscription.company.id;
+
+    subscription.paidInstallments = 1;
+    subscription.pendingInstallments = 0;
+    subscription.status = SubscriptionStatus.ACTIVE;
+    await this.subscriptionRepository.save(subscription);
+
+    try {
+      this.logger.log(`completePaymentById -> starting reservation generation for paymentId=${paymentId}`);
+      const athleteScheduleRepository = this.subscriptionRepository.manager.getRepository(AthleteSchedule);
+      const reservationRepository = this.subscriptionRepository.manager.getRepository(Reservation);
+      const activeAthleteSchedules = await athleteScheduleRepository.find({
+        where: { user: { id: userId }, company: { id: companyId }, status: ScheduleStatus.ACTIVE },
+        relations: ['user', 'company']
+      });
+      if (activeAthleteSchedules.length === 0) {
+        return { subscription, payment: savedPayment };
+      }
+      const timeSlotRepository = this.subscriptionRepository.manager.getRepository(TimeSlot);
+      const classUsageRepository = this.subscriptionRepository.manager.getRepository(ClassUsage);
+      const scheduleConfigRepository = this.subscriptionRepository.manager.getRepository(ScheduleConfig);
+      const scheduleExceptionRepository = this.subscriptionRepository.manager.getRepository(ScheduleException);
+      const timeSlotGenerationRepository = this.subscriptionRepository.manager.getRepository(TimeSlotGeneration);
+      const waitlistRepository = this.subscriptionRepository.manager.getRepository(WaitlistReservation);
+      const { AvailableClass } = await import('../../entities/available-class.entity');
+      const availableClassRepository = this.subscriptionRepository.manager.getRepository(AvailableClass);
+      const { AthleteInvitation } = await import('../../entities/athlete-invitation.entity');
+      const athleteInvitationRepository = this.subscriptionRepository.manager.getRepository(AthleteInvitation);
+      const { ReservationsService } = await import('../reservation/reservation.service');
+      const reservationsService = new ReservationsService(
+        reservationRepository, timeSlotRepository, this.companyRepository,
+        scheduleConfigRepository, scheduleExceptionRepository, timeSlotGenerationRepository,
+        athleteScheduleRepository, this.subscriptionRepository, classUsageRepository,
+        this.paymentRepository, waitlistRepository, availableClassRepository, athleteInvitationRepository, this
+      );
+      const periodStartDate = new Date(subscription.periodStartDate);
+      periodStartDate.setHours(0, 0, 0, 0);
+      const periodEndDate = new Date(subscription.periodEndDate);
+      periodEndDate.setHours(23, 59, 59, 999);
+      await reservationsService.generateReservationsFromRecurringOnPayment(
+        userId, companyId, subscription.id, periodStartDate, periodEndDate, savedPayment.id
+      );
+      // Notificación por email a profesores (clases disponibles) desactivada
+    } catch (error) {
+      this.logger.error(`completePaymentById -> error generating reservations: ${error?.message}`);
+    }
+    return { subscription, payment: savedPayment };
+  }
+
   // ===== GESTIÓN DE PAGOS INDIVIDUALES =====
+  /**
+   * Crea un pago manual (ej. Matrícula). Si concept es MATRICULA, al marcarlo como pagado no generará clases.
+   * Para matrícula de alumno nuevo puede no haber subscriptionId (es lo primero que paga).
+   */
+  async createPayment(companyId: string, createPaymentDto: CreatePaymentDto): Promise<Payment> {
+    const [user, company] = await Promise.all([
+      this.userRepository.findOne({ where: { id: createPaymentDto.userId } }),
+      this.companyRepository.findOne({ where: { id: companyId } })
+    ]);
+    if (!user) throw new NotFoundException('User not found');
+    if (!company || company.id !== companyId) throw new NotFoundException('Company not found');
+
+    const dueDate = createPaymentDto.dueDate ? this.parseDateOnlyAsNoonUTC(createPaymentDto.dueDate) : new Date();
+    const amount = Number(createPaymentDto.amount);
+    const concept = createPaymentDto.concept ?? PaymentConcept.SUBSCRIPTION;
+
+    let paymentPlanId: string;
+    let subscriptionId: string | null = null;
+
+    if (createPaymentDto.subscriptionId) {
+      const subscription = await this.subscriptionRepository.findOne({
+        where: { id: createPaymentDto.subscriptionId },
+        relations: ['paymentPlan', 'user', 'company']
+      });
+      if (!subscription) throw new NotFoundException('Subscription not found');
+      if (subscription.user.id !== createPaymentDto.userId || subscription.company.id !== companyId) {
+        throw new BadRequestException('Subscription does not belong to this user and company');
+      }
+      paymentPlanId = subscription.paymentPlan.id;
+      subscriptionId = subscription.id;
+    } else {
+      // Matrícula sin suscripción (alumno nuevo): requiere paymentPlanId
+      if (!createPaymentDto.paymentPlanId) {
+        throw new BadRequestException('paymentPlanId is required when there is no subscription (e.g. enrollment fee for new student)');
+      }
+      const plan = await this.paymentPlanRepository.findOne({
+        where: { id: createPaymentDto.paymentPlanId },
+        relations: ['company']
+      });
+      if (!plan || plan.company.id !== companyId) {
+        throw new BadRequestException('Payment plan not found or does not belong to this company');
+      }
+      paymentPlanId = plan.id;
+    }
+
+    const payment = this.paymentRepository.create({
+      amount,
+      totalAmount: amount,
+      lateFee: 0,
+      discount: 0,
+      status: PaymentStatus.PENDING,
+      dueDate,
+      instalmentNumber: 1,
+      concept,
+      notes: createPaymentDto.notes ?? null,
+      user: { id: createPaymentDto.userId },
+      company: { id: companyId },
+      paymentPlan: { id: paymentPlanId },
+      ...(subscriptionId ? { subscription: { id: subscriptionId } } : { subscription: null })
+    });
+
+    return await this.paymentRepository.save(payment);
+  }
+
   async updatePayment(paymentId: string, updatePaymentDto: UpdatePaymentDto): Promise<Payment> {
     const payment = await this.paymentRepository.findOne({
       where: { id: paymentId },
@@ -1310,6 +1526,9 @@ export class PaymentsService {
     if (updatePaymentDto.paymentMethod !== undefined) {
       payment.paymentMethod = updatePaymentDto.paymentMethod;
     }
+    if (updatePaymentDto.concept !== undefined) {
+      payment.concept = updatePaymentDto.concept;
+    }
     if (updatePaymentDto.transactionId !== undefined) {
       payment.transactionId = updatePaymentDto.transactionId;
     }
@@ -1320,7 +1539,7 @@ export class PaymentsService {
       payment.dueDate = new Date(updatePaymentDto.dueDate);
     }
     if (updatePaymentDto.paidDate !== undefined) {
-      payment.paidDate = new Date(updatePaymentDto.paidDate);
+      payment.paidDate = this.parseDateOnlyAsNoonUTC(updatePaymentDto.paidDate);
     }
 
     // Recalcular totalAmount si se modificó amount, lateFee o discount
@@ -1446,6 +1665,16 @@ export class PaymentsService {
       }
     }
 
+    // Desvincular available_classes que referencian este pago (evita violación de FK al borrar)
+    const { AvailableClass } = await import('../../entities/available-class.entity');
+    const availableClassRepository = this.paymentRepository.manager.getRepository(AvailableClass);
+    await availableClassRepository
+      .createQueryBuilder()
+      .update(AvailableClass)
+      .set({ payment: null as any })
+      .where('paymentId = :paymentId', { paymentId })
+      .execute();
+
     // Eliminar el pago usando el ID
     await this.paymentRepository.delete(paymentId);
 
@@ -1454,6 +1683,23 @@ export class PaymentsService {
       cancelledReservations: cancelledReservationsCount,
       subscriptionCancelled: subscriptionCancelled
     };
+  }
+
+  /**
+   * Parsea una fecha solo-día (YYYY-MM-DD) como mediodía UTC para que el día no cambie al guardar/recuperar en ninguna zona horaria.
+   */
+  private parseDateOnlyAsNoonUTC(dateString: string): Date {
+    const datePart = typeof dateString === 'string' ? dateString.split('T')[0] : '';
+    const parts = datePart.split('-');
+    if (parts.length === 3) {
+      const y = parseInt(parts[0], 10);
+      const m = parseInt(parts[1], 10) - 1;
+      const d = parseInt(parts[2], 10);
+      if (!Number.isNaN(y) && !Number.isNaN(m) && !Number.isNaN(d)) {
+        return new Date(Date.UTC(y, m, d, 12, 0, 0, 0));
+      }
+    }
+    return new Date(dateString);
   }
 
   // ===== GESTIÓN DE SUSPENSIONES TEMPORALES =====

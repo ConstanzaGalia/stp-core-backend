@@ -1,12 +1,17 @@
-import { IsString, IsNumber, IsEnum, IsOptional, Min, IsDateString } from 'class-validator';
+import { IsString, IsNumber, IsEnum, IsOptional, Min, IsDateString, ValidateIf } from 'class-validator';
 import { PaymentMethod } from '../../../entities/payment.entity';
 
 export class CompletePaymentDto {
   @IsString()
-  userId: string; // ID del atleta
+  @IsOptional()
+  paymentId?: string; // Si se indica, se completa este pago (ej. matrícula); si no, se usa el flujo por userId/plan/company
 
   @IsString()
-  paymentPlanId: string; // ID del plan de pago
+  userId: string; // ID del atleta
+
+  @ValidateIf(o => !o.paymentId)
+  @IsString()
+  paymentPlanId?: string; // Requerido solo si no se envía paymentId
 
   @IsString()
   companyId: string; // ID de la empresa/centro

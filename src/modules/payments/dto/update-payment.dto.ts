@@ -1,6 +1,6 @@
 import { IsNumber, IsEnum, IsOptional, IsString, Min } from 'class-validator';
 import { Type, Transform } from 'class-transformer';
-import { PaymentStatus, PaymentMethod } from '../../../entities/payment.entity';
+import { PaymentStatus, PaymentMethod, PaymentConcept } from '../../../entities/payment.entity';
 
 // Función para normalizar números con formato (remover puntos de miles)
 function normalizeNumber(value: any): number {
@@ -70,6 +70,10 @@ export class UpdatePaymentDto {
   @IsEnum(PaymentMethod)
   @IsOptional()
   paymentMethod?: PaymentMethod; // Método de pago
+
+  @IsEnum(PaymentConcept)
+  @IsOptional()
+  concept?: PaymentConcept; // subscription = genera clases; matricula = solo registro
 
   @IsString()
   @IsOptional()

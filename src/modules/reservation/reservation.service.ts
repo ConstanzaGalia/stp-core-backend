@@ -751,7 +751,6 @@ export class ReservationsService {
     const queryBuilder = this.timeSlotRepository
       .createQueryBuilder('timeSlot')
       .leftJoinAndSelect('timeSlot.company', 'company')
-      .leftJoinAndSelect('timeSlot.reservations', 'reservations')
       .where('company.id = :companyId', { companyId })
       .orderBy('timeSlot.date', 'ASC')
       .addOrderBy('timeSlot.startTime', 'ASC');
@@ -769,28 +768,24 @@ export class ReservationsService {
 
   async getAvailableTimeSlots(companyId: string, startDate?: Date, endDate?: Date): Promise<any[]> {
     const timeSlots = await this.getTimeSlots(companyId, startDate, endDate);
-    
-    // Calcular estadísticas de asistencia para cada TimeSlot
-    const slotsWithStats = await Promise.all(timeSlots.map(async (slot) => {
-      const stats = await this.getAttendanceStats(slot.id);
-      const reservedCount = slot.reservedCount ?? (slot.reservations?.length || 0);
+    const reservedCount = (slot: TimeSlot) => slot.reservedCount ?? 0;
+
+    return timeSlots.map((slot) => {
+      const count = reservedCount(slot);
       return {
         id: slot.id,
         date: slot.date,
         startTime: slot.startTime,
         endTime: slot.endTime,
         capacity: slot.capacity,
-        reservedCount,
+        reservedCount: count,
         attendedCount: slot.attendedCount || 0,
-        availableSpots: slot.capacity - reservedCount,
-        isAvailable: reservedCount < slot.capacity,
+        availableSpots: slot.capacity - count,
+        isAvailable: count < slot.capacity,
         dayOfWeek: new Date(slot.date).getDay(),
         dayName: this.getDayName(new Date(slot.date).getDay()),
-        attendanceStats: stats
       };
-    }));
-    
-    return slotsWithStats;
+    });
   }
 
   getDayName(dayOfWeek: number): string {
@@ -1367,6 +1362,9 @@ export class ReservationsService {
 
       const twoHoursBefore = new Date(timeSlotDate.getTime() - 2 * 60 * 60 * 1000);
 
+      const capacity = reservation.timeSlot.capacity ?? 0;
+      const reservedCount = reservation.timeSlot.reservedCount ?? 0;
+
       return {
         id: reservation.id,
         userId: reservation.user.id,
@@ -1375,9 +1373,18 @@ export class ReservationsService {
         startTime: reservation.timeSlot.startTime,
         endTime: reservation.timeSlot.endTime,
         companyName: reservation.timeSlot.company?.name ?? null,
+        company: reservation.timeSlot.company ? { name: reservation.timeSlot.company.name } : null,
+        capacity,
+        currentReservations: reservedCount,
         canCancel: new Date() < twoHoursBefore,
         cancelDeadline: twoHoursBefore,
         createdAt: reservation.createdAt,
+        timeSlot: {
+          capacity,
+          reservedCount,
+          currentReservations: reservedCount,
+          company: reservation.timeSlot.company ? { name: reservation.timeSlot.company.name } : null,
+        },
       };
     });
   }

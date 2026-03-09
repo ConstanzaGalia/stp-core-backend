@@ -2,6 +2,7 @@ import { Controller, Get, Post, Put, Delete, Body, Param, Query, UseGuards, BadR
 import { AuthGuard } from '@nestjs/passport';
 import { PaymentsService } from './payments.service';
 import { CreatePaymentPlanDto } from './dto/create-payment-plan.dto';
+import { CreatePaymentDto } from './dto/create-payment.dto';
 import { CreateSubscriptionDto } from './dto/create-subscription.dto';
 import { CompletePaymentDto } from './dto/complete-payment.dto';
 import { UpdatePaymentDto } from './dto/update-payment.dto';
@@ -190,6 +191,14 @@ export class PaymentsController {
   }
 
   // ===== GESTIÓN DE PAGOS INDIVIDUALES =====
+  @Post('company/:companyId/payment')
+  async createPayment(
+    @Param('companyId') companyId: string,
+    @Body() createPaymentDto: CreatePaymentDto
+  ) {
+    return await this.paymentsService.createPayment(companyId, createPaymentDto);
+  }
+
   @Put('payment/:paymentId')
   async updatePayment(
     @Param('paymentId') paymentId: string,

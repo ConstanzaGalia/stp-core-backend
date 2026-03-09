@@ -21,6 +21,12 @@ export enum PaymentMethod {
   OTHER = 'other'
 }
 
+/** Concepto del pago: cuota de suscripción (genera clases) o matrícula (solo registro, no genera clases). */
+export enum PaymentConcept {
+  SUBSCRIPTION = 'subscription',
+  MATRICULA = 'matricula'
+}
+
 @Entity()
 export class Payment {
   @PrimaryGeneratedColumn('uuid')
@@ -61,6 +67,13 @@ export class Payment {
   @Column({ type: 'int', default: 1 })
   instalmentNumber: number; // Número de cuota
 
+  @Column({
+    type: 'enum',
+    enum: PaymentConcept,
+    default: PaymentConcept.SUBSCRIPTION
+  })
+  concept: PaymentConcept; // subscription = genera clases; matricula = solo registro
+
   @Column({ type: 'text', nullable: true })
   notes: string; // Notas adicionales
 
@@ -80,9 +93,9 @@ export class Payment {
   @JoinColumn({ name: 'paymentPlanId' })
   paymentPlan: PaymentPlan;
 
-  @ManyToOne(() => UserPaymentSubscription, subscription => subscription.payments, { onDelete: 'CASCADE' })
+  @ManyToOne(() => UserPaymentSubscription, subscription => subscription.payments, { onDelete: 'CASCADE', nullable: true })
   @JoinColumn({ name: 'subscriptionId' })
-  subscription: UserPaymentSubscription;
+  subscription: UserPaymentSubscription | null; // Null cuando es matrícula de alumno nuevo (aún sin suscripción)
 
   @OneToMany(() => AvailableClass, availableClass => availableClass.payment)
   availableClasses: AvailableClass[];
