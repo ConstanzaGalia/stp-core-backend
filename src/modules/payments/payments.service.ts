@@ -775,7 +775,27 @@ export class PaymentsService {
       order: { dueDate: 'ASC' },
     });
 
-    return overduePayments.map((p) => ({
+    // Excluir pagos cuya dueDate cae dentro de una suspensión activa del alumno
+    const now = new Date();
+    const filtered: typeof overduePayments = [];
+    for (const p of overduePayments) {
+      if (!p.user) { filtered.push(p); continue; }
+      const suspensions = await this.suspensionRepository.find({
+        where: {
+          user: { id: p.user.id },
+          company: { id: companyId },
+          isActive: true,
+        },
+      });
+      const dueDateInSuspension = suspensions.some(s => {
+        const start = new Date(s.startDate); start.setHours(0, 0, 0, 0);
+        const end = new Date(s.endDate); end.setHours(23, 59, 59, 999);
+        return now >= start && now <= end;
+      });
+      if (!dueDateInSuspension) filtered.push(p);
+    }
+
+    return filtered.map((p) => ({
       id: p.id,
       amount: p.amount,
       totalAmount: p.totalAmount,
@@ -892,14 +912,21 @@ export class PaymentsService {
         classesUsed: subscription.classesUsedThisPeriod,
         classesRemaining: subscription.classesRemainingThisPeriod,
         maxClasses: subscription.paymentPlan.maxClassesPerPeriod,
-        pendingPayment: pendingPayment ? {
-          id: pendingPayment.id,
-          amount: pendingPayment.amount,
-          dueDate: pendingPayment.dueDate,
-          lateFee: pendingPayment.lateFee,
-          isOverdue: pendingPayment.dueDate ? new Date(pendingPayment.dueDate) < new Date() : false,
-          isSuspended: paymentsWithSuspension.find(p => p.id === pendingPayment.id)?.isSuspended || false
-        } : null,
+        pendingPayment: (() => {
+          if (!pendingPayment) return null;
+          const isSuspended = paymentsWithSuspension.find(p => p.id === pendingPayment.id)?.isSuspended || false;
+          const isOverdue = pendingPayment.dueDate
+            ? new Date(pendingPayment.dueDate) < new Date() && !isSuspended
+            : false;
+          return {
+            id: pendingPayment.id,
+            amount: pendingPayment.amount,
+            dueDate: pendingPayment.dueDate,
+            lateFee: pendingPayment.lateFee,
+            isOverdue,
+            isSuspended,
+          };
+        })(),
         payments: paymentsWithSuspension, // Todos los pagos ordenados del más reciente al más antiguo
         activeSuspensions: activeSuspensions.map(suspension => ({
           id: suspension.id,
@@ -1088,7 +1115,7 @@ export class PaymentsService {
   }
 
   // ===== PAGO COMPLETO (SUSCRIPCIÓN + PAGO) =====
-  async completePayment(completePaymentDto: CompletePaymentDto): Promise<{ subscription: UserPaymentSubscription; payment: Payment }> {
+  async completePayment(completePaymentDto: CompletePaymentDto): Promise<{ subscription: UserPaymentSubscription; payment: Payment; reservationsGenerated?: boolean }> {
     const { paymentId: completedPaymentId, userId, paymentPlanId, companyId, amount, paymentMethod, discount, transactionId, notes, startDate, paidDate } = completePaymentDto;
 
     // Completar un pago específico por ID (ej. matrícula u otro pago ya creado)
@@ -1256,7 +1283,8 @@ export class PaymentsService {
         this.logger.log(`completePayment -> no active recurring reservations for user=${userId}, companyId=${companyId}`);
         return {
           subscription,
-          payment
+          payment,
+          reservationsGenerated: false
         };
       }
 
@@ -1322,6 +1350,11 @@ export class PaymentsService {
       if (result.errors.length > 0) {
         this.logger.warn(`completePayment -> errors during reservation generation: ${result.errors.join('; ')}`);
       }
+      return {
+        subscription,
+        payment,
+        reservationsGenerated: (result.createdReservations ?? 0) > 0
+      };
       // Notificación por email a profesores (clases disponibles) desactivada
     } catch (error) {
       // No fallar el pago si hay error en generación de reservas (solo loggear)
@@ -1331,7 +1364,8 @@ export class PaymentsService {
 
     return {
       subscription,
-      payment
+      payment,
+      reservationsGenerated: false
     };
   }
 
@@ -1339,7 +1373,7 @@ export class PaymentsService {
    * Completa un pago específico por ID (ej. matrícula). Si el concepto es MATRICULA no activa suscripción ni genera clases.
    * Si el pago no tiene suscripción (matrícula de alumno nuevo), solo se marca como pagado.
    */
-  private async completePaymentById(dto: CompletePaymentDto, paymentId: string): Promise<{ subscription: UserPaymentSubscription | null; payment: Payment }> {
+  private async completePaymentById(dto: CompletePaymentDto, paymentId: string): Promise<{ subscription: UserPaymentSubscription | null; payment: Payment; reservationsGenerated?: boolean }> {
     const payment = await this.paymentRepository.findOne({
       where: { id: paymentId },
       relations: ['subscription', 'subscription.user', 'subscription.company', 'subscription.paymentPlan', 'user', 'company']
@@ -1378,7 +1412,7 @@ export class PaymentsService {
 
     // Matrícula o pago sin suscripción: solo registrar, no activar ni generar clases
     if (savedPayment.concept === PaymentConcept.MATRICULA || !payment.subscription) {
-      return { subscription: payment.subscription ?? null, payment: savedPayment };
+      return { subscription: payment.subscription ?? null, payment: savedPayment, reservationsGenerated: false };
     }
 
     const subscription = payment.subscription;
@@ -1399,7 +1433,7 @@ export class PaymentsService {
         relations: ['user', 'company']
       });
       if (activeAthleteSchedules.length === 0) {
-        return { subscription, payment: savedPayment };
+        return { subscription, payment: savedPayment, reservationsGenerated: false };
       }
       const timeSlotRepository = this.subscriptionRepository.manager.getRepository(TimeSlot);
       const classUsageRepository = this.subscriptionRepository.manager.getRepository(ClassUsage);
@@ -1422,14 +1456,15 @@ export class PaymentsService {
       periodStartDate.setHours(0, 0, 0, 0);
       const periodEndDate = new Date(subscription.periodEndDate);
       periodEndDate.setHours(23, 59, 59, 999);
-      await reservationsService.generateReservationsFromRecurringOnPayment(
+      const result = await reservationsService.generateReservationsFromRecurringOnPayment(
         userId, companyId, subscription.id, periodStartDate, periodEndDate, savedPayment.id
       );
+      return { subscription, payment: savedPayment, reservationsGenerated: (result.createdReservations ?? 0) > 0 };
       // Notificación por email a profesores (clases disponibles) desactivada
     } catch (error) {
       this.logger.error(`completePaymentById -> error generating reservations: ${error?.message}`);
     }
-    return { subscription, payment: savedPayment };
+    return { subscription, payment: savedPayment, reservationsGenerated: false };
   }
 
   // ===== GESTIÓN DE PAGOS INDIVIDUALES =====
@@ -2002,16 +2037,23 @@ export class PaymentsService {
       // Todos los pagos
       payments: paymentsWithSuspension,
       // Pago pendiente (si existe)
-      pendingPayment: pendingPayment ? {
-        id: pendingPayment.id,
-        amount: pendingPayment.amount,
-        totalAmount: pendingPayment.totalAmount,
-        dueDate: pendingPayment.dueDate,
-        lateFee: pendingPayment.lateFee,
-        discount: pendingPayment.discount,
-        isOverdue: pendingPayment.dueDate ? new Date(pendingPayment.dueDate) < new Date() : false,
-        isSuspended: paymentsWithSuspension.find(p => p.id === pendingPayment.id)?.isSuspended || false
-      } : null,
+      pendingPayment: (() => {
+        if (!pendingPayment) return null;
+        const isSuspended = paymentsWithSuspension.find(p => p.id === pendingPayment.id)?.isSuspended || false;
+        const isOverdue = pendingPayment.dueDate
+          ? new Date(pendingPayment.dueDate) < new Date() && !isSuspended
+          : false;
+        return {
+          id: pendingPayment.id,
+          amount: pendingPayment.amount,
+          totalAmount: pendingPayment.totalAmount,
+          dueDate: pendingPayment.dueDate,
+          lateFee: pendingPayment.lateFee,
+          discount: pendingPayment.discount,
+          isOverdue,
+          isSuspended,
+        };
+      })(),
       // Suspensiones activas
       suspensions: activeSuspensions.map(suspension => ({
         id: suspension.id,
