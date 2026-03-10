@@ -1,6 +1,6 @@
 import { Injectable, BadRequestException, NotFoundException, Inject, forwardRef, Logger } from '@nestjs/common';
 import { InjectRepository } from '@nestjs/typeorm';
-import { Repository, Between, LessThanOrEqual, Not, IsNull } from 'typeorm';
+import { Repository, Between, LessThanOrEqual, Not, IsNull, In } from 'typeorm';
 import { Payment, PaymentStatus, PaymentMethod, PaymentConcept } from '../../entities/payment.entity';
 import { PaymentPlan } from '../../entities/payment-plan.entity';
 import { UserPaymentSubscription, SubscriptionStatus } from '../../entities/user-payment-subscription.entity';
@@ -767,7 +767,7 @@ export class PaymentsService {
     const overduePayments = await this.paymentRepository.find({
       where: {
         company: { id: companyId },
-        status: PaymentStatus.PENDING,
+        status: In([PaymentStatus.PENDING, PaymentStatus.OVERDUE]),
         dueDate: LessThanOrEqual(today),
         concept: Not(PaymentConcept.MATRICULA), // Matrículas se listan en la lista general de pagos, no aquí
       },
@@ -825,7 +825,10 @@ export class PaymentsService {
     });
 
     const studentsResult = await Promise.all(subscriptions.map(async (subscription) => {
-      const pendingPayment = subscription.payments.find(p => p.status === PaymentStatus.PENDING);
+      // Incluir OVERDUE además de PENDING: calculateLateFees puede haber cambiado el status
+      const pendingPayment = subscription.payments.find(
+        p => p.status === PaymentStatus.PENDING || p.status === PaymentStatus.OVERDUE
+      );
       
       // Ordenar todos los pagos del más reciente al más antiguo
       // Usar paidDate si existe (pagos pagados), sino dueDate (pagos pendientes)
@@ -893,7 +896,11 @@ export class PaymentsService {
           notes: payment.notes,
           instalmentNumber: payment.instalmentNumber,
           concept: payment.concept,
-          isOverdue: payment.dueDate ? new Date(payment.dueDate) < new Date() && payment.status === PaymentStatus.PENDING : false,
+          isOverdue: payment.dueDate
+            ? new Date(payment.dueDate) < new Date()
+              && (payment.status === PaymentStatus.PENDING || payment.status === PaymentStatus.OVERDUE)
+              && !isSuspended
+            : false,
           isSuspended: isSuspended
         };
       });
@@ -1990,13 +1997,19 @@ export class PaymentsService {
 
       return {
         ...payment,
-        isOverdue: payment.dueDate ? new Date(payment.dueDate) < new Date() && payment.status === PaymentStatus.PENDING : false,
+        isOverdue: payment.dueDate
+          ? new Date(payment.dueDate) < new Date()
+            && (payment.status === PaymentStatus.PENDING || payment.status === PaymentStatus.OVERDUE)
+            && !isSuspended
+          : false,
         isSuspended: isSuspended
       };
     });
 
-    // Obtener el pago pendiente actual
-    const pendingPayment = updatedSubscription.payments.find(p => p.status === PaymentStatus.PENDING);
+    // Incluir OVERDUE además de PENDING: calculateLateFees puede haber cambiado el status
+    const pendingPayment = updatedSubscription.payments.find(
+      p => p.status === PaymentStatus.PENDING || p.status === PaymentStatus.OVERDUE
+    );
 
     // Calcular el fin de la semana actual
     const currentWeekEnd = new Date(updatedSubscription.weekStartDate);
