@@ -8,6 +8,7 @@ import { Company } from '../../entities/company.entity';
 import { CreateProductDto } from './dto/create-product.dto';
 import { UpdateProductDto } from './dto/update-product.dto';
 import { CreateSaleDto } from './dto/create-sale.dto';
+import { UpdateSaleDto } from './dto/update-sale.dto';
 import { UpdateStockDto } from './dto/update-stock.dto';
 import { TransferStockDto, StockSource, StockDestination } from './dto/transfer-stock.dto';
 import { UserRole } from '../../common/enums/enums';
@@ -247,6 +248,96 @@ export class ProductsService {
     await this.productRepository.save(product);
 
     return savedSale;
+  }
+
+  async updateSale(companyId: string, saleId: string, dto: UpdateSaleDto, userId: string): Promise<Sale> {
+    await this.ensureUserBelongsToCompany(userId, companyId);
+
+    const sale = await this.saleRepository.findOne({
+      where: { id: saleId, companyId },
+      relations: ['product'],
+    });
+    if (!sale) throw new NotFoundException('Venta no encontrada');
+
+    const product = sale.product;
+
+    // Ajuste de stock si cambia cantidad y/o ubicación
+    const oldQty = sale.quantity;
+    const oldLocation = sale.stockLocation;
+    const newQty = dto.quantity ?? oldQty;
+    const newLocation = dto.stockLocation ?? oldLocation;
+
+    if (newQty !== oldQty || newLocation !== oldLocation) {
+      // Restaurar stock viejo
+      if (oldLocation === StockLocation.FRIDGE) {
+        product.stockFridge += oldQty;
+      } else {
+        product.stockCounter += oldQty;
+      }
+      // Validar stock disponible para nueva ubicación
+      const available = newLocation === StockLocation.FRIDGE ? product.stockFridge : product.stockCounter;
+      if (available < newQty) {
+        throw new BadRequestException(
+          `Stock insuficiente en ${newLocation}. Disponible: ${available}`,
+        );
+      }
+      // Descontar nuevo stock
+      if (newLocation === StockLocation.FRIDGE) {
+        product.stockFridge -= newQty;
+      } else {
+        product.stockCounter -= newQty;
+      }
+      await this.productRepository.save(product);
+    }
+
+    // Actualizar atleta
+    if (dto.athleteId !== undefined) {
+      if (dto.athleteId) {
+        const athlete = await this.userRepository.findOne({ where: { id: dto.athleteId } });
+        if (!athlete || athlete.role !== UserRole.ATHLETE) {
+          throw new BadRequestException('El usuario especificado no es un atleta');
+        }
+        sale.athlete = athlete;
+        sale.athleteId = athlete.id;
+      } else {
+        sale.athlete = null;
+        sale.athleteId = null;
+      }
+    }
+
+    // Recalcular precio si cambia método de pago o cantidad
+    const effectivePaymentMethod = dto.paymentMethod ?? sale.paymentMethod;
+    const unitPrice =
+      effectivePaymentMethod === PaymentMethod.CASH ? product.priceCash : product.priceTransfer;
+
+    sale.quantity = newQty;
+    sale.stockLocation = newLocation;
+    sale.paymentMethod = effectivePaymentMethod;
+    sale.unitPrice = unitPrice;
+    sale.totalPrice = unitPrice * newQty;
+    if (dto.notes !== undefined) sale.notes = dto.notes;
+
+    return await this.saleRepository.save(sale);
+  }
+
+  async deleteSale(companyId: string, saleId: string, userId: string): Promise<void> {
+    await this.ensureUserBelongsToCompany(userId, companyId);
+
+    const sale = await this.saleRepository.findOne({
+      where: { id: saleId, companyId },
+      relations: ['product'],
+    });
+    if (!sale) throw new NotFoundException('Venta no encontrada');
+
+    // Restaurar stock
+    const product = sale.product;
+    if (sale.stockLocation === StockLocation.FRIDGE) {
+      product.stockFridge += sale.quantity;
+    } else {
+      product.stockCounter += sale.quantity;
+    }
+    await this.productRepository.save(product);
+    await this.saleRepository.remove(sale);
   }
 
   async getSales(companyId: string, userId: string, startDate?: Date, endDate?: Date): Promise<Sale[]> {

@@ -2,6 +2,7 @@ import 'dotenv/config'
 import { Module } from '@nestjs/common';
 import { TypeOrmModule } from '@nestjs/typeorm';
 import { ConfigModule, ConfigService } from '@nestjs/config';
+import * as path from 'path';
 import { AuthModule } from './modules/auth/auth.module';
 import { MailingModule } from './modules/mailer/mailing.module';
 
@@ -15,6 +16,9 @@ import { AthletesModule } from './modules/athletes/athletes.module';
 import { ProductsModule } from './modules/products/products.module';
 import { HealthModule } from './modules/health/health.module';
 
+// Ruta relativa a este archivo: con ts-node carga src/entities (mismas clases que los servicios);
+// compilado carga dist/src/entities. Así se evita "No metadata for User" al correr scripts con ts-node.
+const entitiesPath = path.join(__dirname, 'entities', '**', '*.entity.{ts,js}');
 
 @Module({
   imports: [
@@ -26,7 +30,7 @@ import { HealthModule } from './modules/health/health.module';
       username: process.env.DB_USERNAME,
       password: process.env.DB_PASSWORD,
       database: process.env.DB_NAME,
-      entities: ['dist/**/*.entity.{ts,js}'],
+      entities: [entitiesPath],
       synchronize: true,
       extra: {
         connectionLimit: 15,

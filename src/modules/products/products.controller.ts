@@ -3,6 +3,7 @@ import {
   Get,
   Post,
   Put,
+  Patch,
   Delete,
   Body,
   Param,
@@ -18,6 +19,7 @@ import { ProductsService } from './products.service';
 import { CreateProductDto } from './dto/create-product.dto';
 import { UpdateProductDto } from './dto/update-product.dto';
 import { CreateSaleDto } from './dto/create-sale.dto';
+import { UpdateSaleDto } from './dto/update-sale.dto';
 import { UpdateStockDto } from './dto/update-stock.dto';
 import { TransferStockDto } from './dto/transfer-stock.dto';
 import { validate as uuidValidate } from 'uuid';
@@ -89,6 +91,28 @@ export class ProductsController {
     @GetUser() user: User,
   ) {
     return await this.productsService.createSale(companyId, createSaleDto, user.id);
+  }
+
+  @Patch('company/:companyId/sales/:saleId')
+  @UseGuards(AuthGuard('jwt'))
+  async updateSale(
+    @Param('companyId', new ParseUUIDPipe({ version: '4' })) companyId: string,
+    @Param('saleId', new ParseUUIDPipe({ version: '4' })) saleId: string,
+    @Body() updateSaleDto: UpdateSaleDto,
+    @GetUser() user: User,
+  ) {
+    return await this.productsService.updateSale(companyId, saleId, updateSaleDto, user.id);
+  }
+
+  @Delete('company/:companyId/sales/:saleId')
+  @UseGuards(AuthGuard('jwt'))
+  async deleteSale(
+    @Param('companyId', new ParseUUIDPipe({ version: '4' })) companyId: string,
+    @Param('saleId', new ParseUUIDPipe({ version: '4' })) saleId: string,
+    @GetUser() user: User,
+  ) {
+    await this.productsService.deleteSale(companyId, saleId, user.id);
+    return { message: 'Venta eliminada correctamente' };
   }
 
   @Get('company/:companyId/:productId')

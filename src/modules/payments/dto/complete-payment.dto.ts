@@ -1,4 +1,4 @@
-import { IsString, IsNumber, IsEnum, IsOptional, Min, IsDateString, ValidateIf } from 'class-validator';
+import { IsString, IsNumber, IsEnum, IsOptional, IsBoolean, Min, IsDateString, ValidateIf } from 'class-validator';
 import { PaymentMethod } from '../../../entities/payment.entity';
 
 export class CompletePaymentDto {
@@ -43,4 +43,9 @@ export class CompletePaymentDto {
   @IsDateString()
   @IsOptional()
   paidDate?: string; // Fecha del pago (opcional, por defecto hoy)
+
+  /** Si es true, activa la suscripción y genera clases pero deja el pago como PENDING */
+  @IsBoolean()
+  @IsOptional()
+  keepPending?: boolean;
 }

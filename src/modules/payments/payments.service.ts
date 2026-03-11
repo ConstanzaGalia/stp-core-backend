@@ -1123,7 +1123,7 @@ export class PaymentsService {
 
   // ===== PAGO COMPLETO (SUSCRIPCIÓN + PAGO) =====
   async completePayment(completePaymentDto: CompletePaymentDto): Promise<{ subscription: UserPaymentSubscription; payment: Payment; reservationsGenerated?: boolean }> {
-    const { paymentId: completedPaymentId, userId, paymentPlanId, companyId, amount, paymentMethod, discount, transactionId, notes, startDate, paidDate } = completePaymentDto;
+    const { paymentId: completedPaymentId, userId, paymentPlanId, companyId, amount, paymentMethod, discount, transactionId, notes, startDate, paidDate, keepPending } = completePaymentDto;
 
     // Completar un pago específico por ID (ej. matrícula u otro pago ya creado)
     if (completedPaymentId) {
@@ -1242,15 +1242,20 @@ export class PaymentsService {
       }
     }
 
-    // Actualizar el pago usando la fecha proporcionada
-    pendingPayment.status = PaymentStatus.PAID;
-    pendingPayment.paymentMethod = paymentMethod;
-    pendingPayment.paidDate = paymentDate; // Usar la fecha del pago proporcionada
-    pendingPayment.lateFee = lateFee;
-    pendingPayment.discount = discount || 0;
-    pendingPayment.totalAmount = pendingPayment.amount + lateFee - (discount || 0);
-    pendingPayment.transactionId = transactionId;
-    pendingPayment.notes = notes;
+    // Actualizar el pago — si keepPending=true se deja como PENDING (el alumno viene pero paga después)
+    if (!keepPending) {
+      pendingPayment.status = PaymentStatus.PAID;
+      pendingPayment.paymentMethod = paymentMethod;
+      pendingPayment.paidDate = paymentDate;
+      pendingPayment.lateFee = lateFee;
+      pendingPayment.discount = discount || 0;
+      pendingPayment.totalAmount = pendingPayment.amount + lateFee - (discount || 0);
+      pendingPayment.transactionId = transactionId;
+      pendingPayment.notes = notes;
+    } else {
+      // Solo guardar notas y monto actualizado; dejar estado PENDING
+      if (notes) pendingPayment.notes = notes;
+    }
 
     const payment = await this.paymentRepository.save(pendingPayment);
 
