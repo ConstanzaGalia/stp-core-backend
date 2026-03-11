@@ -29,8 +29,14 @@ export class SubscriptionSuspension {
   @ManyToOne(() => User, { onDelete: 'CASCADE' })
   user: User;
 
+  @Column({ nullable: true })
+  userId: string;
+
   @ManyToOne(() => Company, { onDelete: 'CASCADE' })
   company: Company;
+
+  @Column({ nullable: true })
+  companyId: string;
 
   @CreateDateColumn()
   createdAt: Date;

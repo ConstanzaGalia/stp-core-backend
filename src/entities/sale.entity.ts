@@ -14,6 +14,11 @@ export enum StockLocation {
   COUNTER = 'COUNTER'
 }
 
+export enum PaymentStatus {
+  PAID = 'PAID',
+  PENDING = 'PENDING'
+}
+
 @Entity('sale')
 export class Sale {
   @ApiProperty()
@@ -63,6 +68,10 @@ export class Sale {
   @ApiProperty()
   @Column({ type: 'enum', enum: StockLocation })
   stockLocation: StockLocation; // De dónde se vendió (heladera o mostrador)
+
+  @ApiProperty()
+  @Column({ type: 'enum', enum: PaymentStatus, default: PaymentStatus.PAID })
+  paymentStatus: PaymentStatus;
 
   @ApiProperty()
   @Column({ type: 'text', nullable: true })

@@ -1,5 +1,5 @@
 import { IsNotEmpty, IsString, IsNumber, IsEnum, IsOptional, Min } from 'class-validator';
-import { PaymentMethod, StockLocation } from '../../../entities/sale.entity';
+import { PaymentMethod, PaymentStatus, StockLocation } from '../../../entities/sale.entity';
 
 export class CreateSaleDto {
   @IsNotEmpty()
@@ -22,6 +22,10 @@ export class CreateSaleDto {
   @IsNotEmpty()
   @IsEnum(StockLocation)
   stockLocation: StockLocation;
+
+  @IsOptional()
+  @IsEnum(PaymentStatus)
+  paymentStatus?: PaymentStatus;
 
   @IsOptional()
   @IsString()

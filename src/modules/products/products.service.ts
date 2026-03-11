@@ -2,7 +2,7 @@ import { Injectable, NotFoundException, BadRequestException, ForbiddenException 
 import { InjectRepository } from '@nestjs/typeorm';
 import { Repository } from 'typeorm';
 import { Product } from '../../entities/product.entity';
-import { Sale, PaymentMethod, StockLocation } from '../../entities/sale.entity';
+import { Sale, PaymentMethod, PaymentStatus, StockLocation } from '../../entities/sale.entity';
 import { User } from '../../entities/user.entity';
 import { Company } from '../../entities/company.entity';
 import { CreateProductDto } from './dto/create-product.dto';
@@ -234,6 +234,7 @@ export class ProductsService {
       unitPrice,
       totalPrice,
       stockLocation: createSaleDto.stockLocation,
+      paymentStatus: createSaleDto.paymentStatus ?? PaymentStatus.PAID,
       notes: createSaleDto.notes,
     });
 
@@ -316,6 +317,7 @@ export class ProductsService {
     sale.unitPrice = unitPrice;
     sale.totalPrice = unitPrice * newQty;
     if (dto.notes !== undefined) sale.notes = dto.notes;
+    if (dto.paymentStatus !== undefined) sale.paymentStatus = dto.paymentStatus;
 
     return await this.saleRepository.save(sale);
   }
