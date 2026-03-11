@@ -29,12 +29,12 @@ export class Sale {
   productId: string;
 
   @ApiProperty()
-  @ManyToOne(() => User, { nullable: false })
-  athlete: User; // Alumno que compró
+  @ManyToOne(() => User, { nullable: true })
+  athlete: User | null;
 
   @ApiProperty()
-  @Column()
-  athleteId: string;
+  @Column({ nullable: true })
+  athleteId: string | null;
 
   @ApiProperty()
   @ManyToOne(() => Company, { nullable: false })

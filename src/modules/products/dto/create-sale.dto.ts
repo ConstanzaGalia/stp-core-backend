@@ -6,9 +6,9 @@ export class CreateSaleDto {
   @IsString()
   productId: string;
 
-  @IsNotEmpty()
+  @IsOptional()
   @IsString()
-  athleteId: string;
+  athleteId?: string;
 
   @IsNotEmpty()
   @IsNumber()

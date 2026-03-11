@@ -195,9 +195,11 @@ export class ProductsService {
     await this.ensureUserBelongsToCompany(userId, companyId);
 
     const product = await this.getProductById(createSaleDto.productId, companyId, userId);
-    const athlete = await this.userRepository.findOne({ where: { id: createSaleDto.athleteId } });
+    const athlete = createSaleDto.athleteId
+      ? await this.userRepository.findOne({ where: { id: createSaleDto.athleteId } })
+      : null;
 
-    if (!athlete || athlete.role !== UserRole.ATHLETE) {
+    if (createSaleDto.athleteId && (!athlete || athlete.role !== UserRole.ATHLETE)) {
       throw new BadRequestException('El usuario especificado no es un atleta');
     }
 
@@ -223,8 +225,7 @@ export class ProductsService {
     const sale = this.saleRepository.create({
       product: { id: product.id } as Product,
       productId: product.id,
-      athlete: { id: athlete.id } as User,
-      athleteId: athlete.id,
+      ...(athlete ? { athlete: { id: athlete.id } as User, athleteId: athlete.id } : { athlete: null, athleteId: null }),
       company: { id: companyId } as Company,
       companyId,
       quantity: createSaleDto.quantity,
