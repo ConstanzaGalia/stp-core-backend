@@ -222,7 +222,7 @@ export class AthletesService {
     companyId: string,
     createAthleteDto: CreateAthleteDto,
   ): Promise<{ user: User; invitation: AthleteInvitation }> {
-    const { name, lastName, email, isOnline = false } = createAthleteDto;
+    const { name, lastName, email, isOnline = false, dateOfBirth } = createAthleteDto;
 
     // Verificar que el centro existe
     const company = await this.companyRepository.findOne({
@@ -273,6 +273,7 @@ export class AthletesService {
       role: UserRole.ATHLETE,
       isActive: true,
       activeToken: null,
+      ...(dateOfBirth && { dateOfBirth: new Date(dateOfBirth) }),
     });
     const savedUser = await this.userRepository.save(newUser);
 
