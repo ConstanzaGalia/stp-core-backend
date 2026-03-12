@@ -1247,6 +1247,12 @@ export class PaymentsService {
       pendingPayment.status = PaymentStatus.PAID;
       pendingPayment.paymentMethod = paymentMethod;
       pendingPayment.paidDate = paymentDate;
+      // Vencimiento = mismo día del mes siguiente al pago (ej: 19/2 → 19/3)
+      pendingPayment.dueDate = new Date(
+        paymentDate.getFullYear(),
+        paymentDate.getMonth() + 1,
+        paymentDate.getDate()
+      );
       pendingPayment.lateFee = lateFee;
       pendingPayment.discount = discount || 0;
       pendingPayment.totalAmount = pendingPayment.amount + lateFee - (discount || 0);
@@ -1415,6 +1421,14 @@ export class PaymentsService {
     payment.status = PaymentStatus.PAID;
     payment.paymentMethod = dto.paymentMethod;
     payment.paidDate = paymentDate;
+    // Vencimiento = mismo día del mes siguiente al pago (solo para pagos de suscripción)
+    if (payment.subscription) {
+      payment.dueDate = new Date(
+        paymentDate.getFullYear(),
+        paymentDate.getMonth() + 1,
+        paymentDate.getDate()
+      );
+    }
     payment.lateFee = lateFee;
     payment.discount = dto.discount ?? 0;
     payment.totalAmount = Number(payment.amount) + lateFee - (dto.discount ?? 0);
