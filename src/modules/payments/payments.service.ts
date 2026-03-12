@@ -947,12 +947,11 @@ export class PaymentsService {
       };
     }));
 
-    // Incluir matrículas sin suscripción (alumno nuevo que solo pagó matrícula)
+    // Incluir pagos sin suscripción (matrícula, nutricionista, u otro concepto standalone)
     const standaloneMatriculas = await this.paymentRepository.find({
       where: {
         company: { id: companyId },
         subscription: IsNull(),
-        concept: PaymentConcept.MATRICULA
       },
       relations: ['user', 'paymentPlan', 'company']
     });
@@ -1022,6 +1021,7 @@ export class PaymentsService {
           totalPayments: 1,
           paidPayments: payment.status === PaymentStatus.PAID ? 1 : 0
         };
+        studentsResult.push(newStudent);
         studentsResult.push(newStudent);
         studentById.set(user.id, newStudent);
       }

@@ -24,7 +24,8 @@ export enum PaymentMethod {
 /** Concepto del pago: cuota de suscripción (genera clases) o matrícula (solo registro, no genera clases). */
 export enum PaymentConcept {
   SUBSCRIPTION = 'subscription',
-  MATRICULA = 'matricula'
+  MATRICULA = 'matricula',
+  NUTRICIONISTA = 'nutricionista'
 }
 
 @Entity()
