@@ -1844,6 +1844,14 @@ export class PaymentsService {
     });
   }
 
+  async getSuspensionsByCompany(companyId: string): Promise<SubscriptionSuspension[]> {
+    return await this.suspensionRepository.find({
+      where: { company: { id: companyId } },
+      relations: ['user', 'company'],
+      order: { startDate: 'DESC' }
+    });
+  }
+
   async getActiveSuspension(subscriptionId: string, date?: Date): Promise<SubscriptionSuspension | null> {
     const checkDate = date || new Date();
     

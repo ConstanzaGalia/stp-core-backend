@@ -218,6 +218,11 @@ export class PaymentsController {
     return await this.paymentsService.createSuspension(createSuspensionDto);
   }
 
+  @Get('suspensions/company/:companyId')
+  async getSuspensionsByCompany(@Param('companyId') companyId: string) {
+    return await this.paymentsService.getSuspensionsByCompany(companyId);
+  }
+
   @Get('suspensions/user/:userId/company/:companyId')
   async getSuspensions(
     @Param('userId') userId: string,
