@@ -35,7 +35,7 @@ const entitiesPath = path.join(__dirname, 'entities', '**', '*.entity.{ts,js}');
       extra: {
         max: 5,
         idleTimeoutMillis: 10000,
-        connectionTimeoutMillis: 3000,
+        connectionTimeoutMillis: 10000,
       },
       ssl: {
         rejectUnauthorized: false,
