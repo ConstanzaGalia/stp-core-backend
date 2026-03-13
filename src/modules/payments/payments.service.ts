@@ -1244,6 +1244,8 @@ export class PaymentsService {
 
     // Actualizar el pago — si keepPending=true se deja como PENDING (el alumno viene pero paga después)
     if (!keepPending) {
+      // Usar el monto enviado en el DTO (permite editar manualmente en el formulario)
+      pendingPayment.amount = Number(amount);
       pendingPayment.status = PaymentStatus.PAID;
       pendingPayment.paymentMethod = paymentMethod;
       pendingPayment.paidDate = paymentDate;
@@ -1253,9 +1255,9 @@ export class PaymentsService {
         paymentDate.getMonth() + 1,
         paymentDate.getDate()
       );
-      pendingPayment.lateFee = lateFee;
+      pendingPayment.lateFee = amount === 0 ? 0 : lateFee;
       pendingPayment.discount = discount || 0;
-      pendingPayment.totalAmount = pendingPayment.amount + lateFee - (discount || 0);
+      pendingPayment.totalAmount = pendingPayment.amount + pendingPayment.lateFee - (discount || 0);
       pendingPayment.transactionId = transactionId;
       pendingPayment.notes = notes;
     } else {
@@ -1408,16 +1410,19 @@ export class PaymentsService {
     }
 
     const paymentDate = dto.paidDate ? this.parseDateOnlyAsNoonUTC(dto.paidDate) : new Date();
+    // Usar el monto enviado en el DTO (permite editar manualmente en el formulario)
+    const amountToUse = dto.amount !== undefined && dto.amount !== null ? Number(dto.amount) : Number(payment.amount);
+    payment.amount = amountToUse;
+
     let lateFee = 0;
-    if (payment.subscription?.paymentPlan && payment.dueDate && payment.dueDate < new Date()) {
+    if (amountToUse > 0 && payment.subscription?.paymentPlan && payment.dueDate && payment.dueDate < new Date()) {
       const daysLate = Math.floor((new Date().getTime() - payment.dueDate.getTime()) / (1000 * 60 * 60 * 24));
       const plan = payment.subscription.paymentPlan;
       const gracePeriod = plan?.gracePeriodDays || 0;
       if (daysLate > gracePeriod && plan?.lateFeePercentage) {
-        lateFee = (Number(payment.amount) * plan.lateFeePercentage) / 100;
+        lateFee = (amountToUse * plan.lateFeePercentage) / 100;
       }
     }
-
     payment.status = PaymentStatus.PAID;
     payment.paymentMethod = dto.paymentMethod;
     payment.paidDate = paymentDate;
@@ -1429,9 +1434,9 @@ export class PaymentsService {
         paymentDate.getDate()
       );
     }
-    payment.lateFee = lateFee;
+    payment.lateFee = payment.amount === 0 ? 0 : lateFee;
     payment.discount = dto.discount ?? 0;
-    payment.totalAmount = Number(payment.amount) + lateFee - (dto.discount ?? 0);
+    payment.totalAmount = Number(payment.amount) + payment.lateFee - (dto.discount ?? 0);
     payment.transactionId = dto.transactionId ?? payment.transactionId;
     payment.notes = dto.notes ?? payment.notes;
     const savedPayment = await this.paymentRepository.save(payment);
