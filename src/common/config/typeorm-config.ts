@@ -13,6 +13,8 @@ export const TYPEORM_CONFIG: TypeOrmModuleOptions = {
     rejectUnauthorized: false,
   },
   extra: {
-    connectionLimit: 15,
+    max: 5,
+    idleTimeoutMillis: 10000,
+    connectionTimeoutMillis: 3000,
   },
 };

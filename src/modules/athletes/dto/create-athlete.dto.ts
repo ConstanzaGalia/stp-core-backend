@@ -22,4 +22,8 @@ export class CreateAthleteDto {
   @IsString()
   @Matches(/^\d{4}-\d{2}-\d{2}$/, { message: 'dateOfBirth debe ser YYYY-MM-DD' })
   dateOfBirth?: string;
+
+  @IsOptional()
+  @IsString()
+  phoneNumber?: string;
 }

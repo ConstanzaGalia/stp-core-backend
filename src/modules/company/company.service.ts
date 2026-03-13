@@ -80,17 +80,18 @@ export class CompanyService {
 
   public async findCompaniesByUser(userId: string): Promise<Company[]> {
     try {
-      return await this.companyRepository.find({
-        where: {
-          users: {
-            id: userId,
-            role: In([UserRole.TRAINER, UserRole.DIRECTOR, UserRole.SECRETARIA]),
-          },
-        },
-        relations: ['users'],
-      });
+      return await this.companyRepository
+        .createQueryBuilder('company')
+        .innerJoin('company.users', 'user')
+        .where('user.id = :userId', { userId })
+        .andWhere('user.role IN (:...roles)', {
+          roles: [UserRole.TRAINER, UserRole.DIRECTOR, UserRole.SECRETARIA, UserRole.SUB_TRAINER],
+        })
+        .orderBy('company.created_at', 'ASC')
+        .getMany();
     } catch (error) {
       Logger.log('Have an error in get all companies by user', error)
+      return []
     }
   }
 

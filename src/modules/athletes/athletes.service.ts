@@ -222,7 +222,7 @@ export class AthletesService {
     companyId: string,
     createAthleteDto: CreateAthleteDto,
   ): Promise<{ user: User; invitation: AthleteInvitation }> {
-    const { name, lastName, email, isOnline = false, dateOfBirth } = createAthleteDto;
+    const { name, lastName, email, isOnline = false, dateOfBirth, phoneNumber } = createAthleteDto;
 
     // Verificar que el centro existe
     const company = await this.companyRepository.findOne({
@@ -265,6 +265,12 @@ export class AthletesService {
 
     // Crear nuevo usuario atleta (verificado, sin activeToken)
     const passwordEncrypted = await this.encryptService.encryptedData(DEFAULT_ATHLETE_PASSWORD);
+    const parsedPhone = phoneNumber ? (() => {
+      const digits = String(phoneNumber).replace(/\D/g, '');
+      const num = parseInt(digits, 10);
+      return !isNaN(num) ? num : undefined;
+    })() : undefined;
+
     const newUser = this.userRepository.create({
       name,
       lastName,
@@ -274,6 +280,7 @@ export class AthletesService {
       isActive: true,
       activeToken: null,
       ...(dateOfBirth && { dateOfBirth: new Date(dateOfBirth) }),
+      ...(parsedPhone !== undefined && { phoneNumber: parsedPhone }),
     });
     const savedUser = await this.userRepository.save(newUser);
 
