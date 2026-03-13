@@ -15,6 +15,6 @@ export const TYPEORM_CONFIG: TypeOrmModuleOptions = {
   extra: {
     max: 5,
     idleTimeoutMillis: 10000,
-    connectionTimeoutMillis: 3000,
+    connectionTimeoutMillis: 10000,
   },
 };
