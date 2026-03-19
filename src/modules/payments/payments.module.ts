@@ -10,6 +10,7 @@ import { User } from '../../entities/user.entity';
 import { Company } from '../../entities/company.entity';
 import { SubscriptionSuspension } from '../../entities/subscription-suspension.entity';
 import { Expense } from '../../entities/expense.entity';
+import { ExtraIncome } from '../../entities/extra-income.entity';
 import { Reservation } from '../../entities/reservation.entity';
 import { TimeSlot } from '../../entities/timeSlot.entity';
 import { ReservationsModule } from '../reservation/reservation.module';
@@ -27,6 +28,7 @@ import { CompanyModule } from '../company/company.module';
       Company,
       SubscriptionSuspension,
       Expense,
+      ExtraIncome,
       Reservation,
       TimeSlot
     ]),

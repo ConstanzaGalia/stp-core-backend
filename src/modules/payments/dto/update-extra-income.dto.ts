@@ -1,6 +1,6 @@
 import { IsNumber, IsOptional, IsString, IsDateString, IsIn } from 'class-validator';
 
-export class UpdateExpenseDto {
+export class UpdateExtraIncomeDto {
   @IsOptional()
   @IsNumber()
   amount?: number;
@@ -16,6 +16,10 @@ export class UpdateExpenseDto {
   @IsOptional()
   @IsString()
   category?: string;
+
+  @IsOptional()
+  @IsString()
+  concept?: string;
 
   @IsOptional()
   @IsIn(['ARS', 'USD'])

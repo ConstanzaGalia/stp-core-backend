@@ -10,6 +10,8 @@ import { CreateSuspensionDto } from './dto/create-suspension.dto';
 import { UpdateSuspensionDto } from './dto/update-suspension.dto';
 import { CreateExpenseDto } from './dto/create-expense.dto';
 import { UpdateExpenseDto } from './dto/update-expense.dto';
+import { CreateExtraIncomeDto } from './dto/create-extra-income.dto';
+import { UpdateExtraIncomeDto } from './dto/update-extra-income.dto';
 
 @Controller('payments')
 @UseGuards(AuthGuard('jwt'))
@@ -125,6 +127,18 @@ export class PaymentsController {
   }
 
   // ===== INGRESOS, GASTOS Y BALANCE MENSUAL =====
+  @Get('balance/:companyId/year')
+  async getYearBalance(
+    @Param('companyId') companyId: string,
+    @Query('year') year: string
+  ) {
+    const yearNum = parseInt(year, 10);
+    if (isNaN(yearNum)) {
+      throw new BadRequestException('Invalid year');
+    }
+    return await this.paymentsService.getYearBalance(companyId, yearNum);
+  }
+
   @Get('balance/:companyId')
   async getMonthBalance(
     @Param('companyId') companyId: string,
@@ -137,6 +151,11 @@ export class PaymentsController {
       throw new BadRequestException('Invalid year or month');
     }
     return await this.paymentsService.getMonthBalance(companyId, yearNum, monthNum);
+  }
+
+  @Get('cajas/:companyId')
+  async getCajaBalances(@Param('companyId') companyId: string) {
+    return await this.paymentsService.getCajaBalances(companyId);
   }
 
   @Post('expenses/:companyId')
@@ -163,6 +182,32 @@ export class PaymentsController {
   ) {
     await this.paymentsService.deleteExpense(expenseId, companyId);
     return { message: 'Expense deleted successfully' };
+  }
+
+  @Post('extra-incomes/:companyId')
+  async createExtraIncome(
+    @Param('companyId') companyId: string,
+    @Body() createExtraIncomeDto: CreateExtraIncomeDto
+  ) {
+    return await this.paymentsService.createExtraIncome(companyId, createExtraIncomeDto);
+  }
+
+  @Put('extra-incomes/:companyId/:id')
+  async updateExtraIncome(
+    @Param('companyId') companyId: string,
+    @Param('id') id: string,
+    @Body() updateExtraIncomeDto: UpdateExtraIncomeDto
+  ) {
+    return await this.paymentsService.updateExtraIncome(id, companyId, updateExtraIncomeDto);
+  }
+
+  @Delete('extra-incomes/:companyId/:id')
+  async deleteExtraIncome(
+    @Param('companyId') companyId: string,
+    @Param('id') id: string
+  ) {
+    await this.paymentsService.deleteExtraIncome(id, companyId);
+    return { message: 'Extra income deleted successfully' };
   }
 
   // ===== UTILIDADES =====

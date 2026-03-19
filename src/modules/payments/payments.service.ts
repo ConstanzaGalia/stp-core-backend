@@ -9,6 +9,7 @@ import { User } from '../../entities/user.entity';
 import { Company } from '../../entities/company.entity';
 import { SubscriptionSuspension } from '../../entities/subscription-suspension.entity';
 import { Expense } from '../../entities/expense.entity';
+import { ExtraIncome } from '../../entities/extra-income.entity';
 import { Reservation } from '../../entities/reservation.entity';
 import { TimeSlot } from '../../entities/timeSlot.entity';
 import { AthleteSchedule, ScheduleStatus } from '../../entities/athlete-schedule.entity';
@@ -25,6 +26,8 @@ import { CreateSuspensionDto } from './dto/create-suspension.dto';
 import { UpdateSuspensionDto } from './dto/update-suspension.dto';
 import { CreateExpenseDto } from './dto/create-expense.dto';
 import { UpdateExpenseDto } from './dto/update-expense.dto';
+import { CreateExtraIncomeDto } from './dto/create-extra-income.dto';
+import { UpdateExtraIncomeDto } from './dto/update-extra-income.dto';
 import { MailingService } from '../mailer/mailing.service';
 import { CompanyService } from '../company/company.service';
 import { UserRole } from '../../common/enums/enums';
@@ -50,6 +53,8 @@ export class PaymentsService {
     private readonly suspensionRepository: Repository<SubscriptionSuspension>,
     @InjectRepository(Expense)
     private readonly expenseRepository: Repository<Expense>,
+    @InjectRepository(ExtraIncome)
+    private readonly extraIncomeRepository: Repository<ExtraIncome>,
     @InjectRepository(Reservation)
     private readonly reservationRepository: Repository<Reservation>,
     @InjectRepository(TimeSlot)
@@ -654,7 +659,38 @@ export class PaymentsService {
         date: p.paidDate,
         user: p.user ? `${p.user.name} ${p.user.lastName}` : null,
         planName: p.paymentPlan?.name || null,
-        concept: p.concept
+        concept: p.concept,
+        type: 'cuota' as const,
+        currency: 'ARS' as const
+      }))
+    };
+  }
+
+  async getMonthExtraIncome(companyId: string, year: number, month: number): Promise<{ total: number; items: any[] }> {
+    const startDate = new Date(year, month - 1, 1);
+    const endDate = new Date(year, month, 0, 23, 59, 59, 999);
+
+    const items = await this.extraIncomeRepository.find({
+      where: {
+        company: { id: companyId },
+        date: Between(startDate, endDate)
+      },
+      order: { date: 'DESC' }
+    });
+
+    const total = items.reduce((sum, i) => sum + Number(i.amount || 0), 0);
+
+    return {
+      total,
+      items: items.map(i => ({
+        id: i.id,
+        amount: Number(i.amount),
+        date: i.date,
+        description: i.description,
+        category: i.category,
+        concept: i.concept,
+        type: 'extraordinario' as const,
+        currency: (i.currency || 'ARS') as 'ARS' | 'USD'
       }))
     };
   }
@@ -680,7 +716,8 @@ export class PaymentsService {
         amount: Number(e.amount),
         date: e.date,
         description: e.description,
-        category: e.category
+        category: e.category,
+        currency: (e.currency || 'ARS') as 'ARS' | 'USD'
       }))
     };
   }
@@ -692,16 +729,23 @@ export class PaymentsService {
     incomeDetail: any[];
     expensesDetail: any[];
   }> {
-    const [incomeResult, expensesResult] = await Promise.all([
+    const [incomeResult, extraIncomeResult, expensesResult] = await Promise.all([
       this.getMonthIncome(companyId, year, month),
+      this.getMonthExtraIncome(companyId, year, month),
       this.getMonthExpenses(companyId, year, month)
     ]);
 
+    const totalIncome = incomeResult.total + extraIncomeResult.total;
+    const incomeDetail = [
+      ...incomeResult.payments,
+      ...extraIncomeResult.items
+    ].sort((a, b) => new Date(b.date).getTime() - new Date(a.date).getTime());
+
     return {
-      income: incomeResult.total,
+      income: totalIncome,
       expenses: expensesResult.total,
-      balance: incomeResult.total - expensesResult.total,
-      incomeDetail: incomeResult.payments,
+      balance: totalIncome - expensesResult.total,
+      incomeDetail,
       expensesDetail: expensesResult.expenses
     };
   }
@@ -715,6 +759,7 @@ export class PaymentsService {
     const expense = this.expenseRepository.create({
       ...createExpenseDto,
       date: new Date(createExpenseDto.date),
+      currency: createExpenseDto.currency || 'ARS',
       company: { id: companyId }
     });
 
@@ -733,6 +778,7 @@ export class PaymentsService {
     expense.date = updateExpenseDto.date ? new Date(updateExpenseDto.date) : expense.date;
     expense.description = updateExpenseDto.description ?? expense.description;
     expense.category = updateExpenseDto.category ?? expense.category;
+    if (updateExpenseDto.currency) expense.currency = updateExpenseDto.currency;
 
     return await this.expenseRepository.save(expense);
   }
@@ -745,6 +791,155 @@ export class PaymentsService {
       throw new NotFoundException('Expense not found');
     }
     await this.expenseRepository.remove(expense);
+  }
+
+  async createExtraIncome(companyId: string, dto: CreateExtraIncomeDto): Promise<ExtraIncome> {
+    const company = await this.companyRepository.findOne({ where: { id: companyId } });
+    if (!company) {
+      throw new NotFoundException('Company not found');
+    }
+    const extraIncome = this.extraIncomeRepository.create({
+      ...dto,
+      date: new Date(dto.date),
+      currency: dto.currency || 'ARS',
+      company: { id: companyId }
+    });
+    return await this.extraIncomeRepository.save(extraIncome);
+  }
+
+  async updateExtraIncome(id: string, companyId: string, dto: UpdateExtraIncomeDto): Promise<ExtraIncome> {
+    const extraIncome = await this.extraIncomeRepository.findOne({
+      where: { id, company: { id: companyId } }
+    });
+    if (!extraIncome) {
+      throw new NotFoundException('Extra income not found');
+    }
+    if (dto.amount != null) extraIncome.amount = dto.amount;
+    if (dto.date) extraIncome.date = new Date(dto.date);
+    if (dto.description != null) extraIncome.description = dto.description;
+    if (dto.category != null) extraIncome.category = dto.category;
+    if (dto.concept != null) extraIncome.concept = dto.concept;
+    if (dto.currency) extraIncome.currency = dto.currency;
+    return await this.extraIncomeRepository.save(extraIncome);
+  }
+
+  async deleteExtraIncome(id: string, companyId: string): Promise<void> {
+    const extraIncome = await this.extraIncomeRepository.findOne({
+      where: { id, company: { id: companyId } }
+    });
+    if (!extraIncome) {
+      throw new NotFoundException('Extra income not found');
+    }
+    await this.extraIncomeRepository.remove(extraIncome);
+  }
+
+  async getYearBalance(companyId: string, year: number): Promise<{
+    income: number;
+    expenses: number;
+    balance: number;
+    incomeDetail: any[];
+    expensesDetail: any[];
+  }> {
+    const startDate = new Date(year, 0, 1);
+    const endDate = new Date(year, 11, 31, 23, 59, 59, 999);
+
+    const [payments, extraIncomes, expenses] = await Promise.all([
+      this.paymentRepository.find({
+        where: {
+          company: { id: companyId },
+          status: PaymentStatus.PAID,
+          paidDate: Between(startDate, endDate)
+        },
+        relations: ['user', 'paymentPlan']
+      }),
+      this.extraIncomeRepository.find({
+        where: {
+          company: { id: companyId },
+          date: Between(startDate, endDate)
+        },
+        order: { date: 'DESC' }
+      }),
+      this.expenseRepository.find({
+        where: {
+          company: { id: companyId },
+          date: Between(startDate, endDate)
+        },
+        order: { date: 'DESC' }
+      })
+    ]);
+
+    const incomeFromPayments = payments.reduce((sum, p) => sum + Number(p.totalAmount || 0), 0);
+    const incomeFromExtra = extraIncomes.reduce((sum, i) => sum + Number(i.amount || 0), 0);
+    const totalIncome = incomeFromPayments + incomeFromExtra;
+    const totalExpenses = expenses.reduce((sum, e) => sum + Number(e.amount || 0), 0);
+
+    const incomeDetail = [
+      ...payments.map(p => ({
+        id: p.id,
+        amount: Number(p.totalAmount),
+        date: p.paidDate,
+        user: p.user ? `${p.user.name} ${p.user.lastName}` : null,
+        planName: p.paymentPlan?.name || null,
+        concept: p.concept,
+        type: 'cuota' as const,
+        currency: 'ARS' as const
+      })),
+      ...extraIncomes.map(i => ({
+        id: i.id,
+        amount: Number(i.amount),
+        date: i.date,
+        description: i.description,
+        category: i.category,
+        concept: i.concept,
+        type: 'extraordinario' as const,
+        currency: (i.currency || 'ARS') as 'ARS' | 'USD'
+      }))
+    ].sort((a, b) => new Date(b.date).getTime() - new Date(a.date).getTime());
+
+    const expensesDetail = expenses.map(e => ({
+      id: e.id,
+      amount: Number(e.amount),
+      date: e.date,
+      description: e.description,
+      category: e.category,
+      currency: (e.currency || 'ARS') as 'ARS' | 'USD'
+    }));
+
+    return {
+      income: totalIncome,
+      expenses: totalExpenses,
+      balance: totalIncome - totalExpenses,
+      incomeDetail,
+      expensesDetail
+    };
+  }
+
+  async getCajaBalances(companyId: string): Promise<{ cajaArs: number; cajaUsd: number }> {
+    const [payments, extraIncomes, expenses] = await Promise.all([
+      this.paymentRepository.find({
+        where: {
+          company: { id: companyId },
+          status: PaymentStatus.PAID
+        }
+      }),
+      this.extraIncomeRepository.find({
+        where: { company: { id: companyId } }
+      }),
+      this.expenseRepository.find({
+        where: { company: { id: companyId } }
+      })
+    ]);
+
+    const incomeArs = payments.reduce((sum, p) => sum + Number(p.totalAmount || 0), 0) +
+      extraIncomes.filter(i => (i.currency || 'ARS') === 'ARS').reduce((sum, i) => sum + Number(i.amount || 0), 0);
+    const incomeUsd = extraIncomes.filter(i => i.currency === 'USD').reduce((sum, i) => sum + Number(i.amount || 0), 0);
+    const expenseArs = expenses.filter(e => (e.currency || 'ARS') === 'ARS').reduce((sum, e) => sum + Number(e.amount || 0), 0);
+    const expenseUsd = expenses.filter(e => e.currency === 'USD').reduce((sum, e) => sum + Number(e.amount || 0), 0);
+
+    return {
+      cajaArs: incomeArs - expenseArs,
+      cajaUsd: incomeUsd - expenseUsd
+    };
   }
 
   // ===== UTILIDADES =====
