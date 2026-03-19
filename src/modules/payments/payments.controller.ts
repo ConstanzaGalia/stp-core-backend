@@ -154,8 +154,26 @@ export class PaymentsController {
   }
 
   @Get('cajas/:companyId')
-  async getCajaBalances(@Param('companyId') companyId: string) {
-    return await this.paymentsService.getCajaBalances(companyId);
+  async getCajaBalances(
+    @Param('companyId') companyId: string,
+    @Query('year') yearStr?: string,
+    @Query('month') monthStr?: string
+  ) {
+    if (yearStr == null || yearStr === '') {
+      return await this.paymentsService.getCajaBalances(companyId);
+    }
+    const yearNum = parseInt(yearStr, 10);
+    if (isNaN(yearNum)) {
+      throw new BadRequestException('Invalid year');
+    }
+    if (monthStr == null || monthStr === '') {
+      return await this.paymentsService.getCajaBalances(companyId, yearNum);
+    }
+    const monthNum = parseInt(monthStr, 10);
+    if (isNaN(monthNum) || monthNum < 1 || monthNum > 12) {
+      throw new BadRequestException('Invalid month');
+    }
+    return await this.paymentsService.getCajaBalances(companyId, yearNum, monthNum);
   }
 
   @Post('expenses/:companyId')

@@ -914,20 +914,47 @@ export class PaymentsService {
     };
   }
 
-  async getCajaBalances(companyId: string): Promise<{ cajaArs: number; cajaUsd: number }> {
+  /**
+   * Saldo caja ARS/USD = ingresos - gastos en el rango.
+   * Sin año: histórico completo (compatibilidad). Con año: anual; con año+mes: mensual (mismos rangos que balance).
+   */
+  async getCajaBalances(
+    companyId: string,
+    year?: number,
+    month?: number
+  ): Promise<{ cajaArs: number; cajaUsd: number }> {
+    let startDate: Date | undefined;
+    let endDate: Date | undefined;
+    if (year != null && month != null) {
+      startDate = new Date(year, month - 1, 1);
+      endDate = new Date(year, month, 0, 23, 59, 59, 999);
+    } else if (year != null) {
+      startDate = new Date(year, 0, 1);
+      endDate = new Date(year, 11, 31, 23, 59, 59, 999);
+    }
+
+    const paymentWhere: any = {
+      company: { id: companyId },
+      status: PaymentStatus.PAID
+    };
+    if (startDate && endDate) {
+      paymentWhere.paidDate = Between(startDate, endDate);
+    }
+
+    const extraWhere: any = { company: { id: companyId } };
+    if (startDate && endDate) {
+      extraWhere.date = Between(startDate, endDate);
+    }
+
+    const expenseWhere: any = { company: { id: companyId } };
+    if (startDate && endDate) {
+      expenseWhere.date = Between(startDate, endDate);
+    }
+
     const [payments, extraIncomes, expenses] = await Promise.all([
-      this.paymentRepository.find({
-        where: {
-          company: { id: companyId },
-          status: PaymentStatus.PAID
-        }
-      }),
-      this.extraIncomeRepository.find({
-        where: { company: { id: companyId } }
-      }),
-      this.expenseRepository.find({
-        where: { company: { id: companyId } }
-      })
+      this.paymentRepository.find({ where: paymentWhere }),
+      this.extraIncomeRepository.find({ where: extraWhere }),
+      this.expenseRepository.find({ where: expenseWhere })
     ]);
 
     const incomeArs = payments.reduce((sum, p) => sum + Number(p.totalAmount || 0), 0) +

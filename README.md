@@ -68,6 +68,12 @@ Nest is an MIT-licensed open source project. It can grow thanks to the sponsors 
 - Website - [https://nestjs.com](https://nestjs.com/)
 - Twitter - [@nestframework](https://twitter.com/nestframework)
 
+## Variables de entorno (STP)
+
+Copiá [`.env.example`](./.env.example) a `.env` y completá credenciales.
+
+- **`DB_POOL_MAX`**: conexiones máximas del pool **por instancia** del backend. En Postgres detrás de un pooler en modo **Session** (p. ej. Supabase) el cupo global es compartido: si desplegás varias réplicas, `réplicas × DB_POOL_MAX` no debe superar el límite del proveedor. Si aparece el error `MaxClientsInSessionMode`, bajá `DB_POOL_MAX` (p. ej. 3–5) o reducí instancias.
+
 ## License
 
 Nest is [MIT licensed](LICENSE).

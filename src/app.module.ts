@@ -28,8 +28,12 @@ const entitiesPath = path.join(__dirname, 'entities', '**', '*.entity.{ts,js}');
       inject: [ConfigService],
       useFactory: (config: ConfigService) => {
         const sslEnabled = String(config.get('DB_SSL', 'true')).toLowerCase() !== 'false';
-        /** PROD remota: 10s suele quedarse corto; pool chico + idle 10s genera timeouts bajo carga. */
-        const poolMax = Number(config.get('DB_POOL_MAX', '15'));
+        /**
+         * Default bajo: con poolers en modo Session (p. ej. Supabase) el límite de clientes
+         * es por instancia; varias réplicas × max alto → MaxClientsInSessionMode.
+         */
+        const defaultPoolMax = 8;
+        const poolMax = Number(config.get('DB_POOL_MAX', String(defaultPoolMax)));
         const connectionTimeoutMs = Number(config.get('DB_CONNECTION_TIMEOUT_MS', '60000'));
         const idleTimeoutMs = Number(config.get('DB_IDLE_TIMEOUT_MS', '30000'));
 
@@ -43,7 +47,7 @@ const entitiesPath = path.join(__dirname, 'entities', '**', '*.entity.{ts,js}');
           entities: [entitiesPath],
           synchronize: true,
           extra: {
-            max: Number.isFinite(poolMax) && poolMax > 0 ? poolMax : 15,
+            max: Number.isFinite(poolMax) && poolMax > 0 ? poolMax : defaultPoolMax,
             idleTimeoutMillis: Number.isFinite(idleTimeoutMs) ? idleTimeoutMs : 30000,
             connectionTimeoutMillis: Number.isFinite(connectionTimeoutMs) ? connectionTimeoutMs : 60000,
             /** Evita que firewalls cloud cierren sockets “muertos” sin que el pool lo note. */
