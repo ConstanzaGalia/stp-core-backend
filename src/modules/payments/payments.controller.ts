@@ -9,6 +9,7 @@ import { UpdatePaymentDto } from './dto/update-payment.dto';
 import { CreateSuspensionDto } from './dto/create-suspension.dto';
 import { UpdateSuspensionDto } from './dto/update-suspension.dto';
 import { CreateExpenseDto } from './dto/create-expense.dto';
+import { UpdateExpenseDto } from './dto/update-expense.dto';
 
 @Controller('payments')
 @UseGuards(AuthGuard('jwt'))
@@ -144,6 +145,15 @@ export class PaymentsController {
     @Body() createExpenseDto: CreateExpenseDto
   ) {
     return await this.paymentsService.createExpense(companyId, createExpenseDto);
+  }
+
+  @Put('expenses/:companyId/:expenseId')
+  async updateExpense(
+    @Param('companyId') companyId: string,
+    @Param('expenseId') expenseId: string,
+    @Body() updateExpenseDto: UpdateExpenseDto
+  ) {
+    return await this.paymentsService.updateExpense(expenseId, companyId, updateExpenseDto);
   }
 
   @Delete('expenses/:companyId/:expenseId')

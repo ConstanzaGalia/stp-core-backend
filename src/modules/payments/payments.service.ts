@@ -24,6 +24,7 @@ import { UpdatePaymentDto } from './dto/update-payment.dto';
 import { CreateSuspensionDto } from './dto/create-suspension.dto';
 import { UpdateSuspensionDto } from './dto/update-suspension.dto';
 import { CreateExpenseDto } from './dto/create-expense.dto';
+import { UpdateExpenseDto } from './dto/update-expense.dto';
 import { MailingService } from '../mailer/mailing.service';
 import { CompanyService } from '../company/company.service';
 import { UserRole } from '../../common/enums/enums';
@@ -716,6 +717,22 @@ export class PaymentsService {
       date: new Date(createExpenseDto.date),
       company: { id: companyId }
     });
+
+    return await this.expenseRepository.save(expense);
+  }
+
+  async updateExpense(expenseId: string, companyId: string, updateExpenseDto: UpdateExpenseDto): Promise<Expense> {
+    const expense = await this.expenseRepository.findOne({
+      where: { id: expenseId, company: { id: companyId } }
+    });
+    if (!expense) {
+      throw new NotFoundException('Expense not found');
+    }
+
+    expense.amount = updateExpenseDto.amount ?? expense.amount;
+    expense.date = updateExpenseDto.date ? new Date(updateExpenseDto.date) : expense.date;
+    expense.description = updateExpenseDto.description ?? expense.description;
+    expense.category = updateExpenseDto.category ?? expense.category;
 
     return await this.expenseRepository.save(expense);
   }

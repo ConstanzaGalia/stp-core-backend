@@ -23,22 +23,35 @@ const entitiesPath = path.join(__dirname, 'entities', '**', '*.entity.{ts,js}');
 @Module({
   imports: [
     ConfigModule.forRoot({ envFilePath: '.env', isGlobal: true }),
-    TypeOrmModule.forRoot({
-      type: 'postgres',
-      host: process.env.DB_HOST,
-      port: Number(process.env.DB_PORT),
-      username: process.env.DB_USERNAME,
-      password: process.env.DB_PASSWORD,
-      database: process.env.DB_NAME,
-      entities: [entitiesPath],
-      synchronize: true,
-      extra: {
-        max: 5,
-        idleTimeoutMillis: 10000,
-        connectionTimeoutMillis: 10000,
-      },
-      ssl: {
-        rejectUnauthorized: false,
+    TypeOrmModule.forRootAsync({
+      imports: [ConfigModule],
+      inject: [ConfigService],
+      useFactory: (config: ConfigService) => {
+        const sslEnabled = String(config.get('DB_SSL', 'true')).toLowerCase() !== 'false';
+        /** PROD remota: 10s suele quedarse corto; pool chico + idle 10s genera timeouts bajo carga. */
+        const poolMax = Number(config.get('DB_POOL_MAX', '15'));
+        const connectionTimeoutMs = Number(config.get('DB_CONNECTION_TIMEOUT_MS', '60000'));
+        const idleTimeoutMs = Number(config.get('DB_IDLE_TIMEOUT_MS', '30000'));
+
+        return {
+          type: 'postgres' as const,
+          host: config.get<string>('DB_HOST'),
+          port: Number(config.get('DB_PORT', 5432)),
+          username: config.get<string>('DB_USERNAME'),
+          password: config.get<string>('DB_PASSWORD'),
+          database: config.get<string>('DB_NAME'),
+          entities: [entitiesPath],
+          synchronize: true,
+          extra: {
+            max: Number.isFinite(poolMax) && poolMax > 0 ? poolMax : 15,
+            idleTimeoutMillis: Number.isFinite(idleTimeoutMs) ? idleTimeoutMs : 30000,
+            connectionTimeoutMillis: Number.isFinite(connectionTimeoutMs) ? connectionTimeoutMs : 60000,
+            /** Evita que firewalls cloud cierren sockets “muertos” sin que el pool lo note. */
+            keepAlive: true,
+            keepAliveInitialDelayMillis: 10000,
+          },
+          ssl: sslEnabled ? { rejectUnauthorized: false } : false,
+        };
       },
     }),
 
