@@ -1,6 +1,6 @@
-import { Injectable, BadRequestException, NotFoundException, Inject, forwardRef, Logger } from '@nestjs/common';
+import { Injectable, BadRequestException, NotFoundException, ForbiddenException, Inject, forwardRef, Logger } from '@nestjs/common';
 import { InjectRepository } from '@nestjs/typeorm';
-import { Repository, Between, LessThanOrEqual, Not, IsNull, In } from 'typeorm';
+import { Repository, Between, LessThanOrEqual, Not, IsNull, In, Brackets } from 'typeorm';
 import { Payment, PaymentStatus, PaymentMethod, PaymentConcept } from '../../entities/payment.entity';
 import { PaymentPlan } from '../../entities/payment-plan.entity';
 import { UserPaymentSubscription, SubscriptionStatus } from '../../entities/user-payment-subscription.entity';
@@ -748,6 +748,99 @@ export class PaymentsService {
       incomeDetail,
       expensesDetail: expensesResult.expenses
     };
+  }
+
+  /** Solo directores asociados a la empresa (mismo criterio estricto que estadísticas). */
+  async assertDirectorOfCompany(directorId: string, companyId: string): Promise<void> {
+    const company = await this.companyRepository.findOne({
+      where: { id: companyId },
+      relations: ['users'],
+    });
+    if (!company) {
+      throw new NotFoundException('Company not found');
+    }
+    const ok = company.users.some(
+      (u) => u.id === directorId && u.role === UserRole.DIRECTOR,
+    );
+    if (!ok) {
+      throw new ForbiddenException('Only company directors can view gym statistics');
+    }
+  }
+
+  /**
+   * Métricas mensuales del año: alumnos activos (cuota subscription pagada o pendiente/mora en ese mes por dueDate)
+   * e ingresos por cuotas pagadas (paidDate en ese mes).
+   */
+  async getMonthlyGymStats(
+    companyId: string,
+    year: number,
+  ): Promise<{
+    year: number;
+    months: { month: number; activeStudents: number; subscriptionRevenue: number }[];
+  }> {
+    const start = new Date(year, 0, 1);
+    const end = new Date(year, 11, 31, 23, 59, 59, 999);
+
+    const payments = await this.paymentRepository
+      .createQueryBuilder('p')
+      .leftJoinAndSelect('p.user', 'user')
+      .where('p.companyId = :companyId', { companyId })
+      .andWhere('p.concept = :concept', { concept: PaymentConcept.SUBSCRIPTION })
+      .andWhere(
+        new Brackets((qb) => {
+          qb.where('p.paidDate >= :start AND p.paidDate <= :end', { start, end }).orWhere(
+            'p.dueDate >= :start AND p.dueDate <= :end',
+            { start, end },
+          );
+        }),
+      )
+      .getMany();
+
+    const revenueByMonth = Array.from({ length: 12 }, () => 0);
+    const activeSets: Set<string>[] = Array.from({ length: 12 }, () => new Set<string>());
+
+    const activeStatuses = new Set([
+      PaymentStatus.PAID,
+      PaymentStatus.PENDING,
+      PaymentStatus.OVERDUE,
+    ]);
+
+    for (const p of payments) {
+      if (p.status === PaymentStatus.CANCELLED || p.status === PaymentStatus.REFUNDED) {
+        continue;
+      }
+      const userId = p.user?.id;
+      if (!userId) continue;
+
+      if (p.status === PaymentStatus.PAID && p.paidDate) {
+        const pd = new Date(p.paidDate);
+        if (pd >= start && pd <= end) {
+          const m = pd.getMonth();
+          revenueByMonth[m] += Number(p.totalAmount || 0);
+        }
+      }
+
+      if (!activeStatuses.has(p.status)) continue;
+
+      const ref =
+        p.dueDate != null
+          ? new Date(p.dueDate)
+          : p.status === PaymentStatus.PAID && p.paidDate
+            ? new Date(p.paidDate)
+            : null;
+      if (!ref || ref < start || ref > end) continue;
+
+      const monthIdx = ref.getMonth();
+      activeSets[monthIdx].add(userId);
+    }
+
+    const months = Array.from({ length: 12 }, (_, i) => ({
+      month: i + 1,
+      activeStudents: activeSets[i].size,
+      subscriptionRevenue: Math.round(revenueByMonth[i] * 100) / 100,
+    }));
+
+    return { year, months };
   }
 
   async createExpense(companyId: string, createExpenseDto: CreateExpenseDto): Promise<Expense> {

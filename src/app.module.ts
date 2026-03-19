@@ -2,7 +2,6 @@ import 'dotenv/config'
 import { Module } from '@nestjs/common';
 import { TypeOrmModule } from '@nestjs/typeorm';
 import { ConfigModule, ConfigService } from '@nestjs/config';
-import * as path from 'path';
 import { AuthModule } from './modules/auth/auth.module';
 import { MailingModule } from './modules/mailer/mailing.module';
 
@@ -15,10 +14,7 @@ import { PaymentsModule } from './modules/payments/payments.module';
 import { AthletesModule } from './modules/athletes/athletes.module';
 import { ProductsModule } from './modules/products/products.module';
 import { HealthModule } from './modules/health/health.module';
-
-// Ruta relativa a este archivo: con ts-node carga src/entities (mismas clases que los servicios);
-// compilado carga dist/src/entities. Así se evita "No metadata for User" al correr scripts con ts-node.
-const entitiesPath = path.join(__dirname, 'entities', '**', '*.entity.{ts,js}');
+import { TYPEORM_ENTITIES } from './typeorm-entities';
 
 @Module({
   imports: [
@@ -44,7 +40,7 @@ const entitiesPath = path.join(__dirname, 'entities', '**', '*.entity.{ts,js}');
           username: config.get<string>('DB_USERNAME'),
           password: config.get<string>('DB_PASSWORD'),
           database: config.get<string>('DB_NAME'),
-          entities: [entitiesPath],
+          entities: TYPEORM_ENTITIES,
           synchronize: true,
           extra: {
             max: Number.isFinite(poolMax) && poolMax > 0 ? poolMax : defaultPoolMax,
