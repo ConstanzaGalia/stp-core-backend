@@ -775,77 +775,155 @@ export class PaymentsService {
   }
 
   /**
-   * Métricas mensuales del año: alumnos activos (cuota subscription pagada o pendiente/mora en ese mes por dueDate)
-   * e ingresos por cuotas pagadas (paidDate en ese mes).
+   * Métricas mensuales del año:
+   * - Alumnos activos: alumnos distintos que tienen >= 1 pago de suscripción con `status=PAID`
+   *   y `paidDate` dentro del mes calendario. Deduplicación: 1 alumno cuenta 1 vez por mes.
+   * - Suspensiones: no cuenta el alumno en el mes si alguna suspensión activa solapa cualquier día
+   *   del mes.
+   * - Ingresos: suma de `totalAmount` de pagos `subscription` con `status=PAID` por mes (según paidDate).
    */
   async getMonthlyGymStats(
     companyId: string,
     year: number,
   ): Promise<{
     year: number;
-    months: { month: number; activeStudents: number; subscriptionRevenue: number }[];
+    months: {
+      month: number;
+      activeStudents: number;
+      subscriptionRevenue: number; // cuotas (PaymentConcept.SUBSCRIPTION)
+      matriculaRevenue: number; // matrículas (PaymentConcept.MATRICULA)
+      totalRevenue: number; // cuotas + matrículas
+    }[];
   }> {
-    const start = new Date(year, 0, 1);
-    const end = new Date(year, 11, 31, 23, 59, 59, 999);
+    const yearStart = new Date(Date.UTC(year, 0, 1, 0, 0, 0, 0));
+    const yearEnd = new Date(Date.UTC(year, 11, 31, 23, 59, 59, 999));
+
+    const monthBounds = Array.from({ length: 12 }, (_, monthIdx) => ({
+      start: new Date(Date.UTC(year, monthIdx, 1, 0, 0, 0, 0)),
+      end: new Date(Date.UTC(year, monthIdx + 1, 0, 23, 59, 59, 999)),
+    }));
+
+    type SuspensionRange = { start: Date; end: Date };
+
+    const toUtcDayStart = (d: Date): Date =>
+      new Date(Date.UTC(d.getUTCFullYear(), d.getUTCMonth(), d.getUTCDate(), 0, 0, 0, 0));
+    const toUtcDayEnd = (d: Date): Date =>
+      new Date(Date.UTC(d.getUTCFullYear(), d.getUTCMonth(), d.getUTCDate(), 23, 59, 59, 999));
+    const intervalsOverlap = (aStart: Date, aEnd: Date, bStart: Date, bEnd: Date): boolean =>
+      aStart.getTime() <= bEnd.getTime() && aEnd.getTime() >= bStart.getTime();
 
     const payments = await this.paymentRepository
       .createQueryBuilder('p')
       .leftJoinAndSelect('p.user', 'user')
       .where('p.companyId = :companyId', { companyId })
       .andWhere('p.concept = :concept', { concept: PaymentConcept.SUBSCRIPTION })
-      .andWhere(
-        new Brackets((qb) => {
-          qb.where('p.paidDate >= :start AND p.paidDate <= :end', { start, end }).orWhere(
-            'p.dueDate >= :start AND p.dueDate <= :end',
-            { start, end },
-          );
-        }),
-      )
+      .andWhere('p.status = :status', { status: PaymentStatus.PAID })
+      .andWhere('p.paidDate IS NOT NULL')
+      .andWhere('p.paidDate >= :yearStart AND p.paidDate <= :yearEnd', { yearStart, yearEnd })
       .getMany();
 
-    const revenueByMonth = Array.from({ length: 12 }, () => 0);
+    const subscriptionRevenueByMonth = Array.from({ length: 12 }, () => 0);
+    const matriculaRevenueByMonth = Array.from({ length: 12 }, () => 0);
     const activeSets: Set<string>[] = Array.from({ length: 12 }, () => new Set<string>());
 
-    const activeStatuses = new Set([
-      PaymentStatus.PAID,
-      PaymentStatus.PENDING,
-      PaymentStatus.OVERDUE,
-    ]);
+    const userIds = Array.from(
+      new Set(payments.map((p) => p.user?.id).filter((id): id is string => Boolean(id))),
+    );
+
+    const suspRangesByUserId = new Map<string, SuspensionRange[]>();
+    if (userIds.length > 0) {
+      const suspensions = await this.suspensionRepository.find({
+        where: {
+          company: { id: companyId },
+          isActive: true,
+          user: { id: In(userIds) },
+        },
+        relations: ['user'],
+      });
+
+      for (const s of suspensions) {
+        const uid = s.userId ?? s.user?.id;
+        if (!uid) continue;
+
+        const sd = new Date(s.startDate);
+        const ed = new Date(s.endDate);
+        const start = toUtcDayStart(sd);
+        const end = toUtcDayEnd(ed);
+
+        const arr = suspRangesByUserId.get(uid) ?? [];
+        arr.push({ start, end });
+        suspRangesByUserId.set(uid, arr);
+      }
+    }
+
+    const blockedCacheByUserId = new Map<string, boolean[]>(); // boolean[12]
+    const isBlockedInMonth = (userId: string, monthIdx: number): boolean => {
+      const cached = blockedCacheByUserId.get(userId);
+      if (cached) return cached[monthIdx] ?? false;
+
+      const blocked = Array.from({ length: 12 }, () => false);
+      const ranges = suspRangesByUserId.get(userId) ?? [];
+
+      if (ranges.length === 0) {
+        blockedCacheByUserId.set(userId, blocked);
+        return false;
+      }
+
+      for (let mi = 0; mi < 12; mi++) {
+        const { start, end } = monthBounds[mi];
+        blocked[mi] = ranges.some((r) => intervalsOverlap(start, end, r.start, r.end));
+      }
+
+      blockedCacheByUserId.set(userId, blocked);
+      return blocked[monthIdx] ?? false;
+    };
 
     for (const p of payments) {
-      if (p.status === PaymentStatus.CANCELLED || p.status === PaymentStatus.REFUNDED) {
-        continue;
-      }
       const userId = p.user?.id;
       if (!userId) continue;
+      if (!p.paidDate) continue;
 
-      if (p.status === PaymentStatus.PAID && p.paidDate) {
-        const pd = new Date(p.paidDate);
-        if (pd >= start && pd <= end) {
-          const m = pd.getMonth();
-          revenueByMonth[m] += Number(p.totalAmount || 0);
-        }
-      }
+      const pd = new Date(p.paidDate);
+      const monthIdx = pd.getUTCMonth();
+      if (monthIdx < 0 || monthIdx > 11) continue;
 
-      if (!activeStatuses.has(p.status)) continue;
+      subscriptionRevenueByMonth[monthIdx] += Number(p.totalAmount || 0);
 
-      const ref =
-        p.dueDate != null
-          ? new Date(p.dueDate)
-          : p.status === PaymentStatus.PAID && p.paidDate
-            ? new Date(p.paidDate)
-            : null;
-      if (!ref || ref < start || ref > end) continue;
-
-      const monthIdx = ref.getMonth();
+      if (isBlockedInMonth(userId, monthIdx)) continue;
       activeSets[monthIdx].add(userId);
     }
 
-    const months = Array.from({ length: 12 }, (_, i) => ({
-      month: i + 1,
-      activeStudents: activeSets[i].size,
-      subscriptionRevenue: Math.round(revenueByMonth[i] * 100) / 100,
-    }));
+    // Revenue por matrículas pagadas en el año.
+    const matriculaPayments = await this.paymentRepository
+      .createQueryBuilder('p')
+      .leftJoinAndSelect('p.user', 'user')
+      .where('p.companyId = :companyId', { companyId })
+      .andWhere('p.concept = :concept', { concept: PaymentConcept.MATRICULA })
+      .andWhere('p.status = :status', { status: PaymentStatus.PAID })
+      .andWhere('p.paidDate IS NOT NULL')
+      .andWhere('p.paidDate >= :yearStart AND p.paidDate <= :yearEnd', { yearStart, yearEnd })
+      .getMany();
+
+    for (const p of matriculaPayments) {
+      if (!p.paidDate) continue;
+      const monthIdx = new Date(p.paidDate).getUTCMonth();
+      if (monthIdx < 0 || monthIdx > 11) continue;
+      matriculaRevenueByMonth[monthIdx] += Number(p.totalAmount || 0);
+    }
+
+    const months = Array.from({ length: 12 }, (_, i) => {
+      const subscriptionRevenue = Math.round(subscriptionRevenueByMonth[i] * 100) / 100;
+      const matriculaRevenue = Math.round(matriculaRevenueByMonth[i] * 100) / 100;
+      const totalRevenue = Math.round((subscriptionRevenueByMonth[i] + matriculaRevenueByMonth[i]) * 100) / 100;
+
+      return {
+        month: i + 1,
+        activeStudents: activeSets[i].size,
+        subscriptionRevenue,
+        matriculaRevenue,
+        totalRevenue,
+      };
+    });
 
     return { year, months };
   }
