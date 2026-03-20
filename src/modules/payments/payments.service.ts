@@ -32,6 +32,13 @@ import { MailingService } from '../mailer/mailing.service';
 import { CompanyService } from '../company/company.service';
 import { UserRole } from '../../common/enums/enums';
 
+/** Fecha calendario desde input HTML (YYYY-MM-DD), sin interpretación UTC que desplace el día. */
+function parseCalendarDateInput(dateStr: string): Date {
+  const m = /^(\d{4})-(\d{2})-(\d{2})$/.exec(String(dateStr).trim());
+  if (!m) return new Date(dateStr);
+  return new Date(Number(m[1]), Number(m[2]) - 1, Number(m[3]));
+}
+
 @Injectable()
 export class PaymentsService {
   private readonly logger = new Logger(PaymentsService.name);
@@ -851,7 +858,7 @@ export class PaymentsService {
 
     const expense = this.expenseRepository.create({
       ...createExpenseDto,
-      date: new Date(createExpenseDto.date),
+      date: parseCalendarDateInput(createExpenseDto.date),
       currency: createExpenseDto.currency || 'ARS',
       company: { id: companyId }
     });
@@ -868,7 +875,7 @@ export class PaymentsService {
     }
 
     expense.amount = updateExpenseDto.amount ?? expense.amount;
-    expense.date = updateExpenseDto.date ? new Date(updateExpenseDto.date) : expense.date;
+    expense.date = updateExpenseDto.date ? parseCalendarDateInput(updateExpenseDto.date) : expense.date;
     expense.description = updateExpenseDto.description ?? expense.description;
     expense.category = updateExpenseDto.category ?? expense.category;
     if (updateExpenseDto.currency) expense.currency = updateExpenseDto.currency;
@@ -893,7 +900,7 @@ export class PaymentsService {
     }
     const extraIncome = this.extraIncomeRepository.create({
       ...dto,
-      date: new Date(dto.date),
+      date: parseCalendarDateInput(dto.date),
       currency: dto.currency || 'ARS',
       company: { id: companyId }
     });
@@ -908,7 +915,7 @@ export class PaymentsService {
       throw new NotFoundException('Extra income not found');
     }
     if (dto.amount != null) extraIncome.amount = dto.amount;
-    if (dto.date) extraIncome.date = new Date(dto.date);
+    if (dto.date) extraIncome.date = parseCalendarDateInput(dto.date);
     if (dto.description != null) extraIncome.description = dto.description;
     if (dto.category != null) extraIncome.category = dto.category;
     if (dto.concept != null) extraIncome.concept = dto.concept;
