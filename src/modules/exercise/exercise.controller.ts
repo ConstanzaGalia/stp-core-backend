@@ -2,7 +2,7 @@ import { Controller, Get, Post, Body, Put, Param, Delete, Query, Req, UseGuards 
 import { AuthGuard } from '@nestjs/passport';
 import { ExerciseService } from './exercise.service';
 import { CreateExerciseDto } from './dto/create-exercise.dto';
-import { UpdateExerciseDto } from './dto/create-exercise.dto copy';
+import { UpdateExerciseDto } from './dto/update-exercise.dto';
 import { PaginationQueryDto } from 'src/common/pagination/DTOs/pagination-query.dto';
 import { PaginatedListDto } from 'src/common/pagination/DTOs/paginated-list.dto';
 
@@ -14,6 +14,36 @@ export class ExerciseController {
   @Post()
   create(@Body() createExerciseDto: CreateExerciseDto) {
     return this.exerciseService.create(createExerciseDto);
+  }
+
+  @Get('movement-patterns')
+  findAllMovementPatterns() {
+    return this.exerciseService.findAllMovementPatterns();
+  }
+
+  @Get('safety-tags')
+  findAllSafetyTags() {
+    return this.exerciseService.findAllSafetyTags();
+  }
+
+  @Get('categories')
+  findAllCategories() {
+    return this.exerciseService.findAllCategories();
+  }
+
+  @Get('filter')
+  filter(
+    @Query('maxScore') maxScore?: string,
+    @Query('excludeTagKeys') excludeTagKeys?: string,
+    @Query('patternId') patternId?: string,
+    @Query('categoryId') categoryId?: string,
+  ) {
+    return this.exerciseService.filter({
+      maxScore: maxScore ? Number(maxScore) : undefined,
+      excludeTagKeys: excludeTagKeys ? excludeTagKeys.split(',') : undefined,
+      patternId: patternId ? Number(patternId) : undefined,
+      categoryId: categoryId ? Number(categoryId) : undefined,
+    });
   }
 
   @Get()

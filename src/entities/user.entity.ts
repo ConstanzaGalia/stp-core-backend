@@ -12,6 +12,8 @@ import { Reservation } from './reservation.entity';
 import { AthleteInvitation } from './athlete-invitation.entity';
 import { AthleteSchedule } from './athlete-schedule.entity';
 import { AvailableClass } from './available-class.entity';
+import { AthleteEvaluation } from './athlete-evaluation.entity';
+import { Injury } from './injury.entity';
 
 @Entity('user')
 export class User {
@@ -119,6 +121,28 @@ export class User {
 
   @OneToMany(() => AvailableClass, availableClass => availableClass.user)
   availableClasses: AvailableClass[];
+
+  // --- Campos del perfil de atleta STP ---
+  @Column({ type: 'float', nullable: true })
+  peso?: number;
+
+  @Column({ type: 'float', nullable: true })
+  altura?: number;
+
+  @Column({ nullable: true })
+  objetivo?: string;
+
+  @Column({ type: 'float', nullable: true, name: 'athlete_score' })
+  athleteScore?: number;
+
+  @Column({ type: 'int', nullable: true, name: 'stp_level' })
+  stpLevel?: number;
+
+  @OneToMany(() => AthleteEvaluation, evaluation => evaluation.user)
+  evaluations: AthleteEvaluation[];
+
+  @OneToMany(() => Injury, injury => injury.user)
+  injuries: Injury[];
 
   @CreateDateColumn({ type: "timestamp", default: () => "CURRENT_TIMESTAMP(6)" })
   public created_at: Date;

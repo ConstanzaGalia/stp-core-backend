@@ -12,6 +12,8 @@ import { ExerciseModule } from './modules/exercise/exercise.module';
 import { ReservationsModule } from './modules/reservation/reservation.module';
 import { PaymentsModule } from './modules/payments/payments.module';
 import { AthletesModule } from './modules/athletes/athletes.module';
+import { AthleteEvaluationModule } from './modules/athlete-evaluation/athlete-evaluation.module';
+import { InjuriesModule } from './modules/injuries/injuries.module';
 import { ProductsModule } from './modules/products/products.module';
 import { HealthModule } from './modules/health/health.module';
 import { TYPEORM_ENTITIES } from './typeorm-entities';
@@ -96,6 +98,8 @@ function resolvePostgresPoolMax(config: ConfigService): number {
     ReservationsModule,
     PaymentsModule,
     AthletesModule,
+    AthleteEvaluationModule,
+    InjuriesModule,
     ProductsModule,
   ],
   controllers: [],

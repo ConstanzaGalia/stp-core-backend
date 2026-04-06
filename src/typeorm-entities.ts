@@ -9,8 +9,12 @@ import { AvailableClass } from './entities/available-class.entity';
 import { Category } from './entities/category.entity';
 import { ClassUsage } from './entities/class-usage.entity';
 import { Company } from './entities/company.entity';
+import { AthleteEvaluation } from './entities/athlete-evaluation.entity';
 import { Exercise } from './entities/excercise.entity';
 import { Expense } from './entities/expense.entity';
+import { Injury } from './entities/injury.entity';
+import { MovementPattern } from './entities/movement-pattern.entity';
+import { SafetyTag } from './entities/safety-tag.entity';
 import { ExtraIncome } from './entities/extra-income.entity';
 import { Payment } from './entities/payment.entity';
 import { PaymentPlan } from './entities/payment-plan.entity';
@@ -32,6 +36,7 @@ import { UserPlan } from './entities/userPlan.entity';
 import { WaitlistReservation } from './entities/waitlist-reservation.entity';
 
 export const TYPEORM_ENTITIES = [
+  AthleteEvaluation,
   AthleteInvitation,
   AthleteSchedule,
   AvailableClass,
@@ -40,6 +45,9 @@ export const TYPEORM_ENTITIES = [
   Company,
   Exercise,
   Expense,
+  Injury,
+  MovementPattern,
+  SafetyTag,
   ExtraIncome,
   Payment,
   PaymentPlan,
