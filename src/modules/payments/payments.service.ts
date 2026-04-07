@@ -1,6 +1,6 @@
 import { Injectable, BadRequestException, NotFoundException, ForbiddenException, Inject, forwardRef, Logger } from '@nestjs/common';
 import { InjectRepository } from '@nestjs/typeorm';
-import { Repository, Between, LessThanOrEqual, Not, IsNull, In, Brackets } from 'typeorm';
+import { Repository, Between, LessThan, LessThanOrEqual, Not, IsNull, In, Brackets } from 'typeorm';
 import { Payment, PaymentStatus, PaymentMethod, PaymentConcept } from '../../entities/payment.entity';
 import { PaymentPlan } from '../../entities/payment-plan.entity';
 import { UserPaymentSubscription, SubscriptionStatus } from '../../entities/user-payment-subscription.entity';
@@ -1175,56 +1175,108 @@ export class PaymentsService {
 
   // ===== GESTIÓN DE ALUMNOS Y PAGOS =====
   /**
-   * Obtiene las cuotas vencidas del centro (solo mensualidades pendientes vencidas; no incluye matrículas).
+   * Obtiene las cuotas vencidas del centro.
+   * Enfoque basado en suscripciones: para cada suscripción activa verifica si el
+   * alumno está cubierto por un pago reciente (paidDate + 30 días >= hoy).
+   * Si no lo está, lo incluye como vencido.
    */
   async getOverduePayments(companyId: string): Promise<any[]> {
-    const today = new Date();
-    today.setHours(23, 59, 59, 999);
+    const todayStart = new Date();
+    todayStart.setHours(0, 0, 0, 0);
 
-    const overduePayments = await this.paymentRepository.find({
+    // Suspensiones activas: si isActive es true, el alumno se excluye (sin filtro de rango de fechas)
+    const allSuspensions = await this.suspensionRepository.find({
+      where: { company: { id: companyId }, isActive: true },
+    });
+    const suspendedUserIds = new Set<string>(
+      allSuspensions.filter(s => s.userId).map(s => s.userId),
+    );
+
+    // Todas las suscripciones activas con pagos y plan
+    const subscriptions = await this.subscriptionRepository.find({
       where: {
         company: { id: companyId },
-        status: In([PaymentStatus.PENDING, PaymentStatus.OVERDUE]),
-        dueDate: LessThanOrEqual(today),
-        concept: Not(PaymentConcept.MATRICULA), // Matrículas se listan en la lista general de pagos, no aquí
+        status: SubscriptionStatus.ACTIVE,
       },
-      relations: ['user', 'subscription', 'subscription.paymentPlan', 'company'],
-      order: { dueDate: 'ASC' },
+      relations: ['user', 'paymentPlan', 'payments'],
     });
 
-    // Excluir pagos cuya dueDate cae dentro de una suspensión activa del alumno
-    const now = new Date();
-    const filtered: typeof overduePayments = [];
-    for (const p of overduePayments) {
-      if (!p.user) { filtered.push(p); continue; }
-      const suspensions = await this.suspensionRepository.find({
-        where: {
-          user: { id: p.user.id },
-          company: { id: companyId },
-          isActive: true,
-        },
-      });
-      const dueDateInSuspension = suspensions.some(s => {
-        const start = new Date(s.startDate); start.setHours(0, 0, 0, 0);
-        const end = new Date(s.endDate); end.setHours(23, 59, 59, 999);
-        return now >= start && now <= end;
-      });
-      if (!dueDateInSuspension) filtered.push(p);
+    const results: any[] = [];
+    const PERIOD_DAYS = 30;
+
+    for (const sub of subscriptions) {
+      if (!sub.user) continue;
+      if (suspendedUserIds.has(sub.user.id)) continue;
+
+      const subscriptionPayments = (sub.payments || []).filter(
+        p => p.concept !== PaymentConcept.MATRICULA,
+      );
+
+      // Último pago PAID (por paidDate descendente)
+      const lastPaid = subscriptionPayments
+        .filter(p => p.status === PaymentStatus.PAID && p.paidDate)
+        .sort((a, b) => new Date(b.paidDate).getTime() - new Date(a.paidDate).getTime())[0];
+
+      // Si el último pago cubre hasta hoy, el alumno no está vencido
+      if (lastPaid) {
+        const coveredUntil = new Date(lastPaid.paidDate);
+        coveredUntil.setDate(coveredUntil.getDate() + PERIOD_DAYS);
+        coveredUntil.setHours(23, 59, 59, 999);
+        if (coveredUntil >= todayStart) continue;
+      }
+
+      // El alumno no está cubierto → buscar pago PENDING/OVERDUE existente
+      const pendingPayment = subscriptionPayments.find(
+        p => (p.status === PaymentStatus.PENDING || p.status === PaymentStatus.OVERDUE)
+          && p.dueDate
+          && new Date(p.dueDate) <= todayStart,
+      );
+
+      if (pendingPayment) {
+        results.push({
+          id: pendingPayment.id,
+          amount: pendingPayment.amount,
+          totalAmount: pendingPayment.totalAmount,
+          lateFee: pendingPayment.lateFee,
+          dueDate: pendingPayment.dueDate,
+          status: pendingPayment.status,
+          instalmentNumber: pendingPayment.instalmentNumber,
+          studentId: sub.user.id,
+          studentName: `${sub.user.name || ''} ${sub.user.lastName || ''}`.trim(),
+          paymentPlanName: sub.paymentPlan?.name,
+          subscriptionId: sub.id,
+        });
+      } else {
+        // Sin pago PENDING pero el período venció: calcular fecha de vencimiento
+        let dueDate: Date;
+        if (lastPaid) {
+          dueDate = new Date(lastPaid.paidDate);
+          dueDate.setDate(dueDate.getDate() + PERIOD_DAYS);
+        } else {
+          dueDate = sub.periodEndDate;
+        }
+
+        results.push({
+          id: `sub-${sub.id}`,
+          amount: sub.paymentPlan?.amount ?? 0,
+          totalAmount: sub.paymentPlan?.amount ?? 0,
+          lateFee: 0,
+          dueDate,
+          status: PaymentStatus.OVERDUE,
+          instalmentNumber: 1,
+          studentId: sub.user.id,
+          studentName: `${sub.user.name || ''} ${sub.user.lastName || ''}`.trim(),
+          paymentPlanName: sub.paymentPlan?.name,
+          subscriptionId: sub.id,
+        });
+      }
     }
 
-    return filtered.map((p) => ({
-      id: p.id,
-      amount: p.amount,
-      totalAmount: p.totalAmount,
-      lateFee: p.lateFee,
-      dueDate: p.dueDate,
-      status: p.status,
-      instalmentNumber: p.instalmentNumber,
-      studentId: p.user?.id,
-      studentName: p.user ? `${p.user.name || ''} ${p.user.lastName || ''}`.trim() : '',
-      paymentPlanName: p.subscription?.paymentPlan?.name,
-      subscriptionId: p.subscription?.id,
-    }));
+    return results.sort((a, b) => {
+      const dateA = a.dueDate ? new Date(a.dueDate).getTime() : 0;
+      const dateB = b.dueDate ? new Date(b.dueDate).getTime() : 0;
+      return dateA - dateB;
+    });
   }
 
   async getStudentsWithPayments(companyId: string): Promise<any[]> {
