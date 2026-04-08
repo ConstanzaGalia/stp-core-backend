@@ -154,8 +154,7 @@ export class PaymentsService {
 
     const startDate = new Date(createSubscriptionDto.startDate);
     const periodStartDate = startDate;
-    const periodEndDate = new Date(startDate);
-    periodEndDate.setDate(periodEndDate.getDate() + 30); // 30 días exactos
+    const periodEndDate = new Date(startDate.getFullYear(), startDate.getMonth() + 1, startDate.getDate());
 
     const nextBillingDate = new Date(periodEndDate);
 
@@ -563,10 +562,9 @@ export class PaymentsService {
       throw new NotFoundException('Subscription not found');
     }
 
-    // Calcular fechas del nuevo período (30 días)
+    // Calcular fechas del nuevo período (mes calendario)
     const newPeriodStart = new Date(subscription.periodEndDate);
-    const newPeriodEnd = new Date(newPeriodStart);
-    newPeriodEnd.setDate(newPeriodEnd.getDate() + 30);
+    const newPeriodEnd = new Date(newPeriodStart.getFullYear(), newPeriodStart.getMonth() + 1, newPeriodStart.getDate());
 
     const nextBillingDate = new Date(newPeriodEnd);
 
@@ -1554,11 +1552,10 @@ export class PaymentsService {
       newWeekStart = this.getWeekStartDate(today);
     }
     
-    // Período desde la fecha del pago: si el alumno paga un día (o unos días) tarde,
-    // el período empieza ese día y vence 30 días después. Ej: pago 23 feb → vencimiento 23 mar, 12 clases en ese rango.
+    // Período desde la fecha del pago: el período empieza ese día y vence el mismo día del mes siguiente.
+    // Ej: pago 23 feb → vencimiento 23 mar, 12 clases en ese rango.
     const newPeriodStartDate = new Date(today);
-    const newPeriodEndDate = new Date(today);
-    newPeriodEndDate.setDate(newPeriodEndDate.getDate() + 30);
+    const newPeriodEndDate = new Date(today.getFullYear(), today.getMonth() + 1, today.getDate());
 
     // Actualizar períodos
     subscription.periodStartDate = newPeriodStartDate;
@@ -1915,9 +1912,12 @@ export class PaymentsService {
       return { subscription: payment.subscription ?? null, payment: savedPayment, reservationsGenerated: false };
     }
 
-    const subscription = payment.subscription;
+    let subscription = payment.subscription;
     const userId = subscription.user.id;
     const companyId = subscription.company.id;
+
+    // Reiniciar el período mensual con la fecha del pago (igual que completePayment)
+    subscription = await this.resetMonthlyPeriod(subscription, undefined, paymentDate);
 
     subscription.paidInstallments = 1;
     subscription.pendingInstallments = 0;
