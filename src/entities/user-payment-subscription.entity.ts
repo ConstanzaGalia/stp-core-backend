@@ -1,4 +1,4 @@
-import { Entity, PrimaryGeneratedColumn, Column, ManyToOne, OneToMany, CreateDateColumn, UpdateDateColumn } from 'typeorm';
+import { Entity, PrimaryGeneratedColumn, Column, ManyToOne, OneToMany, CreateDateColumn, UpdateDateColumn, JoinColumn, Index } from 'typeorm';
 import { User } from './user.entity';
 import { Company } from './company.entity';
 import { PaymentPlan } from './payment-plan.entity';
@@ -14,6 +14,7 @@ export enum SubscriptionStatus {
 }
 
 @Entity('user_payment_subscriptions')
+@Index(['companyId', 'status'])
 export class UserPaymentSubscription {
   @PrimaryGeneratedColumn('uuid')
   id: string;
@@ -70,7 +71,11 @@ export class UserPaymentSubscription {
   user: User;
 
   @ManyToOne(() => Company, company => company.userPaymentSubscriptions, { onDelete: 'CASCADE' })
+  @JoinColumn({ name: 'companyId' })
   company: Company;
+
+  @Column({ nullable: true })
+  companyId: string;
 
   @ManyToOne(() => PaymentPlan, paymentPlan => paymentPlan.userSubscriptions)
   paymentPlan: PaymentPlan;

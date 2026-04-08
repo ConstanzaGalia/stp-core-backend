@@ -1182,22 +1182,22 @@ export class PaymentsService {
     const todayStart = new Date();
     todayStart.setHours(0, 0, 0, 0);
 
-    // Suspensiones activas: si isActive es true, el alumno se excluye (sin filtro de rango de fechas)
-    const allSuspensions = await this.suspensionRepository.find({
-      where: { company: { id: companyId }, isActive: true },
-    });
+    const [allSuspensions, subscriptions] = await Promise.all([
+      this.suspensionRepository.find({
+        where: { companyId, isActive: true },
+      }),
+      this.subscriptionRepository.find({
+        where: {
+          company: { id: companyId },
+          status: SubscriptionStatus.ACTIVE,
+        },
+        relations: ['user', 'paymentPlan', 'payments'],
+      }),
+    ]);
+
     const suspendedUserIds = new Set<string>(
       allSuspensions.filter(s => s.userId).map(s => s.userId),
     );
-
-    // Todas las suscripciones activas con pagos y plan
-    const subscriptions = await this.subscriptionRepository.find({
-      where: {
-        company: { id: companyId },
-        status: SubscriptionStatus.ACTIVE,
-      },
-      relations: ['user', 'paymentPlan', 'payments'],
-    });
 
     const results: any[] = [];
     const PERIOD_DAYS = 30;
@@ -1284,21 +1284,29 @@ export class PaymentsService {
         'user',
         'paymentPlan',
         'payments',
-        'company'
       ],
       order: {
         user: { name: 'ASC' }
       }
     });
 
-    const studentsResult = await Promise.all(subscriptions.map(async (subscription) => {
-      // Incluir OVERDUE además de PENDING: calculateLateFees puede haber cambiado el status
+    // Pre-cargar TODAS las suspensiones activas del centro en una sola query
+    const allActiveSuspensions = await this.suspensionRepository.find({
+      where: { companyId, isActive: true },
+    });
+    const suspensionsByUserId = new Map<string, typeof allActiveSuspensions>();
+    for (const s of allActiveSuspensions) {
+      if (!s.userId) continue;
+      const list = suspensionsByUserId.get(s.userId);
+      if (list) list.push(s);
+      else suspensionsByUserId.set(s.userId, [s]);
+    }
+
+    const studentsResult = subscriptions.map((subscription) => {
       const pendingPayment = subscription.payments.find(
         p => p.status === PaymentStatus.PENDING || p.status === PaymentStatus.OVERDUE
       );
       
-      // Ordenar todos los pagos del más reciente al más antiguo
-      // Usar paidDate si existe (pagos pagados), sino dueDate (pagos pendientes)
       const allPayments = subscription.payments
         .map(payment => ({
           id: payment.id,
@@ -1317,25 +1325,15 @@ export class PaymentsService {
           sortDate: payment.paidDate || payment.dueDate
         }))
         .sort((a, b) => {
-          // Si tiene paidDate, usar paidDate; si no, usar dueDate
           const dateA = a.sortDate ? new Date(a.sortDate).getTime() : 0;
           const dateB = b.sortDate ? new Date(b.sortDate).getTime() : 0;
-          return dateB - dateA; // Más reciente primero
+          return dateB - dateA;
         });
 
-      // Obtener suspensiones activas del alumno en este centro
-      let activeSuspensions = [];
-      if (subscription.user && subscription.company) {
-        activeSuspensions = await this.suspensionRepository.find({
-          where: {
-            user: { id: subscription.user.id },
-            company: { id: subscription.company.id },
-            isActive: true
-          }
-        });
-      }
+      const activeSuspensions = subscription.user
+        ? (suspensionsByUserId.get(subscription.user.id) || [])
+        : [];
 
-      // Verificar si cada pago está en un período de suspensión
       const paymentsWithSuspension = allPayments.map(payment => {
         let isSuspended = false;
         const paymentDate = payment.paidDate || payment.dueDate;
@@ -1401,7 +1399,7 @@ export class PaymentsService {
             isSuspended,
           };
         })(),
-        payments: paymentsWithSuspension, // Todos los pagos ordenados del más reciente al más antiguo
+        payments: paymentsWithSuspension,
         activeSuspensions: activeSuspensions.map(suspension => ({
           id: suspension.id,
           startDate: suspension.startDate,
@@ -1412,15 +1410,14 @@ export class PaymentsService {
         totalPayments: subscription.payments.length,
         paidPayments: subscription.payments.filter(p => p.status === PaymentStatus.PAID).length
       };
-    }));
+    });
 
-    // Incluir pagos sin suscripción (matrícula, nutricionista, u otro concepto standalone)
     const standaloneMatriculas = await this.paymentRepository.find({
       where: {
         company: { id: companyId },
         subscription: IsNull(),
       },
-      relations: ['user', 'paymentPlan', 'company']
+      relations: ['user', 'paymentPlan']
     });
 
     const studentById = new Map<string, any>(studentsResult.map(s => [s.studentId, s]));
@@ -1488,7 +1485,6 @@ export class PaymentsService {
           totalPayments: 1,
           paidPayments: payment.status === PaymentStatus.PAID ? 1 : 0
         };
-        studentsResult.push(newStudent);
         studentsResult.push(newStudent);
         studentById.set(user.id, newStudent);
       }

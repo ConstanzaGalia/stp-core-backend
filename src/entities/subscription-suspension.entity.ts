@@ -1,9 +1,11 @@
-import { Entity, PrimaryGeneratedColumn, Column, ManyToOne, CreateDateColumn, UpdateDateColumn } from 'typeorm';
+import { Entity, PrimaryGeneratedColumn, Column, ManyToOne, CreateDateColumn, UpdateDateColumn, Index } from 'typeorm';
 import { UserPaymentSubscription } from './user-payment-subscription.entity';
 import { User } from './user.entity';
 import { Company } from './company.entity';
 
 @Entity('subscription_suspensions')
+@Index(['companyId', 'isActive'])
+@Index(['userId', 'companyId', 'isActive'])
 export class SubscriptionSuspension {
   @PrimaryGeneratedColumn('uuid')
   id: string;

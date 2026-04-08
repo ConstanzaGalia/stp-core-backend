@@ -1,4 +1,4 @@
-import { Entity, PrimaryGeneratedColumn, Column, ManyToOne, OneToMany, JoinColumn } from 'typeorm';
+import { Entity, PrimaryGeneratedColumn, Column, ManyToOne, OneToMany, JoinColumn, Index } from 'typeorm';
 import { User } from './user.entity';
 import { Company } from './company.entity';
 import { PaymentPlan } from './payment-plan.entity';
@@ -29,6 +29,8 @@ export enum PaymentConcept {
 }
 
 @Entity()
+@Index(['companyId', 'status'])
+@Index(['companyId', 'paidDate'])
 export class Payment {
   @PrimaryGeneratedColumn('uuid')
   id: string;
@@ -89,6 +91,9 @@ export class Payment {
   @ManyToOne(() => Company, company => company.payments, { onDelete: 'CASCADE' })
   @JoinColumn({ name: 'companyId' })
   company: Company;
+
+  @Column({ nullable: true })
+  companyId: string;
 
   @ManyToOne(() => PaymentPlan, paymentPlan => paymentPlan.payments, { onDelete: 'CASCADE' })
   @JoinColumn({ name: 'paymentPlanId' })
