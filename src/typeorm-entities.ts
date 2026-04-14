@@ -10,6 +10,8 @@ import { Category } from './entities/category.entity';
 import { ClassUsage } from './entities/class-usage.entity';
 import { Company } from './entities/company.entity';
 import { AthleteEvaluation } from './entities/athlete-evaluation.entity';
+import { PhysicalEvaluation } from './entities/physical-evaluation.entity';
+import { PhysicalEvaluationTest } from './entities/physical-evaluation-test.entity';
 import { Exercise } from './entities/excercise.entity';
 import { Expense } from './entities/expense.entity';
 import { Injury } from './entities/injury.entity';
@@ -37,6 +39,8 @@ import { WaitlistReservation } from './entities/waitlist-reservation.entity';
 
 export const TYPEORM_ENTITIES = [
   AthleteEvaluation,
+  PhysicalEvaluation,
+  PhysicalEvaluationTest,
   AthleteInvitation,
   AthleteSchedule,
   AvailableClass,

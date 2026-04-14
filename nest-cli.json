@@ -1,7 +1,14 @@
 {
+  "$schema": "https://json.schemastore.org/nest-cli",
   "collection": "@nestjs/schematics",
   "sourceRoot": "src",
   "compilerOptions": {
-    "assets": ["common/envs/*"]
+    "assets": [
+      {
+        "include": "modules/physical-evaluation/analysis/rules/**/*.json",
+        "outDir": "dist/src"
+      }
+    ],
+    "watchAssets": true
   }
 }

@@ -13,6 +13,7 @@ import { AthleteInvitation } from './athlete-invitation.entity';
 import { AthleteSchedule } from './athlete-schedule.entity';
 import { AvailableClass } from './available-class.entity';
 import { AthleteEvaluation } from './athlete-evaluation.entity';
+import { PhysicalEvaluation } from './physical-evaluation.entity';
 import { Injury } from './injury.entity';
 
 @Entity('user')
@@ -140,6 +141,9 @@ export class User {
 
   @OneToMany(() => AthleteEvaluation, evaluation => evaluation.user)
   evaluations: AthleteEvaluation[];
+
+  @OneToMany(() => PhysicalEvaluation, (pe) => pe.user)
+  physicalEvaluations: PhysicalEvaluation[];
 
   @OneToMany(() => Injury, injury => injury.user)
   injuries: Injury[];

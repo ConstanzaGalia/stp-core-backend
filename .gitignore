@@ -37,3 +37,6 @@ lerna-debug.log*
 #.env
 .env
 .dev.remote.env
+
+# Evaluaciones: archivos subidos (configurable con EVALUATIONS_UPLOAD_DIR)
+uploads/evaluations

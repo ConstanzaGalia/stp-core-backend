@@ -1,5 +1,7 @@
 import { Controller, Post, Get, Patch, Body, Param, UseGuards } from '@nestjs/common';
 import { AuthGuard } from '@nestjs/passport';
+import { GetUser } from '../auth/get-user.decorator';
+import { User } from 'src/entities/user.entity';
 import { AthleteEvaluationService } from './athlete-evaluation.service';
 import { CreateEvaluationDto, UpdateAthleteProfileDto } from './dto/create-evaluation.dto';
 
@@ -9,33 +11,27 @@ export class AthleteEvaluationController {
   constructor(private readonly service: AthleteEvaluationService) {}
 
   @Post(':userId')
-  createEvaluation(
-    @Param('userId') userId: string,
-    @Body() dto: CreateEvaluationDto,
-  ) {
-    return this.service.createEvaluation(userId, dto);
+  createEvaluation(@GetUser() actor: User, @Param('userId') userId: string, @Body() dto: CreateEvaluationDto) {
+    return this.service.createEvaluation(actor, userId, dto);
   }
 
   @Get(':userId')
-  getHistory(@Param('userId') userId: string) {
-    return this.service.getHistory(userId);
+  getHistory(@GetUser() actor: User, @Param('userId') userId: string) {
+    return this.service.getHistory(actor, userId);
   }
 
   @Get(':userId/current')
-  getCurrent(@Param('userId') userId: string) {
-    return this.service.getCurrent(userId);
+  getCurrent(@GetUser() actor: User, @Param('userId') userId: string) {
+    return this.service.getCurrent(actor, userId);
   }
 
   @Get(':userId/profile')
-  getProfile(@Param('userId') userId: string) {
-    return this.service.getAthleteProfile(userId);
+  getProfile(@GetUser() actor: User, @Param('userId') userId: string) {
+    return this.service.getAthleteProfile(actor, userId);
   }
 
   @Patch(':userId/profile')
-  updateProfile(
-    @Param('userId') userId: string,
-    @Body() dto: UpdateAthleteProfileDto,
-  ) {
-    return this.service.updateProfile(userId, dto);
+  updateProfile(@GetUser() actor: User, @Param('userId') userId: string, @Body() dto: UpdateAthleteProfileDto) {
+    return this.service.updateProfile(actor, userId, dto);
   }
 }

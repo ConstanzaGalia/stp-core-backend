@@ -13,6 +13,7 @@ import { ReservationsModule } from './modules/reservation/reservation.module';
 import { PaymentsModule } from './modules/payments/payments.module';
 import { AthletesModule } from './modules/athletes/athletes.module';
 import { AthleteEvaluationModule } from './modules/athlete-evaluation/athlete-evaluation.module';
+import { PhysicalEvaluationModule } from './modules/physical-evaluation/physical-evaluation.module';
 import { InjuriesModule } from './modules/injuries/injuries.module';
 import { ProductsModule } from './modules/products/products.module';
 import { HealthModule } from './modules/health/health.module';
@@ -99,6 +100,7 @@ function resolvePostgresPoolMax(config: ConfigService): number {
     PaymentsModule,
     AthletesModule,
     AthleteEvaluationModule,
+    PhysicalEvaluationModule,
     InjuriesModule,
     ProductsModule,
   ],

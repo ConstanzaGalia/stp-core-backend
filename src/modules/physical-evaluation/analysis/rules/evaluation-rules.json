@@ -1,0 +1,186 @@
+{
+  "version": "1.0",
+  "description": "Motor de reglas para evaluación neuromuscular basada en plataforma de fuerza",
+
+  "variables": [
+    "cmj_height",
+    "cmj_braking_time",
+    "cmj_propulsive_force",
+    "dj_rsi",
+    "dj_contact_time",
+    "fatigue_index",
+    "asymmetry"
+  ],
+
+  "categories": [
+    "potencia",
+    "reactividad",
+    "estrategia",
+    "resistencia",
+    "asimetria",
+    "global"
+  ],
+
+  "rules": [
+    {
+      "id": "potencia_muy_baja",
+      "category": "potencia",
+      "condition": "cmj_height < 28",
+      "severity": "alta",
+      "score_impact": -2,
+      "message": "Capacidad de producción de fuerza muy baja",
+      "recommendation": "Priorizar desarrollo de fuerza básica y patrones bilaterales"
+    },
+    {
+      "id": "potencia_media",
+      "category": "potencia",
+      "condition": "cmj_height >= 30 AND cmj_height < 38",
+      "severity": "media",
+      "score_impact": -1,
+      "message": "Capacidad de fuerza aceptable con margen de mejora",
+      "recommendation": "Incorporar trabajo de fuerza máxima y potencia"
+    },
+    {
+      "id": "potencia_alta",
+      "category": "potencia",
+      "condition": "cmj_height >= 38",
+      "severity": "baja",
+      "score_impact": 1,
+      "message": "Buena capacidad de producción de fuerza",
+      "recommendation": "Mantener y transferir a gestos específicos"
+    },
+    {
+      "id": "reactividad_muy_baja",
+      "category": "reactividad",
+      "condition": "dj_rsi < 1.0",
+      "severity": "alta",
+      "score_impact": -2,
+      "message": "Muy baja capacidad reactiva",
+      "recommendation": "Trabajar pliometría básica y tiempos de contacto"
+    },
+    {
+      "id": "reactividad_baja",
+      "category": "reactividad",
+      "condition": "dj_rsi >= 1.0 AND dj_rsi < 1.3",
+      "severity": "alta",
+      "score_impact": -1,
+      "message": "Déficit en el uso del ciclo estiramiento-acortamiento",
+      "recommendation": "Introducir drop jumps de baja altura y multisaltos"
+    },
+    {
+      "id": "reactividad_alta",
+      "category": "reactividad",
+      "condition": "dj_rsi >= 1.6",
+      "severity": "baja",
+      "score_impact": 1,
+      "message": "Excelente capacidad reactiva",
+      "recommendation": "Mantener y aplicar a velocidad"
+    },
+    {
+      "id": "contacto_lento",
+      "category": "reactividad",
+      "condition": "dj_contact_time > 0.30",
+      "severity": "alta",
+      "score_impact": -1,
+      "message": "Tiempo de contacto elevado",
+      "recommendation": "Reducir tiempos de contacto con trabajos reactivos"
+    },
+    {
+      "id": "contacto_optimo",
+      "category": "reactividad",
+      "condition": "dj_contact_time <= 0.25",
+      "severity": "baja",
+      "score_impact": 1,
+      "message": "Buen uso del tiempo de contacto",
+      "recommendation": "Mantener intensidad reactiva"
+    },
+    {
+      "id": "mala_reutilizacion",
+      "category": "estrategia",
+      "condition": "cmj_height >= 35 AND dj_rsi < 1.3",
+      "severity": "alta",
+      "score_impact": -2,
+      "message": "Buena fuerza pero mala reutilización de energía",
+      "recommendation": "Enfocar en pliometría y transición excéntrico-concéntrica"
+    },
+    {
+      "id": "perfil_elastico",
+      "category": "estrategia",
+      "condition": "cmj_height < 32 AND dj_rsi >= 1.5",
+      "severity": "media",
+      "score_impact": -1,
+      "message": "Perfil elástico con déficit estructural",
+      "recommendation": "Aumentar fuerza máxima"
+    },
+    {
+      "id": "fatiga_alta",
+      "category": "resistencia",
+      "condition": "fatigue_index > 15",
+      "severity": "alta",
+      "score_impact": -2,
+      "message": "Alta fatiga neuromuscular",
+      "recommendation": "Trabajar capacidad de repetir esfuerzos"
+    },
+    {
+      "id": "fatiga_baja",
+      "category": "resistencia",
+      "condition": "fatigue_index < 8",
+      "severity": "baja",
+      "score_impact": 1,
+      "message": "Buena resistencia neuromuscular",
+      "recommendation": "Mantener volumen de trabajo"
+    },
+    {
+      "id": "asimetria_alta",
+      "category": "asimetria",
+      "condition": "asymmetry > 15",
+      "severity": "alta",
+      "score_impact": -2,
+      "message": "Asimetría significativa",
+      "recommendation": "Priorizar trabajo unilateral"
+    },
+    {
+      "id": "asimetria_baja",
+      "category": "asimetria",
+      "condition": "asymmetry < 10",
+      "severity": "baja",
+      "score_impact": 1,
+      "message": "Simetría adecuada",
+      "recommendation": "Mantener equilibrio bilateral"
+    },
+    {
+      "id": "perfil_deficit_global",
+      "category": "global",
+      "condition": "cmj_height < 30 AND dj_rsi < 1.2",
+      "severity": "alta",
+      "score_impact": -3,
+      "message": "Déficit global de rendimiento",
+      "recommendation": "Construir base de fuerza y coordinación"
+    },
+    {
+      "id": "perfil_avanzado",
+      "category": "global",
+      "condition": "cmj_height >= 38 AND dj_rsi >= 1.6 AND fatigue_index < 10",
+      "severity": "baja",
+      "score_impact": 2,
+      "message": "Perfil neuromuscular avanzado",
+      "recommendation": "Optimizar rendimiento específico"
+    }
+  ],
+
+  "scoring": {
+    "weights": {
+      "potencia": 0.25,
+      "reactividad": 0.25,
+      "estrategia": 0.20,
+      "resistencia": 0.15,
+      "asimetria": 0.15
+    }
+  },
+
+  "levels": {
+    "low": { "min": 0, "max": 2 },
+    "medium": { "min": 2, "max": 3.5 },
+    "high": { "min": 3.5, "max": 5 }
+  }
+}
