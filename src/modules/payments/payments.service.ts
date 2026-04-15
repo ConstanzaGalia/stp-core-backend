@@ -1174,105 +1174,89 @@ export class PaymentsService {
   // ===== GESTIÓN DE ALUMNOS Y PAGOS =====
   /**
    * Obtiene las cuotas vencidas del centro.
-   * Enfoque basado en suscripciones: para cada suscripción activa verifica si el
-   * alumno está cubierto por un pago reciente (paidDate + 30 días >= hoy).
-   * Si no lo está, lo incluye como vencido.
+   * Para cada alumno toma su último pago (no matrícula) por dueDate.
+   * Si dueDate <= hoy y NO tiene suspensión activa que cubra desde esa fecha, está vencido.
    */
   async getOverduePayments(companyId: string): Promise<any[]> {
-    const todayStart = new Date();
-    todayStart.setHours(0, 0, 0, 0);
+    const toUTCMidnight = (date: Date | string): Date => {
+      const d = new Date(date);
+      return new Date(Date.UTC(d.getFullYear(), d.getMonth(), d.getDate()));
+    };
 
-    const [allSuspensions, subscriptions] = await Promise.all([
-      this.suspensionRepository.find({
-        where: { companyId, isActive: true },
-      }),
-      this.subscriptionRepository.find({
-        where: {
-          company: { id: companyId },
-          status: SubscriptionStatus.ACTIVE,
-        },
-        relations: ['user', 'paymentPlan', 'payments'],
-      }),
-    ]);
+    const todayUTC = toUTCMidnight(new Date());
 
-    const suspendedUserIds = new Set<string>(
-      allSuspensions.filter(s => s.userId).map(s => s.userId),
-    );
+    const allPayments = await this.paymentRepository.find({
+      where: {
+        companyId,
+        concept: Not(PaymentConcept.MATRICULA),
+      },
+      relations: ['user', 'paymentPlan', 'subscription'],
+    });
 
-    const results: any[] = [];
-    const PERIOD_DAYS = 30;
-
-    for (const sub of subscriptions) {
-      if (!sub.user) continue;
-      if (suspendedUserIds.has(sub.user.id)) continue;
-
-      const subscriptionPayments = (sub.payments || []).filter(
-        p => p.concept !== PaymentConcept.MATRICULA,
-      );
-
-      // Último pago PAID (por paidDate descendente)
-      const lastPaid = subscriptionPayments
-        .filter(p => p.status === PaymentStatus.PAID && p.paidDate)
-        .sort((a, b) => new Date(b.paidDate).getTime() - new Date(a.paidDate).getTime())[0];
-
-      // Si el último pago cubre hasta hoy, el alumno no está vencido
-      if (lastPaid) {
-        const coveredUntil = new Date(lastPaid.paidDate);
-        coveredUntil.setDate(coveredUntil.getDate() + PERIOD_DAYS);
-        coveredUntil.setHours(23, 59, 59, 999);
-        if (coveredUntil >= todayStart) continue;
-      }
-
-      // El alumno no está cubierto → buscar pago PENDING/OVERDUE existente
-      const pendingPayment = subscriptionPayments.find(
-        p => (p.status === PaymentStatus.PENDING || p.status === PaymentStatus.OVERDUE)
-          && p.dueDate
-          && new Date(p.dueDate) <= todayStart,
-      );
-
-      if (pendingPayment) {
-        results.push({
-          id: pendingPayment.id,
-          amount: pendingPayment.amount,
-          totalAmount: pendingPayment.totalAmount,
-          lateFee: pendingPayment.lateFee,
-          dueDate: pendingPayment.dueDate,
-          status: pendingPayment.status,
-          instalmentNumber: pendingPayment.instalmentNumber,
-          studentId: sub.user.id,
-          studentName: `${sub.user.name || ''} ${sub.user.lastName || ''}`.trim(),
-          paymentPlanName: sub.paymentPlan?.name,
-          subscriptionId: sub.id,
-        });
+    const latestByUser = new Map<string, Payment>();
+    for (const payment of allPayments) {
+      if (!payment.user || !payment.dueDate) continue;
+      const userId = payment.user.id;
+      const existing = latestByUser.get(userId);
+      const paymentDue = toUTCMidnight(payment.dueDate);
+      if (!existing) {
+        latestByUser.set(userId, payment);
       } else {
-        // Sin pago PENDING pero el período venció: calcular fecha de vencimiento
-        let dueDate: Date;
-        if (lastPaid) {
-          dueDate = new Date(lastPaid.paidDate);
-          dueDate.setDate(dueDate.getDate() + PERIOD_DAYS);
-        } else {
-          dueDate = sub.periodEndDate;
+        const existingDue = toUTCMidnight(existing.dueDate);
+        if (paymentDue > existingDue) {
+          latestByUser.set(userId, payment);
         }
-
-        results.push({
-          id: `sub-${sub.id}`,
-          amount: sub.paymentPlan?.amount ?? 0,
-          totalAmount: sub.paymentPlan?.amount ?? 0,
-          lateFee: 0,
-          dueDate,
-          status: PaymentStatus.OVERDUE,
-          instalmentNumber: 1,
-          studentId: sub.user.id,
-          studentName: `${sub.user.name || ''} ${sub.user.lastName || ''}`.trim(),
-          paymentPlanName: sub.paymentPlan?.name,
-          subscriptionId: sub.id,
-        });
       }
     }
 
+    const userIds = Array.from(latestByUser.keys());
+
+    const allSuspensions = userIds.length > 0
+      ? await this.suspensionRepository.find({
+          where: { companyId, isActive: true, userId: In(userIds) },
+        })
+      : [];
+
+    const suspensionsByUserId = new Map<string, SubscriptionSuspension[]>();
+    for (const s of allSuspensions) {
+      if (!s.userId) continue;
+      const list = suspensionsByUserId.get(s.userId) || [];
+      list.push(s);
+      suspensionsByUserId.set(s.userId, list);
+    }
+
+    const results: any[] = [];
+
+    for (const [userId, payment] of latestByUser) {
+      const dueDate = toUTCMidnight(payment.dueDate);
+      if (dueDate >= todayUTC) continue;
+
+      const userSuspensions = suspensionsByUserId.get(userId) || [];
+      const hasCoveringSuspension = userSuspensions.some(s => {
+        const sEnd = toUTCMidnight(s.endDate);
+        return sEnd >= dueDate;
+      });
+
+      if (hasCoveringSuspension) continue;
+
+      results.push({
+        id: payment.id,
+        amount: payment.amount,
+        totalAmount: payment.totalAmount,
+        lateFee: payment.lateFee,
+        dueDate: payment.dueDate,
+        status: payment.status,
+        instalmentNumber: payment.instalmentNumber,
+        studentId: userId,
+        studentName: `${payment.user.name || ''} ${payment.user.lastName || ''}`.trim(),
+        paymentPlanName: payment.paymentPlan?.name,
+        subscriptionId: payment.subscription?.id,
+      });
+    }
+
     return results.sort((a, b) => {
-      const dateA = a.dueDate ? new Date(a.dueDate).getTime() : 0;
-      const dateB = b.dueDate ? new Date(b.dueDate).getTime() : 0;
+      const dateA = new Date(a.dueDate).getTime();
+      const dateB = new Date(b.dueDate).getTime();
       return dateA - dateB;
     });
   }
@@ -2409,44 +2393,37 @@ export class PaymentsService {
 
   // ===== OBTENER PLAN Y PAGOS DEL ALUMNO =====
   async getStudentPlanAndPayments(userId: string, companyId: string): Promise<any> {
-    // Obtener la suscripción activa del alumno en el centro
-    const subscription = await this.subscriptionRepository.findOne({
-      where: {
-        user: { id: userId },
-        company: { id: companyId },
-        status: SubscriptionStatus.ACTIVE
-      },
-      relations: ['user', 'paymentPlan', 'company', 'payments']
-    });
+    const [subscription, allSuspensions, directPayments] = await Promise.all([
+      this.subscriptionRepository.findOne({
+        where: { user: { id: userId }, company: { id: companyId } },
+        relations: ['user', 'paymentPlan', 'company', 'payments'],
+        order: { startDate: 'DESC' },
+      }),
+      this.suspensionRepository.find({
+        where: { userId, companyId },
+        order: { startDate: 'DESC' },
+      }),
+      this.paymentRepository.find({
+        where: { user: { id: userId }, company: { id: companyId } },
+        relations: ['paymentPlan'],
+        order: { dueDate: 'DESC' },
+      }),
+    ]);
 
-    // Si no hay suscripción activa, devolver objeto vacío
-    if (!subscription) {
-      return {
-        subscription: null,
-        plan: null,
-        payments: [],
-        pendingPayment: null,
-        suspensions: [],
-        expiredClasses: [],
-        statistics: {
-          totalPayments: 0,
-          paidPayments: 0,
-          pendingPayments: 0,
-          overduePayments: 0,
-          totalExpiredClasses: 0
-        },
-        hasActiveSubscription: false
-      };
+    const hasActiveSubscription = subscription?.status === SubscriptionStatus.ACTIVE;
+
+    let updatedSubscription = subscription;
+    let expiredClasses: any[] = [];
+    if (hasActiveSubscription && subscription) {
+      updatedSubscription = await this.renewWeeklyCounters(subscription);
+      expiredClasses = await this.getExpiredClasses(updatedSubscription);
     }
 
-    // Renovar contadores semanales si es necesario (actualiza en memoria)
-    const updatedSubscription = await this.renewWeeklyCounters(subscription);
+    const rawPayments = hasActiveSubscription && updatedSubscription
+      ? updatedSubscription.payments
+      : directPayments;
 
-    // Obtener clases vencidas
-    const expiredClasses = await this.getExpiredClasses(updatedSubscription);
-
-    // Obtener todos los pagos ordenados del más reciente al más antiguo
-    const allPayments = updatedSubscription.payments
+    const allPayments = (rawPayments || [])
       .map(payment => ({
         id: payment.id,
         amount: payment.amount,
@@ -2460,32 +2437,23 @@ export class PaymentsService {
         transactionId: payment.transactionId,
         notes: payment.notes,
         instalmentNumber: payment.instalmentNumber,
-        sortDate: payment.paidDate || payment.dueDate
+        concept: payment.concept,
+        sortDate: payment.paidDate || payment.dueDate,
       }))
       .sort((a, b) => {
         const dateA = a.sortDate ? new Date(a.sortDate).getTime() : 0;
         const dateB = b.sortDate ? new Date(b.sortDate).getTime() : 0;
-        return dateB - dateA; // Más reciente primero
+        return dateB - dateA;
       });
 
-    // Obtener suspensiones activas del alumno
-    const activeSuspensions = await this.suspensionRepository.find({
-      where: {
-        user: { id: userId },
-        company: { id: companyId },
-        isActive: true
-      },
-      order: { startDate: 'DESC' }
-    });
-
-    // Verificar si cada pago está en un período de suspensión
     const paymentsWithSuspension = allPayments.map(payment => {
       let isSuspended = false;
       const paymentDate = payment.paidDate || payment.dueDate;
-      
-      if (paymentDate && activeSuspensions.length > 0) {
+
+      if (paymentDate && allSuspensions.length > 0) {
         const date = new Date(paymentDate);
-        isSuspended = activeSuspensions.some(suspension => {
+        isSuspended = allSuspensions.some(suspension => {
+          if (!suspension.isActive) return false;
           const startDate = new Date(suspension.startDate);
           const endDate = new Date(suspension.endDate);
           return date >= startDate && date <= endDate;
@@ -2499,22 +2467,20 @@ export class PaymentsService {
             && (payment.status === PaymentStatus.PENDING || payment.status === PaymentStatus.OVERDUE)
             && !isSuspended
           : false,
-        isSuspended: isSuspended
+        isSuspended,
       };
     });
 
-    // Incluir OVERDUE además de PENDING: calculateLateFees puede haber cambiado el status
-    const pendingPayment = updatedSubscription.payments.find(
-      p => p.status === PaymentStatus.PENDING || p.status === PaymentStatus.OVERDUE
-    );
+    const pendingPayment = rawPayments?.find(
+      p => p.status === PaymentStatus.PENDING || p.status === PaymentStatus.OVERDUE,
+    ) ?? null;
 
-    // Calcular el fin de la semana actual
-    const currentWeekEnd = new Date(updatedSubscription.weekStartDate);
-    currentWeekEnd.setDate(currentWeekEnd.getDate() + 6);
+    const plan = updatedSubscription?.paymentPlan ?? null;
 
-    return {
-      // Información de la suscripción
-      subscription: {
+    const subscriptionInfo = hasActiveSubscription && updatedSubscription ? (() => {
+      const currentWeekEnd = new Date(updatedSubscription.weekStartDate);
+      currentWeekEnd.setDate(currentWeekEnd.getDate() + 6);
+      return {
         id: updatedSubscription.id,
         status: updatedSubscription.status,
         periodStartDate: updatedSubscription.periodStartDate,
@@ -2523,30 +2489,36 @@ export class PaymentsService {
         classesUsedThisPeriod: updatedSubscription.classesUsedThisPeriod,
         classesRemainingThisPeriod: updatedSubscription.classesRemainingThisPeriod,
         autoRenew: updatedSubscription.autoRenew,
-        // Información semanal
         weekStartDate: updatedSubscription.weekStartDate,
         weekEndDate: currentWeekEnd.toISOString().split('T')[0],
         classesUsedThisWeek: updatedSubscription.classesUsedThisWeek,
         classesRemainingThisWeek: updatedSubscription.classesRemainingThisWeek,
-        classesAllowedPerWeek: updatedSubscription.paymentPlan.classesPerWeek
-      },
-      // Información del plan
-      plan: {
-        id: updatedSubscription.paymentPlan.id,
-        name: updatedSubscription.paymentPlan.name,
-        description: updatedSubscription.paymentPlan.description,
-        amount: updatedSubscription.paymentPlan.amount,
-        classesPerWeek: updatedSubscription.paymentPlan.classesPerWeek,
-        maxClassesPerPeriod: updatedSubscription.paymentPlan.maxClassesPerPeriod,
-        frequencyDays: updatedSubscription.paymentPlan.frequencyDays,
-        gracePeriodDays: updatedSubscription.paymentPlan.gracePeriodDays,
-        lateFeePercentage: updatedSubscription.paymentPlan.lateFeePercentage,
-        allowClassRollover: updatedSubscription.paymentPlan.allowClassRollover,
-        maxRolloverClasses: updatedSubscription.paymentPlan.maxRolloverClasses
-      },
-      // Todos los pagos
+        classesAllowedPerWeek: updatedSubscription.paymentPlan?.classesPerWeek,
+      };
+    })() : (subscription ? {
+      id: subscription.id,
+      status: subscription.status,
+      periodStartDate: subscription.periodStartDate,
+      periodEndDate: subscription.periodEndDate,
+      nextBillingDate: subscription.nextBillingDate,
+    } : null);
+
+    return {
+      subscription: subscriptionInfo,
+      plan: plan ? {
+        id: plan.id,
+        name: plan.name,
+        description: plan.description,
+        amount: plan.amount,
+        classesPerWeek: plan.classesPerWeek,
+        maxClassesPerPeriod: plan.maxClassesPerPeriod,
+        frequencyDays: plan.frequencyDays,
+        gracePeriodDays: plan.gracePeriodDays,
+        lateFeePercentage: plan.lateFeePercentage,
+        allowClassRollover: plan.allowClassRollover,
+        maxRolloverClasses: plan.maxRolloverClasses,
+      } : null,
       payments: paymentsWithSuspension,
-      // Pago pendiente (si existe)
       pendingPayment: (() => {
         if (!pendingPayment) return null;
         const isSuspended = paymentsWithSuspension.find(p => p.id === pendingPayment.id)?.isSuspended || false;
@@ -2564,28 +2536,26 @@ export class PaymentsService {
           isSuspended,
         };
       })(),
-      // Suspensiones activas
-      suspensions: activeSuspensions.map(suspension => ({
+      suspensions: allSuspensions.map(suspension => ({
         id: suspension.id,
         startDate: suspension.startDate,
         endDate: suspension.endDate,
         reason: suspension.reason,
         notes: suspension.notes,
-        isActive: suspension.isActive
+        isActive: suspension.isActive,
       })),
-      // Clases vencidas (semanas pasadas sin usar)
-      expiredClasses: expiredClasses,
-      // Estadísticas
+      expiredClasses,
       statistics: {
-        totalPayments: updatedSubscription.payments.length,
-        paidPayments: updatedSubscription.payments.filter(p => p.status === PaymentStatus.PAID).length,
-        pendingPayments: updatedSubscription.payments.filter(p => p.status === PaymentStatus.PENDING).length,
-        overduePayments: updatedSubscription.payments.filter(p => 
-          p.status === PaymentStatus.PENDING && p.dueDate && new Date(p.dueDate) < new Date()
+        totalPayments: allPayments.length,
+        paidPayments: allPayments.filter(p => p.status === PaymentStatus.PAID).length,
+        pendingPayments: allPayments.filter(p => p.status === PaymentStatus.PENDING).length,
+        overduePayments: allPayments.filter(p =>
+          (p.status === PaymentStatus.PENDING || p.status === PaymentStatus.OVERDUE)
+          && p.dueDate && new Date(p.dueDate) < new Date()
         ).length,
-        totalExpiredClasses: expiredClasses.reduce((sum, week) => sum + week.classesExpired, 0)
+        totalExpiredClasses: expiredClasses.reduce((sum, week) => sum + week.classesExpired, 0),
       },
-      hasActiveSubscription: true
+      hasActiveSubscription,
     };
   }
 
