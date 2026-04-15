@@ -1,0 +1,17 @@
+{
+  "version": "1.0",
+  "description": "Umbrales practicos campo (1-5) para variables derivadas",
+  "thresholds": {
+    "cmj_height_cm": [20, 27, 33, 40],
+    "propulsive_force_n": [1200, 1700, 2200, 2800],
+    "propulsive_power": [1500, 2500, 3500, 4500],
+    "rsi": [0.8, 1.1, 1.4, 1.8],
+    "contact_time_s": [0.35, 0.28, 0.22, 0.18],
+    "braking_force_n": [800, 1200, 1700, 2200],
+    "braking_time_s": [0.45, 0.35, 0.28, 0.22],
+    "fatigue_index": [25, 18, 12, 8],
+    "asymmetry_pct": [20, 15, 10, 6],
+    "elasticity_pct": [8, 12, 18, 25],
+    "force_bw_ratio": [15, 20, 25, 30]
+  }
+}

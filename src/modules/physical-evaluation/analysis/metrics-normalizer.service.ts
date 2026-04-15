@@ -11,6 +11,7 @@ const IGNORED_KEYS = new Set([
   'header_join',
   'csv_row_count',
   'csv_last_row_preview',
+  'csv_format',
 ]);
 
 function isNumeric(v: unknown): v is number {

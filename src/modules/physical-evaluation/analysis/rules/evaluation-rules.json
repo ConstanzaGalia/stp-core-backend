@@ -1,13 +1,18 @@
 {
-  "version": "1.0",
-  "description": "Motor de reglas para evaluación neuromuscular basada en plataforma de fuerza",
+  "version": "1.1",
+  "description": "Motor de reglas multi-test (CMJ, SJ, McCall, DJ) con reactividad efectiva",
 
   "variables": [
     "cmj_height",
     "cmj_braking_time",
     "cmj_propulsive_force",
+    "reactive_rsi",
+    "reactive_contact_time",
     "dj_rsi",
     "dj_contact_time",
+    "elasticity_index",
+    "force_to_body_weight_ratio",
+    "mccall_asymmetry_pct",
     "fatigue_index",
     "asymmetry"
   ],
@@ -15,6 +20,7 @@
   "categories": [
     "potencia",
     "reactividad",
+    "fuerza",
     "estrategia",
     "resistencia",
     "asimetria",
@@ -52,16 +58,16 @@
     {
       "id": "reactividad_muy_baja",
       "category": "reactividad",
-      "condition": "dj_rsi < 1.0",
+      "condition": "reactive_rsi < 1.0",
       "severity": "alta",
       "score_impact": -2,
-      "message": "Muy baja capacidad reactiva",
+      "message": "Muy baja capacidad reactiva (RSI efectivo)",
       "recommendation": "Trabajar pliometría básica y tiempos de contacto"
     },
     {
       "id": "reactividad_baja",
       "category": "reactividad",
-      "condition": "dj_rsi >= 1.0 AND dj_rsi < 1.3",
+      "condition": "reactive_rsi >= 1.0 AND reactive_rsi < 1.3",
       "severity": "alta",
       "score_impact": -1,
       "message": "Déficit en el uso del ciclo estiramiento-acortamiento",
@@ -70,7 +76,7 @@
     {
       "id": "reactividad_alta",
       "category": "reactividad",
-      "condition": "dj_rsi >= 1.6",
+      "condition": "reactive_rsi >= 1.6",
       "severity": "baja",
       "score_impact": 1,
       "message": "Excelente capacidad reactiva",
@@ -79,7 +85,7 @@
     {
       "id": "contacto_lento",
       "category": "reactividad",
-      "condition": "dj_contact_time > 0.30",
+      "condition": "reactive_contact_time > 0.30",
       "severity": "alta",
       "score_impact": -1,
       "message": "Tiempo de contacto elevado",
@@ -88,16 +94,52 @@
     {
       "id": "contacto_optimo",
       "category": "reactividad",
-      "condition": "dj_contact_time <= 0.25",
+      "condition": "reactive_contact_time <= 0.25",
       "severity": "baja",
       "score_impact": 1,
       "message": "Buen uso del tiempo de contacto",
       "recommendation": "Mantener intensidad reactiva"
     },
     {
+      "id": "fuerza_relativa_baja",
+      "category": "fuerza",
+      "condition": "force_to_body_weight_ratio < 15",
+      "severity": "alta",
+      "score_impact": -2,
+      "message": "Fuerza isométrica relativa baja (McCall / N por kg)",
+      "recommendation": "Priorizar fuerza máxima e isometrías progresivas antes de alta complejidad"
+    },
+    {
+      "id": "fuerza_relativa_ok",
+      "category": "fuerza",
+      "condition": "force_to_body_weight_ratio >= 25",
+      "severity": "baja",
+      "score_impact": 1,
+      "message": "Buena expresión de fuerza relativa",
+      "recommendation": "Mantener y transferir a gestos dinámicos"
+    },
+    {
+      "id": "elasticidad_baja",
+      "category": "estrategia",
+      "condition": "elasticity_index < 10",
+      "severity": "media",
+      "score_impact": -1,
+      "message": "Baja contribución del ciclo elástico (CMJ vs SJ)",
+      "recommendation": "Trabajar contramovimiento, saltos con amortiguación y timing excéntrico-concéntrico"
+    },
+    {
+      "id": "elasticidad_alta",
+      "category": "estrategia",
+      "condition": "elasticity_index >= 20",
+      "severity": "baja",
+      "score_impact": 1,
+      "message": "Buen aprovechamiento del ciclo elástico",
+      "recommendation": "Mantener gestos balísticos y pliometría acorde al deporte"
+    },
+    {
       "id": "mala_reutilizacion",
       "category": "estrategia",
-      "condition": "cmj_height >= 35 AND dj_rsi < 1.3",
+      "condition": "cmj_height >= 35 AND reactive_rsi < 1.3",
       "severity": "alta",
       "score_impact": -2,
       "message": "Buena fuerza pero mala reutilización de energía",
@@ -106,7 +148,7 @@
     {
       "id": "perfil_elastico",
       "category": "estrategia",
-      "condition": "cmj_height < 32 AND dj_rsi >= 1.5",
+      "condition": "cmj_height < 32 AND reactive_rsi >= 1.5",
       "severity": "media",
       "score_impact": -1,
       "message": "Perfil elástico con déficit estructural",
@@ -137,7 +179,16 @@
       "severity": "alta",
       "score_impact": -2,
       "message": "Asimetría significativa",
-      "recommendation": "Priorizar trabajo unilateral"
+      "recommendation": "Priorizar trabajo unilateral y control de carga"
+    },
+    {
+      "id": "asimetria_moderada",
+      "category": "asimetria",
+      "condition": "asymmetry >= 10 AND asymmetry <= 15",
+      "severity": "media",
+      "score_impact": -1,
+      "message": "Asimetría moderada",
+      "recommendation": "Monitorear y equilibrar volumen bilateral / unilateral controlado"
     },
     {
       "id": "asimetria_baja",
@@ -149,9 +200,18 @@
       "recommendation": "Mantener equilibrio bilateral"
     },
     {
+      "id": "asimetria_mccall_alta",
+      "category": "asimetria",
+      "condition": "mccall_asymmetry_pct > 15",
+      "severity": "alta",
+      "score_impact": -1,
+      "message": "Asimetría relevante entre lados en McCall",
+      "recommendation": "Priorizar fuerza unilateral y estabilidad antes de pliometría unilateral"
+    },
+    {
       "id": "perfil_deficit_global",
       "category": "global",
-      "condition": "cmj_height < 30 AND dj_rsi < 1.2",
+      "condition": "cmj_height < 30 AND reactive_rsi < 1.2",
       "severity": "alta",
       "score_impact": -3,
       "message": "Déficit global de rendimiento",
@@ -160,7 +220,7 @@
     {
       "id": "perfil_avanzado",
       "category": "global",
-      "condition": "cmj_height >= 38 AND dj_rsi >= 1.6 AND fatigue_index < 10",
+      "condition": "cmj_height >= 38 AND reactive_rsi >= 1.6 AND fatigue_index < 10",
       "severity": "baja",
       "score_impact": 2,
       "message": "Perfil neuromuscular avanzado",
@@ -170,11 +230,12 @@
 
   "scoring": {
     "weights": {
-      "potencia": 0.25,
-      "reactividad": 0.25,
-      "estrategia": 0.20,
-      "resistencia": 0.15,
-      "asimetria": 0.15
+      "potencia": 0.22,
+      "reactividad": 0.22,
+      "fuerza": 0.18,
+      "estrategia": 0.14,
+      "resistencia": 0.12,
+      "asimetria": 0.12
     }
   },
 

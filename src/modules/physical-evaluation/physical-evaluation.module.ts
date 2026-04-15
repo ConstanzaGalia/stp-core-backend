@@ -18,6 +18,8 @@ import { DerivedVariablesService } from './analysis/derived-variables.service';
 import { RulesEngineService } from './analysis/rules-engine.service';
 import { CapacityScoringService } from './analysis/capacity-scoring.service';
 import { AnalysisGeneratorService } from './analysis/analysis-generator.service';
+import { TrainingDecisionService } from './analysis/training-decision.service';
+import { AiAnalysisService } from './ai-analysis.service';
 
 @Module({
   imports: [
@@ -37,6 +39,8 @@ import { AnalysisGeneratorService } from './analysis/analysis-generator.service'
     RulesEngineService,
     CapacityScoringService,
     AnalysisGeneratorService,
+    TrainingDecisionService,
+    AiAnalysisService,
   ],
   exports: [PhysicalEvaluationService],
 })

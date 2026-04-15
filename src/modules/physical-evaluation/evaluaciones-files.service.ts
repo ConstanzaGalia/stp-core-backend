@@ -3,7 +3,7 @@ import * as fs from 'fs/promises';
 import * as path from 'path';
 import { randomUUID } from 'crypto';
 import { User } from 'src/entities/user.entity';
-import { PhysicalEvaluation } from 'src/entities/physical-evaluation.entity';
+import type { PhysicalEvaluation, PhysicalEvaluationFileMeta } from 'src/entities/physical-evaluation.entity';
 import { PhysicalEvaluationService } from './physical-evaluation.service';
 import { TestTypeFromFileService } from './test-type-from-file.service';
 import { FileMetricsExtractionService } from './file-metrics-extraction.service';
@@ -39,6 +39,47 @@ function extFromOriginal(name: string, mime: string): string {
   return '.bin';
 }
 
+/** Campos opcionales enviados por el cliente (FormData `fileMetadata` JSON). */
+interface ClientUploadFileMetadata {
+  originalFilename?: string;
+  detectedTestType?: string;
+  selectedTestType?: string;
+  parserFormat?: string;
+  parserWarnings?: string[];
+  parserCompleteness?: number;
+  previewHeaders?: string[];
+  previewRows?: Array<Array<string | null>>;
+  storageKey?: string;
+  signedUrl?: string;
+  downloadUrl?: string;
+  uploadedAt?: string;
+  mimeType?: string | null;
+  size?: number;
+}
+
+function coerceMetadataEntry(raw: unknown): ClientUploadFileMetadata {
+  if (!raw || typeof raw !== 'object' || Array.isArray(raw)) return {};
+  const o = raw as Record<string, unknown>;
+  return {
+    originalFilename: typeof o.originalFilename === 'string' ? o.originalFilename : undefined,
+    detectedTestType: typeof o.detectedTestType === 'string' ? o.detectedTestType : undefined,
+    selectedTestType: typeof o.selectedTestType === 'string' ? o.selectedTestType : undefined,
+    parserFormat: typeof o.parserFormat === 'string' ? o.parserFormat : undefined,
+    parserWarnings: Array.isArray(o.parserWarnings) ? o.parserWarnings.map((w) => String(w)) : undefined,
+    parserCompleteness: typeof o.parserCompleteness === 'number' ? o.parserCompleteness : undefined,
+    previewHeaders: Array.isArray(o.previewHeaders) ? o.previewHeaders.map((h) => String(h)) : undefined,
+    previewRows: Array.isArray(o.previewRows)
+      ? o.previewRows.map((row) => (Array.isArray(row) ? row.map((c) => (c == null ? null : String(c))) : []))
+      : undefined,
+    storageKey: typeof o.storageKey === 'string' ? o.storageKey : undefined,
+    signedUrl: typeof o.signedUrl === 'string' ? o.signedUrl : undefined,
+    downloadUrl: typeof o.downloadUrl === 'string' ? o.downloadUrl : undefined,
+    uploadedAt: typeof o.uploadedAt === 'string' ? o.uploadedAt : undefined,
+    mimeType: typeof o.mimeType === 'string' ? o.mimeType : o.mimeType === null ? null : undefined,
+    size: typeof o.size === 'number' ? o.size : undefined,
+  };
+}
+
 @Injectable()
 export class EvaluacionesFilesService {
   constructor(
@@ -72,7 +113,6 @@ export class EvaluacionesFilesService {
       return { sample: file.buffer.toString('utf8').slice(0, 12000), isCsv: true };
     }
     try {
-      // pdf-parse@1.1.x: API por Buffer, sin pdfjs-dist/DOMMatrix (la v2 rompe en Node).
       // eslint-disable-next-line @typescript-eslint/no-require-imports
       const pdfParse = require('pdf-parse') as (b: Buffer) => Promise<{ text: string }>;
       const data = await pdfParse(file.buffer);
@@ -86,6 +126,7 @@ export class EvaluacionesFilesService {
     actor: User,
     evaluationId: string,
     files: Express.Multer.File[],
+    fileMetadataList: unknown[] = [],
   ): Promise<PhysicalEvaluation> {
     if (!files?.length) throw new BadRequestException('Debe enviar al menos un archivo en el campo files');
     if (files.length > EVALUATIONS_MAX_FILES_PER_REQUEST) {
@@ -99,7 +140,12 @@ export class EvaluacionesFilesService {
     const evalDir = path.join(root, evaluationId);
     await fs.mkdir(evalDir, { recursive: true });
 
-    for (const file of files) {
+    const newFileMetas: PhysicalEvaluationFileMeta[] = [];
+
+    for (let i = 0; i < files.length; i++) {
+      const file = files[i]!;
+      const meta = coerceMetadataEntry(fileMetadataList[i]);
+
       this.assertAllowedFile(file, maxBytes);
       const ext = extFromOriginal(file.originalname, file.mimetype);
       const storedName = `${randomUUID()}${ext}`;
@@ -108,25 +154,68 @@ export class EvaluacionesFilesService {
 
       const relativePath = path.posix.join(evaluationId, storedName);
       const { sample, isCsv } = await this.extractContentSample(file);
-      const { testType, hints } = this.testTypeFromFile.resolve(file.originalname, file.mimetype, sample);
+      const { testType: inferredType, hints } = this.testTypeFromFile.resolve(file.originalname, file.mimetype, sample);
+      const testType = meta.selectedTestType?.trim() || inferredType;
+
+      const fileId = randomUUID();
 
       let parsedMetrics: Record<string, unknown> = {};
+      let repetitions: Array<Record<string, unknown>> = [];
       if (isCsv) {
-        parsedMetrics = this.metricsExtraction.extractFromCsv(testType, sample);
+        const csvFull = file.buffer.toString('utf8');
+        const extracted = this.metricsExtraction.extractFromCsv(testType, csvFull);
+        parsedMetrics = extracted.metrics;
+        repetitions = extracted.repetitions;
       } else {
         parsedMetrics = this.metricsExtraction.extractFromPdfText(testType, sample);
       }
 
+      const previewPayload =
+        meta.previewHeaders?.length && meta.previewRows?.length
+          ? { headers: meta.previewHeaders, rows: meta.previewRows }
+          : null;
+
+      const fileMetaRow: PhysicalEvaluationFileMeta = {
+        id: fileId,
+        originalFilename: meta.originalFilename || file.originalname,
+        mimeType: meta.mimeType ?? file.mimetype ?? null,
+        size: meta.size ?? file.size ?? null,
+        uploadedAt: meta.uploadedAt ?? new Date().toISOString(),
+        status: 'ready',
+        storageKey: meta.storageKey ?? null,
+        downloadUrl: meta.downloadUrl ?? meta.signedUrl ?? null,
+        signedUrl: meta.signedUrl ?? null,
+        localRelativePath: relativePath,
+        testType,
+        detectedTestType: meta.detectedTestType ?? inferredType ?? null,
+        parserFormat: meta.parserFormat ?? null,
+        warnings: meta.parserWarnings ?? [],
+        errorMessage: null,
+        preview:
+          previewPayload ??
+          (meta.parserCompleteness != null
+            ? { parserCompleteness: meta.parserCompleteness }
+            : null),
+      };
+
+      newFileMetas.push(fileMetaRow);
+
       const metrics: Record<string, unknown> = {
         ...parsedMetrics,
         _file: {
+          id: fileId,
           relativePath,
           originalFilename: file.originalname,
           mimeType: file.mimetype,
           sizeBytes: file.size,
+          storageKey: meta.storageKey ?? null,
+          signedUrl: meta.signedUrl ?? null,
+          downloadUrl: meta.downloadUrl ?? meta.signedUrl ?? null,
+          uploadedAt: meta.uploadedAt ?? null,
+          preview: previewPayload,
         },
         _detection: {
-          inferredTestType: testType,
+          inferredTestType: inferredType,
           hints,
         },
       };
@@ -137,9 +226,12 @@ export class EvaluacionesFilesService {
         testName,
         testType,
         metrics,
+        repetitions,
+        sourceFileId: fileId,
       });
     }
 
+    await this.physicalEvaluations.appendEvaluationFiles(evaluationId, newFileMetas);
     await this.physicalEvaluations.recomputeEvaluationSummary(evaluationId);
     return this.physicalEvaluations.findOneById(actor, athleteId, evaluationId);
   }

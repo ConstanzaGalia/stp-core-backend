@@ -15,7 +15,21 @@ function normalize(s: string): string {
 export class TestTypeFromFileService {
   inferFromFilename(filename: string): string | null {
     const n = normalize(filename.replace(/\.[^.]+$/, ''));
-    if (/\bcmj\b/.test(n) || n.includes('countermovement')) return 'cmj';
+    if (n.includes('mccall') || n.includes('mc call') || n.includes('imtp')) {
+      if (/\bizq\b|izquierda|\bleft\b|_l\b|mccallizq|mccall_izq|mccallleft/.test(n)) return 'mccall_left';
+      if (/\bder\b|derecha|\bright\b|_r\b|mccallder|mccall_der|mccallright/.test(n)) return 'mccall_right';
+      return 'mccall';
+    }
+    if (
+      n.includes('squat jump') ||
+      n.includes('squatjump') ||
+      /\bsqj\b/.test(n) ||
+      (n.includes('sq') && n.includes('jump')) ||
+      (n.includes('squat') && n.includes('jump'))
+    ) {
+      return 'squat_jump';
+    }
+    if (/\bcmj\b/.test(n) || n.includes('cmj') || n.includes('countermovement')) return 'cmj';
     if (/\bdj\b/.test(n) || n.includes('drop jump') || n.includes('drop_jump') || (n.includes('drop') && n.includes('jump')))
       return 'drop_jump';
     if (n.includes('salto') && (n.includes('react') || n.includes('reactivo'))) return 'drop_jump';
@@ -24,6 +38,8 @@ export class TestTypeFromFileService {
 
   inferFromFreeText(text: string): string | null {
     const t = normalize(text.slice(0, 15000));
+    if (/\bmccall\b/.test(t) || t.includes('mid thigh pull')) return 'mccall';
+    if (t.includes('squat jump') || t.includes('squat_jump')) return 'squat_jump';
     if (/\bcmj\b/.test(t) || t.includes('countermovement jump')) return 'cmj';
     if (t.includes('drop jump') || t.includes('drop_jump') || (t.includes('drop') && t.includes('jump') && t.includes('react')))
       return 'drop_jump';

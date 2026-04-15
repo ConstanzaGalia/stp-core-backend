@@ -1,4 +1,4 @@
-import { Body, Controller, Delete, Get, Param, Post, UseGuards } from '@nestjs/common';
+import { Body, Controller, Delete, Get, Param, Post, Query, UseGuards } from '@nestjs/common';
 import { AuthGuard } from '@nestjs/passport';
 import { GetUser } from '../auth/get-user.decorator';
 import { User } from 'src/entities/user.entity';
@@ -20,8 +20,14 @@ export class PhysicalEvaluationController {
   }
 
   @Get(':userId')
-  list(@GetUser() actor: User, @Param('userId') userId: string) {
-    return this.service.listForAthlete(actor, userId);
+  list(
+    @GetUser() actor: User,
+    @Param('userId') userId: string,
+    @Query('excludeStpLegacyOnly') excludeStpLegacyOnly?: string,
+  ) {
+    const exclude =
+      excludeStpLegacyOnly === '1' || excludeStpLegacyOnly?.toLowerCase() === 'true';
+    return this.service.listForAthlete(actor, userId, { excludeStpLegacyOnly: exclude });
   }
 
   @Get(':userId/:evaluationId')

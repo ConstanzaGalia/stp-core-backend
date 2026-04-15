@@ -7,7 +7,7 @@ import {
 import { InjectRepository } from '@nestjs/typeorm';
 import { Repository } from 'typeorm';
 import { User } from 'src/entities/user.entity';
-import { PhysicalEvaluation } from 'src/entities/physical-evaluation.entity';
+import { PhysicalEvaluation, PhysicalEvaluationFileMeta } from 'src/entities/physical-evaluation.entity';
 import { PhysicalEvaluationTest } from 'src/entities/physical-evaluation-test.entity';
 import { AthleteEvaluation } from 'src/entities/athlete-evaluation.entity';
 import { UserRole } from 'src/common/enums/enums';
@@ -28,9 +28,15 @@ const STAFF_ROLES: UserRole[] = [
 const MAX_METRICS_JSON_BYTES = 48_000;
 
 /**
- * Política perfil (legacy STP): si la evaluación física produce `summaryScore` (0–100),
- * se actualiza `user.athleteScore` en escala ~0–5 como `summaryScore / 20` y `stp_level` con los mismos
- * umbrales que la evaluación STP de tres dimensiones, para mantener coherencia en el dashboard.
+ * Perfil atleta: un único par canónico (`user.athleteScore` ~0–5, `user.stpLevel`).
+ *
+ * - Evaluación física (Ivolution/CMJ, etc.): `summaryScore` 0–100 → `athleteScore = summaryScore / 20`
+ *   (misma escala que `athlete_evaluation.scoreTotal`). Al crear o `recomputeEvaluationSummary`,
+ *   se escribe encima del valor que hubiera venido solo del STP legacy: no hay dos ranuras en BD.
+ * - STP legacy (tabla `athlete_evaluation`): `scoreTotal` ya es ~0–5; `syncAthleteScoreFromEvaluationSources`
+ *   lo usa solo si no hay evaluación física “real” más reciente (excluye filas solo `stp_legacy`).
+ *
+ * Ver también comentario en el radar del frontend: el fallback visual `?? 3` no es este score.
  */
 
 function parseEvaluationDateOnly(isoOrYmd: string): Date {
@@ -52,6 +58,16 @@ function stpLevelFromAthleteScore(score: number): number {
 function physicalSummaryToAthleteScore(summary: number): number {
   const scaled = summary / 20;
   return +Math.min(5, Math.max(0, scaled)).toFixed(2);
+}
+
+/**
+ * Filas importadas/migradas desde `athlete_evaluation` (test `stp_legacy` únicamente).
+ * No deben listarse como evaluaciones físicas ni usarse como fuente de score físico.
+ */
+export function isStpLegacyOnlyPhysicalEvaluation(ev: { tests?: PhysicalEvaluationTest[] }): boolean {
+  const tests = ev.tests ?? [];
+  if (tests.length === 0) return false;
+  return tests.every((t) => String(t.testType).toLowerCase() === 'stp_legacy');
 }
 
 @Injectable()
@@ -159,7 +175,13 @@ export class PhysicalEvaluationService {
   async appendTestFromUpload(
     actor: User,
     evaluationId: string,
-    payload: { testName: string; testType: string; metrics: Record<string, unknown> },
+    payload: {
+      testName: string;
+      testType: string;
+      metrics: Record<string, unknown>;
+      repetitions?: Array<Record<string, unknown>>;
+      sourceFileId?: string | null;
+    },
   ): Promise<void> {
     await this.findEvaluationForActor(actor, evaluationId, true);
     this.assertSingleMetricsSize(payload.metrics);
@@ -170,11 +192,26 @@ export class PhysicalEvaluationService {
       testName: payload.testName,
       testType: payload.testType,
       metrics: payload.metrics,
+      repetitions: payload.repetitions?.length ? payload.repetitions : [],
+      sourceFileId: payload.sourceFileId ?? null,
     });
     await this.testRepo.save(row);
   }
 
-  /** Recalcula resumen global y perfil atleta a partir de todos los tests de la evaluación. */
+  /** Agrega entradas al arreglo JSON `files` de la evaluación (p. ej. metadata de Supabase). */
+  async appendEvaluationFiles(evaluationId: string, newFiles: PhysicalEvaluationFileMeta[]): Promise<void> {
+    if (!newFiles.length) return;
+    const evaluation = await this.evaluationRepo.findOne({ where: { id: evaluationId } });
+    if (!evaluation) throw new NotFoundException('Evaluación no encontrada');
+    const existing = Array.isArray(evaluation.files) ? evaluation.files : [];
+    evaluation.files = [...existing, ...newFiles];
+    await this.evaluationRepo.save(evaluation);
+  }
+
+  /**
+   * Recalcula resumen global y, si hay `summaryScore`, actualiza `user.athleteScore` / `stpLevel`
+   * (misma política que en `create`: puede sustituir el perfil que reflejaba solo STP legacy).
+   */
   async recomputeEvaluationSummary(evaluationId: string): Promise<void> {
     const ev = await this.evaluationRepo.findOne({
       where: { id: evaluationId },
@@ -270,13 +307,21 @@ export class PhysicalEvaluationService {
     return this.findOneById(actor, athleteUserId, saved.id);
   }
 
-  async listForAthlete(actor: User, athleteUserId: string): Promise<PhysicalEvaluation[]> {
+  async listForAthlete(
+    actor: User,
+    athleteUserId: string,
+    options?: { excludeStpLegacyOnly?: boolean },
+  ): Promise<PhysicalEvaluation[]> {
     await this.assertCanAccessAthlete(actor, athleteUserId, false);
-    return this.evaluationRepo.find({
+    const list = await this.evaluationRepo.find({
       where: { user: { id: athleteUserId } },
       relations: ['tests'],
       order: { evaluationDate: 'DESC', createdAt: 'DESC' },
     });
+    if (options?.excludeStpLegacyOnly) {
+      return list.filter((ev) => !isStpLegacyOnlyPhysicalEvaluation(ev));
+    }
+    return list;
   }
 
   async findOneById(actor: User, athleteUserId: string, evaluationId: string): Promise<PhysicalEvaluation> {
@@ -290,8 +335,10 @@ export class PhysicalEvaluationService {
   }
 
   /**
-   * Alinea `athleteScore` / `stpLevel` con la fuente más reciente:
-   * última evaluación física con resumen numérico, si no hay ninguna la última STP legacy, si no hay ninguna los deja en null.
+   * Alinea `athleteScore` / `stpLevel` con una sola fuente (sin duplicar legacy + física en el perfil):
+   * 1) Última `physical_evaluation` con `summary_score` que no sea solo tests `stp_legacy`.
+   * 2) Si no aplica, última fila `athlete_evaluation` (legacy).
+   * 3) Si no hay ninguna, null.
    */
   async syncAthleteScoreFromEvaluationSources(athleteUserId: string): Promise<void> {
     const user = await this.userRepo.findOne({ where: { id: athleteUserId } });
@@ -302,6 +349,15 @@ export class PhysicalEvaluationService {
       .innerJoin('pe.user', 'u')
       .where('u.id = :uid', { uid: athleteUserId })
       .andWhere('pe.summary_score IS NOT NULL')
+      .andWhere(
+        `NOT (
+          EXISTS (SELECT 1 FROM physical_evaluation_test t WHERE t.evaluation_id = pe.id)
+          AND NOT EXISTS (
+            SELECT 1 FROM physical_evaluation_test t
+            WHERE t.evaluation_id = pe.id AND LOWER(t.test_type) <> 'stp_legacy'
+          )
+        )`,
+      )
       .orderBy('pe.evaluation_date', 'DESC')
       .addOrderBy('pe.created_at', 'DESC')
       .getOne();

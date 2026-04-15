@@ -12,6 +12,7 @@ import { WEIGHTED_CATEGORIES } from './analysis.types';
 const CATEGORY_LABELS: Record<CategoryName, string> = {
   potencia: 'Potencia',
   reactividad: 'Reactividad',
+  fuerza: 'Fuerza',
   estrategia: 'Estrategia neuromuscular',
   resistencia: 'Resistencia neuromuscular',
   asimetria: 'Simetría bilateral',
@@ -108,8 +109,14 @@ export class AnalysisGeneratorService {
         `Altura CMJ promedio: ${derived.cmj_height.toFixed(1)} cm.`,
       );
     }
-    if (derived.dj_rsi != null) {
-      parts.push(`RSI promedio en Drop Jump: ${derived.dj_rsi.toFixed(2)}.`);
+    if (derived.reactive_rsi != null) {
+      parts.push(`RSI (reactividad efectiva): ${derived.reactive_rsi.toFixed(2)}.`);
+    }
+    if (derived.elasticity_index != null) {
+      parts.push(`Índice de elasticidad CMJ vs SJ: ${derived.elasticity_index.toFixed(1)}%.`);
+    }
+    if (derived.body_weight_kg == null && derived.mccall_peak_force != null) {
+      parts.push('Peso corporal no disponible en los CSV: fuerza relativa (N/kg) no calculada.');
     }
     if (derived.fatigue_index != null) {
       parts.push(
