@@ -12,6 +12,7 @@ import { CreateEvaluationDto, UpdateAthleteProfileDto } from './dto/create-evalu
 import { UserRole } from 'src/common/enums/enums';
 import { CompanyService } from '../company/company.service';
 import { AthletesService } from '../athletes/athletes.service';
+import { PhysicalEvaluationService } from '../physical-evaluation/physical-evaluation.service';
 
 const STAFF_ROLES: UserRole[] = [
   UserRole.STP_ADMIN,
@@ -30,6 +31,7 @@ export class AthleteEvaluationService {
     private readonly userRepo: Repository<User>,
     private readonly companyService: CompanyService,
     private readonly athletesService: AthletesService,
+    private readonly physicalEvaluationService: PhysicalEvaluationService,
   ) {}
 
   private isStaff(user: User): boolean {
@@ -183,5 +185,17 @@ export class AthleteEvaluationService {
       ...user,
       currentEvaluation: currentEval,
     };
+  }
+
+  async removeLegacyEvaluation(actor: User, userId: string, evaluationId: string): Promise<void> {
+    await this.assertStaffCanWriteEvaluations(actor, userId);
+
+    const row = await this.evaluationRepo.findOne({
+      where: { id: evaluationId, user: { id: userId } },
+    });
+    if (!row) throw new NotFoundException('Evaluación no encontrada');
+
+    await this.evaluationRepo.remove(row);
+    await this.physicalEvaluationService.syncAthleteScoreFromEvaluationSources(userId);
   }
 }

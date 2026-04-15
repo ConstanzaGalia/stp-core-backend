@@ -1,4 +1,4 @@
-import { Controller, Post, Get, Patch, Body, Param, UseGuards } from '@nestjs/common';
+import { Controller, Post, Get, Patch, Delete, Body, Param, UseGuards } from '@nestjs/common';
 import { AuthGuard } from '@nestjs/passport';
 import { GetUser } from '../auth/get-user.decorator';
 import { User } from 'src/entities/user.entity';
@@ -33,5 +33,14 @@ export class AthleteEvaluationController {
   @Patch(':userId/profile')
   updateProfile(@GetUser() actor: User, @Param('userId') userId: string, @Body() dto: UpdateAthleteProfileDto) {
     return this.service.updateProfile(actor, userId, dto);
+  }
+
+  @Delete(':userId/:evaluationId')
+  removeLegacy(
+    @GetUser() actor: User,
+    @Param('userId') userId: string,
+    @Param('evaluationId') evaluationId: string,
+  ) {
+    return this.service.removeLegacyEvaluation(actor, userId, evaluationId);
   }
 }

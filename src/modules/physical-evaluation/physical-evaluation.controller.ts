@@ -1,4 +1,4 @@
-import { Body, Controller, Get, Param, Post, UseGuards } from '@nestjs/common';
+import { Body, Controller, Delete, Get, Param, Post, UseGuards } from '@nestjs/common';
 import { AuthGuard } from '@nestjs/passport';
 import { GetUser } from '../auth/get-user.decorator';
 import { User } from 'src/entities/user.entity';
@@ -27,5 +27,10 @@ export class PhysicalEvaluationController {
   @Get(':userId/:evaluationId')
   getOne(@GetUser() actor: User, @Param('userId') userId: string, @Param('evaluationId') evaluationId: string) {
     return this.service.findOneById(actor, userId, evaluationId);
+  }
+
+  @Delete(':userId/:evaluationId')
+  remove(@GetUser() actor: User, @Param('userId') userId: string, @Param('evaluationId') evaluationId: string) {
+    return this.service.remove(actor, userId, evaluationId);
   }
 }

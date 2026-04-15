@@ -9,6 +9,7 @@ import { Repository } from 'typeorm';
 import { User } from 'src/entities/user.entity';
 import { PhysicalEvaluation } from 'src/entities/physical-evaluation.entity';
 import { PhysicalEvaluationTest } from 'src/entities/physical-evaluation-test.entity';
+import { AthleteEvaluation } from 'src/entities/athlete-evaluation.entity';
 import { UserRole } from 'src/common/enums/enums';
 import { CompanyService } from '../company/company.service';
 import { AthletesService } from '../athletes/athletes.service';
@@ -60,6 +61,8 @@ export class PhysicalEvaluationService {
     private readonly evaluationRepo: Repository<PhysicalEvaluation>,
     @InjectRepository(PhysicalEvaluationTest)
     private readonly testRepo: Repository<PhysicalEvaluationTest>,
+    @InjectRepository(AthleteEvaluation)
+    private readonly legacyEvalRepo: Repository<AthleteEvaluation>,
     @InjectRepository(User)
     private readonly userRepo: Repository<User>,
     private readonly analysisService: PhysicalEvaluationAnalysisService,
@@ -284,5 +287,64 @@ export class PhysicalEvaluationService {
     });
     if (!ev) throw new NotFoundException('Evaluación no encontrada');
     return ev;
+  }
+
+  /**
+   * Alinea `athleteScore` / `stpLevel` con la fuente más reciente:
+   * última evaluación física con resumen numérico, si no hay ninguna la última STP legacy, si no hay ninguna los deja en null.
+   */
+  async syncAthleteScoreFromEvaluationSources(athleteUserId: string): Promise<void> {
+    const user = await this.userRepo.findOne({ where: { id: athleteUserId } });
+    if (!user) return;
+
+    const latestPhysicalWithScore = await this.evaluationRepo
+      .createQueryBuilder('pe')
+      .innerJoin('pe.user', 'u')
+      .where('u.id = :uid', { uid: athleteUserId })
+      .andWhere('pe.summary_score IS NOT NULL')
+      .orderBy('pe.evaluation_date', 'DESC')
+      .addOrderBy('pe.created_at', 'DESC')
+      .getOne();
+
+    if (
+      latestPhysicalWithScore?.summaryScore != null &&
+      Number.isFinite(latestPhysicalWithScore.summaryScore)
+    ) {
+      user.athleteScore = physicalSummaryToAthleteScore(latestPhysicalWithScore.summaryScore);
+      user.stpLevel = stpLevelFromAthleteScore(user.athleteScore);
+      await this.userRepo.save(user);
+      return;
+    }
+
+    const latestLegacy = await this.legacyEvalRepo.findOne({
+      where: { user: { id: athleteUserId } },
+      order: { createdAt: 'DESC' },
+    });
+
+    if (latestLegacy) {
+      user.athleteScore = latestLegacy.scoreTotal;
+      user.stpLevel = latestLegacy.stpLevel;
+      await this.userRepo.save(user);
+      return;
+    }
+
+    user.athleteScore = null;
+    user.stpLevel = null;
+    await this.userRepo.save(user);
+  }
+
+  async remove(actor: User, athleteUserId: string, evaluationId: string): Promise<void> {
+    await this.assertCanAccessAthlete(actor, athleteUserId, true);
+    if (!this.isStaff(actor)) {
+      throw new ForbiddenException('Solo el staff puede eliminar evaluaciones físicas');
+    }
+
+    const ev = await this.evaluationRepo.findOne({
+      where: { id: evaluationId, user: { id: athleteUserId } },
+    });
+    if (!ev) throw new NotFoundException('Evaluación no encontrada');
+
+    await this.evaluationRepo.remove(ev);
+    await this.syncAthleteScoreFromEvaluationSources(athleteUserId);
   }
 }

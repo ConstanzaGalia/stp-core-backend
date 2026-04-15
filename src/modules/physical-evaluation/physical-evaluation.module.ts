@@ -2,6 +2,7 @@ import { Module } from '@nestjs/common';
 import { TypeOrmModule } from '@nestjs/typeorm';
 import { PhysicalEvaluation } from 'src/entities/physical-evaluation.entity';
 import { PhysicalEvaluationTest } from 'src/entities/physical-evaluation-test.entity';
+import { AthleteEvaluation } from 'src/entities/athlete-evaluation.entity';
 import { User } from 'src/entities/user.entity';
 import { CompanyModule } from '../company/company.module';
 import { AthletesModule } from '../athletes/athletes.module';
@@ -20,7 +21,7 @@ import { AnalysisGeneratorService } from './analysis/analysis-generator.service'
 
 @Module({
   imports: [
-    TypeOrmModule.forFeature([PhysicalEvaluation, PhysicalEvaluationTest, User]),
+    TypeOrmModule.forFeature([PhysicalEvaluation, PhysicalEvaluationTest, User, AthleteEvaluation]),
     CompanyModule,
     AthletesModule,
   ],
