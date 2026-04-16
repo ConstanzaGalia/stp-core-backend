@@ -1306,6 +1306,7 @@ export class PaymentsService {
           notes: payment.notes,
           instalmentNumber: payment.instalmentNumber,
           concept: payment.concept,
+          pendingBalance: payment.pendingBalance != null ? Number(payment.pendingBalance) : null,
           sortDate: payment.paidDate || payment.dueDate
         }))
         .sort((a, b) => {
@@ -1345,6 +1346,7 @@ export class PaymentsService {
           notes: payment.notes,
           instalmentNumber: payment.instalmentNumber,
           concept: payment.concept,
+          pendingBalance: payment.pendingBalance != null ? Number(payment.pendingBalance) : null,
           isOverdue: payment.dueDate
             ? new Date(payment.dueDate) < new Date()
               && (payment.status === PaymentStatus.PENDING || payment.status === PaymentStatus.OVERDUE)
@@ -1424,6 +1426,7 @@ export class PaymentsService {
         notes: payment.notes,
         instalmentNumber: payment.instalmentNumber,
         concept: payment.concept,
+        pendingBalance: payment.pendingBalance != null ? Number(payment.pendingBalance) : null,
         isOverdue: payment.dueDate ? new Date(payment.dueDate) < new Date() && payment.status === PaymentStatus.PENDING : false,
         isSuspended: false
       };
@@ -1569,7 +1572,7 @@ export class PaymentsService {
 
   // ===== PAGO COMPLETO (SUSCRIPCIÓN + PAGO) =====
   async completePayment(completePaymentDto: CompletePaymentDto): Promise<{ subscription: UserPaymentSubscription; payment: Payment; reservationsGenerated?: boolean }> {
-    const { paymentId: completedPaymentId, userId, paymentPlanId, companyId, amount, paymentMethod, discount, transactionId, notes, startDate, paidDate, keepPending } = completePaymentDto;
+    const { paymentId: completedPaymentId, userId, paymentPlanId, companyId, amount, paymentMethod, discount, transactionId, notes, startDate, paidDate, keepPending, pendingBalance: dtoPendingBalance } = completePaymentDto;
 
     // Completar un pago específico por ID (ej. matrícula u otro pago ya creado)
     if (completedPaymentId) {
@@ -1706,6 +1709,8 @@ export class PaymentsService {
       pendingPayment.totalAmount = pendingPayment.amount + pendingPayment.lateFee - (discount || 0);
       pendingPayment.transactionId = transactionId;
       pendingPayment.notes = notes;
+      const pb = dtoPendingBalance != null ? Number(dtoPendingBalance) : 0;
+      pendingPayment.pendingBalance = pb > 0 ? pb : null;
     } else {
       // Solo guardar notas y monto actualizado; dejar estado PENDING
       if (notes) pendingPayment.notes = notes;
@@ -1885,6 +1890,8 @@ export class PaymentsService {
     payment.totalAmount = Number(payment.amount) + payment.lateFee - (dto.discount ?? 0);
     payment.transactionId = dto.transactionId ?? payment.transactionId;
     payment.notes = dto.notes ?? payment.notes;
+    const pbById = dto.pendingBalance != null ? Number(dto.pendingBalance) : 0;
+    payment.pendingBalance = pbById > 0 ? pbById : null;
     const savedPayment = await this.paymentRepository.save(payment);
 
     // Matrícula o pago sin suscripción: solo registrar, no activar ni generar clases
@@ -2055,6 +2062,10 @@ export class PaymentsService {
     }
     if (updatePaymentDto.paidDate !== undefined) {
       payment.paidDate = this.parseDateOnlyAsNoonUTC(updatePaymentDto.paidDate);
+    }
+    if (updatePaymentDto.pendingBalance !== undefined) {
+      const pb = updatePaymentDto.pendingBalance != null ? Number(updatePaymentDto.pendingBalance) : 0;
+      payment.pendingBalance = pb > 0 ? pb : null;
     }
 
     // Recalcular totalAmount si se modificó amount, lateFee o discount

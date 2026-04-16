@@ -1,4 +1,4 @@
-import { IsNumber, IsEnum, IsOptional, IsString, Min } from 'class-validator';
+import { IsNumber, IsEnum, IsOptional, IsString, Min, ValidateIf } from 'class-validator';
 import { Type, Transform } from 'class-transformer';
 import { PaymentStatus, PaymentMethod, PaymentConcept } from '../../../entities/payment.entity';
 
@@ -90,4 +90,18 @@ export class UpdatePaymentDto {
   @IsString()
   @IsOptional()
   paidDate?: string; // Fecha de pago (ISO string)
+
+  /** Omitir = no cambiar; null o 0 = limpiar saldo pendiente. */
+  @IsOptional()
+  @Transform(({ value }) => {
+    if (value === undefined) return undefined;
+    if (value === null || value === '') return null;
+    const n = normalizeNumber(value);
+    if (typeof n !== 'number' || isNaN(n)) return null;
+    return n <= 0 ? null : n;
+  })
+  @ValidateIf((o) => o.pendingBalance !== undefined && o.pendingBalance !== null)
+  @IsNumber()
+  @Min(0)
+  pendingBalance?: number | null;
 }

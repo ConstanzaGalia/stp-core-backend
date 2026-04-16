@@ -80,6 +80,10 @@ export class Payment {
   @Column({ type: 'text', nullable: true })
   notes: string; // Notas adicionales
 
+  /** Monto que aún adeuda el alumno respecto a esta cuota (pago en PAID con cobro parcial documentado). */
+  @Column({ type: 'decimal', precision: 10, scale: 2, nullable: true })
+  pendingBalance: number | null;
+
   @Column({ type: 'varchar', nullable: true })
   transactionId: string; // ID de transacción del gateway de pago
 

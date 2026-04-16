@@ -48,4 +48,10 @@ export class CompletePaymentDto {
   @IsBoolean()
   @IsOptional()
   keepPending?: boolean;
+
+  /** Saldo pendiente a cobrar (solo aplica cuando el pago queda PAID). */
+  @IsNumber()
+  @Min(0)
+  @IsOptional()
+  pendingBalance?: number;
 }
