@@ -5,7 +5,7 @@ import {
   NotFoundException,
 } from '@nestjs/common';
 import { InjectRepository } from '@nestjs/typeorm';
-import { Repository } from 'typeorm';
+import { In, Repository } from 'typeorm';
 import { User } from 'src/entities/user.entity';
 import { PhysicalEvaluation, PhysicalEvaluationFileMeta } from 'src/entities/physical-evaluation.entity';
 import { PhysicalEvaluationTest } from 'src/entities/physical-evaluation-test.entity';
@@ -87,6 +87,92 @@ export class PhysicalEvaluationService {
 
   private isStaff(user: User): boolean {
     return STAFF_ROLES.includes(user.role);
+  }
+
+  private async assertStaffCanAccessCompany(actor: User, companyId: string): Promise<void> {
+    if (!this.isStaff(actor)) {
+      throw new ForbiddenException('Sin permiso');
+    }
+    if (actor.role === UserRole.STP_ADMIN) {
+      return;
+    }
+    const staffCompanies = await this.companyService.findCompaniesByUser(actor.id);
+    if (!staffCompanies.some((c) => c.id === companyId)) {
+      throw new ForbiddenException('No perteneces a este centro');
+    }
+  }
+
+  /**
+   * Listado para el hub staff: miembros del centro (incl. portal-only) con al menos una evaluación física "útil".
+   */
+  async listHubAthletesWithPhysicalEvaluations(
+    actor: User,
+    companyId: string,
+  ): Promise<
+    Array<{
+      userId: string;
+      name: string;
+      lastName: string;
+      primarySport: string | null;
+      evaluationPortalOnly: boolean;
+      evaluationCount: number;
+      lastEvaluationDate: string;
+    }>
+  > {
+    await this.assertStaffCanAccessCompany(actor, companyId);
+    const invitations = await this.athletesService.getCompanyAthletesIncludingPortal(companyId);
+    const userIds = invitations.map((i) => i.user?.id).filter(Boolean) as string[];
+    if (!userIds.length) {
+      return [];
+    }
+    const evals = await this.evaluationRepo.find({
+      where: { user: { id: In(userIds) } },
+      relations: ['tests', 'user'],
+      order: { evaluationDate: 'DESC', createdAt: 'DESC' },
+    });
+    const byUser = new Map<string, typeof evals>();
+    for (const e of evals) {
+      const uid = e.user?.id;
+      if (!uid) continue;
+      if (!byUser.has(uid)) {
+        byUser.set(uid, []);
+      }
+      byUser.get(uid)!.push(e);
+    }
+    const result: Array<{
+      userId: string;
+      name: string;
+      lastName: string;
+      primarySport: string | null;
+      evaluationPortalOnly: boolean;
+      evaluationCount: number;
+      lastEvaluationDate: string;
+    }> = [];
+    for (const inv of invitations) {
+      const uid = inv.user?.id;
+      if (!uid) continue;
+      const list = byUser.get(uid) ?? [];
+      const meaningful = list.filter((ev) => !isStpLegacyOnlyPhysicalEvaluation(ev));
+      if (meaningful.length === 0) continue;
+      let maxTime = 0;
+      for (const ev of meaningful) {
+        const d = ev.evaluationDate instanceof Date ? ev.evaluationDate : new Date(ev.evaluationDate);
+        const t = d.getTime();
+        if (t > maxTime) maxTime = t;
+      }
+      const last = new Date(maxTime);
+      result.push({
+        userId: uid,
+        name: inv.user!.name,
+        lastName: inv.user!.lastName,
+        primarySport: inv.user!.primarySport ?? null,
+        evaluationPortalOnly: inv.user!.evaluationPortalOnly === true,
+        evaluationCount: meaningful.length,
+        lastEvaluationDate: last.toISOString().slice(0, 10),
+      });
+    }
+    result.sort((a, b) => b.lastEvaluationDate.localeCompare(a.lastEvaluationDate));
+    return result;
   }
 
   /**

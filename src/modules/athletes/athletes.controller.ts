@@ -23,6 +23,9 @@ export class AthletesController {
     if (!STAFF_ROLES.includes(user.role)) {
       throw new ForbiddenException('No tienes permiso para gestionar solicitudes de este centro');
     }
+    if (user.role === UserRole.STP_ADMIN) {
+      return;
+    }
     const companies = await this.companyService.findCompaniesByUser(user.id);
     const belongs = companies.some((c) => c.id === companyId);
     if (!belongs) {
@@ -103,6 +106,30 @@ export class AthletesController {
 
   // === ENDPOINTS PARA COMPAÑÍAS ===
 
+  @Post('company/:companyId/promote-portal-athlete/:athleteId')
+  @UseGuards(AuthGuard('jwt'))
+  async promotePortalAthlete(
+    @Param('companyId') companyId: string,
+    @Param('athleteId') athleteId: string,
+    @GetUser() user: User,
+  ) {
+    if (!STAFF_ROLES.includes(user.role)) {
+      throw new ForbiddenException('Solo el staff puede promover atletas');
+    }
+    await this.ensureUserBelongsToCompany(user, companyId);
+    const updated = await this.athletesService.promotePortalAthleteToFullMember(companyId, athleteId);
+    return {
+      message: 'El participante ahora es un alumno completo del centro',
+      user: {
+        id: updated.id,
+        name: updated.name,
+        lastName: updated.lastName,
+        email: updated.email,
+        evaluationPortalOnly: updated.evaluationPortalOnly,
+      },
+    };
+  }
+
   @Post('company/:companyId/create-athlete')
   @UseGuards(AuthGuard('jwt'))
   async createAthlete(
@@ -113,6 +140,7 @@ export class AthletesController {
     if (!STAFF_ROLES.includes(user.role)) {
       throw new ForbiddenException('Solo entrenadores o directores pueden crear atletas');
     }
+    await this.ensureUserBelongsToCompany(user, companyId);
     const result = await this.athletesService.createAthleteForCompany(companyId, createAthleteDto);
     return {
       message: 'Atleta creado correctamente. Contraseña temporal: EntrenamientoSTP1@',

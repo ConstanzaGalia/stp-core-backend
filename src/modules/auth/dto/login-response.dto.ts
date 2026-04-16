@@ -7,4 +7,6 @@ export class LoginResponseDto {
   name: string;
   lastName: string;
   role: UserRole;
+  /** Solo lectura: participante "solo evaluaciones" (portal). */
+  evaluationPortalOnly?: boolean;
 } 

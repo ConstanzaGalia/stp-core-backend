@@ -139,6 +139,14 @@ export class User {
   @Column({ type: 'int', nullable: true, name: 'stp_level' })
   stpLevel?: number;
 
+  /** Deporte principal del atleta (perfil); la UI puede mostrar "fitness" si está vacío. */
+  @Column({ name: 'primary_sport', nullable: true, length: 100 })
+  primarySport?: string;
+
+  /** Participante cargado solo para evaluaciones (feria/externo); no aparece en roster de alumnos hasta promoción. */
+  @Column({ name: 'evaluation_portal_only', type: 'boolean', default: false })
+  evaluationPortalOnly?: boolean;
+
   @OneToMany(() => AthleteEvaluation, evaluation => evaluation.user)
   evaluations: AthleteEvaluation[];
 

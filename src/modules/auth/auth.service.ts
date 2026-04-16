@@ -103,6 +103,7 @@ export class AuthService {
       name: userFound.name,
       lastName: userFound.lastName,
       role: userFound.role,
+      evaluationPortalOnly: userFound.evaluationPortalOnly === true,
     };
   }
 
@@ -328,6 +329,8 @@ export class AuthService {
       city: user.city,
       imageProfile: user.imageProfile,
       dateOfBirth: user.dateOfBirth,
+      primarySport: user.primarySport ?? null,
+      evaluationPortalOnly: user.evaluationPortalOnly === true,
       createdAt: user.created_at,
       updatedAt: user.updated_at,
       companies: user.company || [],

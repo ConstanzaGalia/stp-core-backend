@@ -1,4 +1,4 @@
-import { IsInt, Min, Max, IsOptional, IsString, IsNumber } from 'class-validator';
+import { IsInt, Min, Max, IsOptional, IsString, IsNumber, MaxLength } from 'class-validator';
 import { Type } from 'class-transformer';
 
 export class CreateEvaluationDto {
@@ -36,4 +36,9 @@ export class UpdateAthleteProfileDto {
   @IsOptional()
   @IsString()
   objetivo?: string;
+
+  @IsOptional()
+  @IsString()
+  @MaxLength(100)
+  primarySport?: string;
 }

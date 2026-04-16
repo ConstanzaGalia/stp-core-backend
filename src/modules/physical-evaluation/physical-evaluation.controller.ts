@@ -14,6 +14,12 @@ import { CreatePhysicalEvaluationDto } from './dto/create-physical-evaluation.dt
 export class PhysicalEvaluationController {
   constructor(private readonly service: PhysicalEvaluationService) {}
 
+  /** Hub staff: atletas del centro con evaluaciones físicas relevantes (incluye portal-only). */
+  @Get('hub/company/:companyId/athletes')
+  listHub(@GetUser() actor: User, @Param('companyId') companyId: string) {
+    return this.service.listHubAthletesWithPhysicalEvaluations(actor, companyId);
+  }
+
   @Post(':userId')
   create(@GetUser() actor: User, @Param('userId') userId: string, @Body() dto: CreatePhysicalEvaluationDto) {
     return this.service.create(actor, userId, dto);

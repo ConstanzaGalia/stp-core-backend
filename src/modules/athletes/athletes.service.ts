@@ -222,7 +222,7 @@ export class AthletesService {
     companyId: string,
     createAthleteDto: CreateAthleteDto,
   ): Promise<{ user: User; invitation: AthleteInvitation }> {
-    const { name, lastName, email, isOnline = false, dateOfBirth, phoneNumber } = createAthleteDto;
+    const { name, lastName, email, isOnline = false, dateOfBirth, phoneNumber, evaluationPortalOnly } = createAthleteDto;
 
     // Verificar que el centro existe
     const company = await this.companyRepository.findOne({
@@ -258,6 +258,10 @@ export class AthletesService {
         });
         const savedInvitation = await this.invitationRepository.save(invitation);
         await this.addUserToCompany(existingUser.id, companyId);
+        if (evaluationPortalOnly === true) {
+          existingUser.evaluationPortalOnly = true;
+          await this.userRepository.save(existingUser);
+        }
         return { user: existingUser, invitation: savedInvitation };
       }
       throw new ConflictException('El email ya está registrado con otro rol');
@@ -279,6 +283,7 @@ export class AthletesService {
       role: UserRole.ATHLETE,
       isActive: true,
       activeToken: null,
+      evaluationPortalOnly: evaluationPortalOnly === true,
       ...(dateOfBirth && { dateOfBirth: new Date(dateOfBirth) }),
       ...(parsedPhone !== undefined && { phoneNumber: parsedPhone }),
     });
@@ -393,7 +398,7 @@ export class AthletesService {
    * La empresa ve sus atletas aprobados
    */
   async getCompanyAthletes(companyId: string) {
-    return await this.invitationRepository.find({
+    const rows = await this.invitationRepository.find({
       where: {
         company: { id: companyId },
         status: InvitationStatus.APPROVED
@@ -401,6 +406,42 @@ export class AthletesService {
       relations: ['user'],
       order: { approvedAt: 'DESC' }
     });
+    return rows.filter((inv) => !inv.user?.evaluationPortalOnly);
+  }
+
+  /** Incluye participantes solo evaluaciones (para hub de evaluaciones físicas). */
+  async getCompanyAthletesIncludingPortal(companyId: string) {
+    return await this.invitationRepository.find({
+      where: {
+        company: { id: companyId },
+        status: InvitationStatus.APPROVED,
+      },
+      relations: ['user'],
+      order: { approvedAt: 'DESC' },
+    });
+  }
+
+  /**
+   * Quita el modo "solo evaluaciones"; el atleta pasa al roster y flujo completo.
+   */
+  async promotePortalAthleteToFullMember(companyId: string, athleteId: string): Promise<User> {
+    const invitation = await this.invitationRepository.findOne({
+      where: {
+        company: { id: companyId },
+        user: { id: athleteId },
+        status: InvitationStatus.APPROVED,
+      },
+      relations: ['user'],
+    });
+    if (!invitation?.user) {
+      throw new NotFoundException('Atleta no encontrado en el centro');
+    }
+    const user = invitation.user;
+    if (!user.evaluationPortalOnly) {
+      throw new BadRequestException('Este atleta no es un participante solo evaluaciones');
+    }
+    user.evaluationPortalOnly = false;
+    return await this.userRepository.save(user);
   }
 
   /**
@@ -417,6 +458,7 @@ export class AthletesService {
     const today = new Date();
     const todayMMDD = `${String(today.getUTCMonth() + 1).padStart(2, '0')}-${String(today.getUTCDate()).padStart(2, '0')}`;
     return invitations
+      .filter((inv) => !inv.user?.evaluationPortalOnly)
       .filter((inv) => {
         const dob = inv.user?.dateOfBirth;
         if (!dob) return false;

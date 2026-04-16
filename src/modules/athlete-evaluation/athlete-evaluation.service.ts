@@ -164,6 +164,7 @@ export class AthleteEvaluationService {
     if (dto.peso !== undefined) user.peso = dto.peso;
     if (dto.altura !== undefined) user.altura = dto.altura;
     if (dto.objetivo !== undefined) user.objetivo = dto.objetivo;
+    if (dto.primarySport !== undefined) user.primarySport = dto.primarySport.trim() || null;
 
     return this.userRepo.save(user);
   }
@@ -172,7 +173,7 @@ export class AthleteEvaluationService {
     await this.assertCanReadAthlete(actor, userId);
     const user = await this.userRepo.findOne({
       where: { id: userId },
-      select: ['id', 'name', 'lastName', 'email', 'peso', 'altura', 'objetivo', 'athleteScore', 'stpLevel', 'dateOfBirth'],
+      select: ['id', 'name', 'lastName', 'email', 'peso', 'altura', 'objetivo', 'athleteScore', 'stpLevel', 'dateOfBirth', 'primarySport', 'evaluationPortalOnly'],
     });
     if (!user) throw new NotFoundException(`User ${userId} not found`);
 
