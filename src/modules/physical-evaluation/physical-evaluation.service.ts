@@ -28,15 +28,12 @@ const STAFF_ROLES: UserRole[] = [
 const MAX_METRICS_JSON_BYTES = 48_000;
 
 /**
- * Perfil atleta: un único par canónico (`user.athleteScore` ~0–5, `user.stpLevel`).
+ * Perfil atleta (`user.athleteScore` ~0–5, `user.stpLevel`): solo refleja la clasificación STP
+ * (tres dimensiones en tabla `athlete_evaluation`). Las evaluaciones físicas guardan `summaryScore`
+ * y análisis en `physical_evaluation` pero no modifican el perfil.
  *
- * - Evaluación física (Ivolution/CMJ, etc.): `summaryScore` 0–100 → `athleteScore = summaryScore / 20`
- *   (misma escala que `athlete_evaluation.scoreTotal`). Al crear o `recomputeEvaluationSummary`,
- *   se escribe encima del valor que hubiera venido solo del STP legacy: no hay dos ranuras en BD.
- * - STP legacy (tabla `athlete_evaluation`): `scoreTotal` ya es ~0–5; `syncAthleteScoreFromEvaluationSources`
- *   lo usa solo si no hay evaluación física “real” más reciente (excluye filas solo `stp_legacy`).
- *
- * Ver también comentario en el radar del frontend: el fallback visual `?? 3` no es este score.
+ * `syncAthleteScoreFromEvaluationSources` alinea el perfil con la última fila de `athlete_evaluation`
+ * (p. ej. tras borrar una física o una clasificación STP).
  */
 
 function parseEvaluationDateOnly(isoOrYmd: string): Date {
@@ -44,20 +41,6 @@ function parseEvaluationDateOnly(isoOrYmd: string): Date {
   const [y, m, d] = ymd.split('-').map((n) => Number(n));
   if (!y || !m || !d) throw new BadRequestException('evaluationDate inválida');
   return new Date(y, m - 1, d, 12, 0, 0, 0);
-}
-
-function stpLevelFromAthleteScore(score: number): number {
-  if (score < 2) return 1;
-  if (score < 3) return 2;
-  if (score < 4) return 3;
-  if (score <= 4.5) return 4;
-  return 5;
-}
-
-/** Convierte score de evaluación física (0–100) al rango legacy de perfil (~0–5). */
-function physicalSummaryToAthleteScore(summary: number): number {
-  const scaled = summary / 20;
-  return +Math.min(5, Math.max(0, scaled)).toFixed(2);
 }
 
 /**
@@ -208,14 +191,11 @@ export class PhysicalEvaluationService {
     await this.evaluationRepo.save(evaluation);
   }
 
-  /**
-   * Recalcula resumen global y, si hay `summaryScore`, actualiza `user.athleteScore` / `stpLevel`
-   * (misma política que en `create`: puede sustituir el perfil que reflejaba solo STP legacy).
-   */
+  /** Recalcula resumen global de la evaluación física (no altera el perfil STP del atleta). */
   async recomputeEvaluationSummary(evaluationId: string): Promise<void> {
     const ev = await this.evaluationRepo.findOne({
       where: { id: evaluationId },
-      relations: ['tests', 'user'],
+      relations: ['tests'],
     });
     if (!ev) throw new NotFoundException('Evaluación no encontrada');
 
@@ -236,13 +216,6 @@ export class PhysicalEvaluationService {
     ev.summaryAnalysis = computed.summaryAnalysis;
     ev.structuredAnalysis = computed.structuredAnalysis as unknown as Record<string, unknown>;
     await this.evaluationRepo.save(ev);
-
-    const athlete = ev.user;
-    if (computed.summaryScore != null && Number.isFinite(computed.summaryScore)) {
-      athlete.athleteScore = physicalSummaryToAthleteScore(computed.summaryScore);
-      athlete.stpLevel = stpLevelFromAthleteScore(athlete.athleteScore);
-      await this.userRepo.save(athlete);
-    }
   }
 
   async create(actor: User, athleteUserId: string, dto: CreatePhysicalEvaluationDto): Promise<PhysicalEvaluation> {
@@ -297,13 +270,6 @@ export class PhysicalEvaluationService {
 
     const saved = await this.evaluationRepo.save(evaluation);
 
-    if (summaryScore != null && Number.isFinite(summaryScore)) {
-      const athleteScore = physicalSummaryToAthleteScore(summaryScore);
-      target.athleteScore = athleteScore;
-      target.stpLevel = stpLevelFromAthleteScore(athleteScore);
-      await this.userRepo.save(target);
-    }
-
     return this.findOneById(actor, athleteUserId, saved.id);
   }
 
@@ -335,51 +301,20 @@ export class PhysicalEvaluationService {
   }
 
   /**
-   * Alinea `athleteScore` / `stpLevel` con una sola fuente (sin duplicar legacy + física en el perfil):
-   * 1) Última `physical_evaluation` con `summary_score` que no sea solo tests `stp_legacy`.
-   * 2) Si no aplica, última fila `athlete_evaluation` (legacy).
-   * 3) Si no hay ninguna, null.
+   * Alinea `athleteScore` / `stpLevel` solo con la última clasificación STP (`athlete_evaluation`).
    */
   async syncAthleteScoreFromEvaluationSources(athleteUserId: string): Promise<void> {
     const user = await this.userRepo.findOne({ where: { id: athleteUserId } });
     if (!user) return;
 
-    const latestPhysicalWithScore = await this.evaluationRepo
-      .createQueryBuilder('pe')
-      .innerJoin('pe.user', 'u')
-      .where('u.id = :uid', { uid: athleteUserId })
-      .andWhere('pe.summary_score IS NOT NULL')
-      .andWhere(
-        `NOT (
-          EXISTS (SELECT 1 FROM physical_evaluation_test t WHERE t.evaluation_id = pe.id)
-          AND NOT EXISTS (
-            SELECT 1 FROM physical_evaluation_test t
-            WHERE t.evaluation_id = pe.id AND LOWER(t.test_type) <> 'stp_legacy'
-          )
-        )`,
-      )
-      .orderBy('pe.evaluation_date', 'DESC')
-      .addOrderBy('pe.created_at', 'DESC')
-      .getOne();
-
-    if (
-      latestPhysicalWithScore?.summaryScore != null &&
-      Number.isFinite(latestPhysicalWithScore.summaryScore)
-    ) {
-      user.athleteScore = physicalSummaryToAthleteScore(latestPhysicalWithScore.summaryScore);
-      user.stpLevel = stpLevelFromAthleteScore(user.athleteScore);
-      await this.userRepo.save(user);
-      return;
-    }
-
-    const latestLegacy = await this.legacyEvalRepo.findOne({
+    const latestStp = await this.legacyEvalRepo.findOne({
       where: { user: { id: athleteUserId } },
       order: { createdAt: 'DESC' },
     });
 
-    if (latestLegacy) {
-      user.athleteScore = latestLegacy.scoreTotal;
-      user.stpLevel = latestLegacy.stpLevel;
+    if (latestStp) {
+      user.athleteScore = latestStp.scoreTotal;
+      user.stpLevel = latestStp.stpLevel;
       await this.userRepo.save(user);
       return;
     }
