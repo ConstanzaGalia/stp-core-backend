@@ -32,6 +32,10 @@ import { Tag } from './entities/tag.entity';
 import { TimeSlot } from './entities/timeSlot.entity';
 import { TimeSlotGeneration } from './entities/time-slot-generation.entity';
 import { TrainingPlan } from './entities/traininPlan.entity';
+import { STPTrainingProfile } from './entities/stp-training-profile.entity';
+import { STPMacroPlan } from './entities/stp-macro-plan.entity';
+import { STPWeeklyTemplate } from './entities/stp-weekly-template.entity';
+import { STPSessionInstance } from './entities/stp-session-instance.entity';
 import { User } from './entities/user.entity';
 import { UserPaymentSubscription } from './entities/user-payment-subscription.entity';
 import { UserPlan } from './entities/userPlan.entity';
@@ -67,6 +71,10 @@ export const TYPEORM_ENTITIES = [
   TimeSlot,
   TimeSlotGeneration,
   TrainingPlan,
+  STPTrainingProfile,
+  STPMacroPlan,
+  STPWeeklyTemplate,
+  STPSessionInstance,
   User,
   UserPaymentSubscription,
   UserPlan,
