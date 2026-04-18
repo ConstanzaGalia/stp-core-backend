@@ -97,6 +97,7 @@ export class TrainingPlannerService {
     weeklyFrequency?: number;
     status?: string;
     weeks?: unknown[];
+    planMode?: string | null;
   }) {
     let entity: STPMacroPlan | null = null;
 
@@ -111,11 +112,13 @@ export class TrainingPlannerService {
     }
 
     if (!entity) {
-      entity = this.macroPlanRepo.create({ id: data.id, athleteId: data.athleteId });
+      entity = this.macroPlanRepo.create({
+        id: data.id,
+        athleteId: data.athleteId,
+      });
     }
 
     Object.assign(entity, {
-      id: data.id ?? entity.id,
       athleteId: data.athleteId,
       goal: data.goal ?? entity.goal ?? '',
       targetDate: data.targetDate ?? entity.targetDate ?? null,
@@ -123,7 +126,11 @@ export class TrainingPlannerService {
       weeklyFrequency: data.weeklyFrequency ?? entity.weeklyFrequency ?? 3,
       status: data.status ?? entity.status ?? 'draft',
       weeks: data.weeks ?? entity.weeks ?? [],
+      planMode: data.planMode !== undefined ? data.planMode : entity.planMode ?? null,
     });
+    if (!entity.id) {
+      entity.id = data.id as string;
+    }
 
     const saved = await this.macroPlanRepo.save(entity);
     return this.serializeMacroPlan(saved);
@@ -147,6 +154,7 @@ export class TrainingPlannerService {
       level: e.level ?? '',
       weeklyFrequency: e.weeklyFrequency,
       status: e.status,
+      planMode: e.planMode ?? null,
       weeks: e.weeks ?? [],
       createdAt: toIso(e.createdAt),
       updatedAt: toIso(e.updatedAt),
@@ -195,8 +203,10 @@ export class TrainingPlannerService {
       });
     }
 
-    entity.id = data.id ?? entity.id;
     entity.days = data.days ?? [];
+    if (!entity.id) {
+      entity.id = data.id;
+    }
 
     const saved = await this.weeklyTemplateRepo.save(entity);
     return this.serializeWeeklyTemplate(saved);

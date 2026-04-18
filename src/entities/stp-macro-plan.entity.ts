@@ -28,6 +28,10 @@ export class STPMacroPlan {
   @Column({ type: 'varchar', length: 20, default: 'draft' })
   status: string;
 
+  /** mes | objetivo — cómo se armó el horizonte del plan */
+  @Column({ name: 'plan_mode', type: 'varchar', length: 20, nullable: true })
+  planMode: string | null;
+
   /** Array of MacroWeek objects serialised as JSONB */
   @Column({ type: 'jsonb', nullable: true, default: () => "'[]'" })
   weeks: unknown[];
