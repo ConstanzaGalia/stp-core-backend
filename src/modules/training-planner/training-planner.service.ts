@@ -88,6 +88,14 @@ export class TrainingPlannerService {
     return this.serializeMacroPlan(entity);
   }
 
+  async getAllMacroPlans(athleteId: string) {
+    const entities = await this.macroPlanRepo.find({
+      where: { athleteId },
+      order: { createdAt: 'DESC' },
+    });
+    return entities.map((e) => this.serializeMacroPlan(e));
+  }
+
   async saveMacroPlan(data: {
     id?: string;
     athleteId: string;
@@ -103,12 +111,6 @@ export class TrainingPlannerService {
 
     if (data.id) {
       entity = await this.macroPlanRepo.findOne({ where: { id: data.id } });
-    }
-    if (!entity && data.athleteId) {
-      entity = await this.macroPlanRepo.findOne({
-        where: { athleteId: data.athleteId },
-        order: { createdAt: 'DESC' },
-      });
     }
 
     if (!entity) {

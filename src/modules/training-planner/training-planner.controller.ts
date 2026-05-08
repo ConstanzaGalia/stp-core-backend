@@ -33,6 +33,12 @@ export class TrainingPlannerController {
 
   // ── Macro Plan ────────────────────────────────────────────────────────────
 
+  /** GET /training-planner/macro-plans/all?athleteId= — lista todos los planes del atleta */
+  @Get('macro-plans/all')
+  getAllMacroPlans(@Query('athleteId') athleteId: string) {
+    return this.service.getAllMacroPlans(athleteId);
+  }
+
   /** GET /training-planner/macro-plans?athleteId= */
   @Get('macro-plans')
   getMacroPlan(@Query('athleteId') athleteId: string) {
