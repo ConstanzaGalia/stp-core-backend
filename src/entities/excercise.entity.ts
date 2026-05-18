@@ -37,6 +37,9 @@ export class Exercise {
   @Column({ default: false, name: 'es_isometrico' })
   esIsometrico: boolean;
 
+  @Column({ default: false, name: 'es_ancla' })
+  isAncla: boolean;
+
   // --- 6 dimensiones binarias del score ---
   @Column({ default: false })
   carga: boolean;

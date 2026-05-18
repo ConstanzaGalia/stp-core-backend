@@ -49,6 +49,14 @@ export class STPSessionInstance {
   @Column({ name: 'template_day_id', type: 'text' })
   templateDayId: string;
 
+  /** Ej. amrap, tabata — sesiones fase resistencia */
+  @Column({ name: 'endurance_format', type: 'varchar', length: 20, nullable: true })
+  enduranceFormat: string | null;
+
+  /** Variables de formato AMRAP/TABATA/NxN (serializado igual que el front) */
+  @Column({ name: 'endurance_config', type: 'jsonb', nullable: true, default: () => 'null' })
+  enduranceConfig: Record<string, unknown> | null;
+
   @Column({
     name: 'progression_config',
     type: 'jsonb',

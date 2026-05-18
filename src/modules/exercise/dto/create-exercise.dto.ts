@@ -43,6 +43,10 @@ export class CreateExerciseDto {
 
   @IsOptional()
   @IsBoolean()
+  isAncla?: boolean;
+
+  @IsOptional()
+  @IsBoolean()
   carga?: boolean;
 
   @IsOptional()

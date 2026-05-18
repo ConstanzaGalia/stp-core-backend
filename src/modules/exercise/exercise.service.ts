@@ -56,6 +56,7 @@ export class ExerciseService {
         material: dto.material,
         unilateral: dto.unilateral ?? false,
         esIsometrico: dto.esIsometrico ?? false,
+        isAncla: dto.isAncla ?? false,
         carga: dto.carga ?? false,
         impacto: dto.impacto ?? false,
         rotacion: dto.rotacion ?? false,
@@ -122,6 +123,7 @@ export class ExerciseService {
       if (dto.material !== undefined) exercise.material = dto.material;
       if (dto.unilateral !== undefined) exercise.unilateral = dto.unilateral;
       if (dto.esIsometrico !== undefined) exercise.esIsometrico = dto.esIsometrico;
+      if (dto.isAncla !== undefined) exercise.isAncla = dto.isAncla;
       if (dto.carga !== undefined) exercise.carga = dto.carga;
       if (dto.impacto !== undefined) exercise.impacto = dto.impacto;
       if (dto.rotacion !== undefined) exercise.rotacion = dto.rotacion;

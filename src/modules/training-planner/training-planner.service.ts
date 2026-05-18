@@ -260,6 +260,8 @@ export class TrainingPlannerService {
     pattern: string;
     templateId: string;
     templateDayId: string;
+    enduranceFormat?: string | null;
+    enduranceConfig?: unknown | null;
     progressionConfig?: unknown;
     warnings?: string[];
     blocks?: unknown[];
@@ -286,6 +288,12 @@ export class TrainingPlannerService {
       pattern: data.pattern,
       templateId: data.templateId,
       templateDayId: data.templateDayId,
+      enduranceFormat:
+        data.enduranceFormat === undefined ? null : data.enduranceFormat,
+      enduranceConfig:
+        data.enduranceConfig === undefined || data.enduranceConfig === null
+          ? null
+          : (data.enduranceConfig as Record<string, unknown>),
       progressionConfig: data.progressionConfig ?? null,
       warnings: data.warnings ?? [],
       blocks: data.blocks ?? [],
@@ -322,6 +330,8 @@ export class TrainingPlannerService {
       pattern: e.pattern,
       templateId: e.templateId,
       templateDayId: e.templateDayId,
+      enduranceFormat: e.enduranceFormat ?? null,
+      enduranceConfig: e.enduranceConfig ?? null,
       progressionConfig: e.progressionConfig ?? null,
       warnings: e.warnings ?? [],
       blocks: e.blocks ?? [],

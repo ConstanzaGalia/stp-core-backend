@@ -1262,17 +1262,32 @@ export class PaymentsService {
   }
 
   async getStudentsWithPayments(companyId: string): Promise<any[]> {
-    const subscriptions = await this.subscriptionRepository.find({
-      where: { company: { id: companyId } },
-      relations: [
-        'user',
-        'paymentPlan',
-        'payments',
-      ],
-      order: {
-        user: { name: 'ASC' }
-      }
-    });
+    const [subscriptions, allCompanyPayments] = await Promise.all([
+      this.subscriptionRepository.find({
+        where: { company: { id: companyId } },
+        relations: [
+          'user',
+          'paymentPlan',
+          'payments',
+        ],
+        order: {
+          user: { name: 'ASC' }
+        }
+      }),
+      this.paymentRepository.find({
+        where: { company: { id: companyId } },
+        relations: ['user'],
+      }),
+    ]);
+
+    const paymentsByUserId = new Map<string, Payment[]>();
+    for (const payment of allCompanyPayments) {
+      const userId = payment.user?.id;
+      if (!userId) continue;
+      const list = paymentsByUserId.get(userId);
+      if (list) list.push(payment);
+      else paymentsByUserId.set(userId, [payment]);
+    }
 
     // Pre-cargar TODAS las suspensiones activas del centro en una sola query
     const allActiveSuspensions = await this.suspensionRepository.find({
@@ -1287,11 +1302,17 @@ export class PaymentsService {
     }
 
     const studentsResult = subscriptions.map((subscription) => {
-      const pendingPayment = subscription.payments.find(
+      const subscriptionPayments = subscription.payments ?? [];
+      const userAllPayments = subscription.user
+        ? paymentsByUserId.get(subscription.user.id) ?? []
+        : [];
+      const mergedPayments = this.mergePaymentsById(subscriptionPayments, userAllPayments);
+
+      const pendingPayment = subscriptionPayments.find(
         p => p.status === PaymentStatus.PENDING || p.status === PaymentStatus.OVERDUE
       );
       
-      const allPayments = subscription.payments
+      const allPayments = mergedPayments
         .map(payment => ({
           id: payment.id,
           amount: payment.amount,
@@ -2211,6 +2232,20 @@ export class PaymentsService {
     };
   }
 
+  /** Une pagos de suscripción con pagos directos (p. ej. matrícula sin subscriptionId), sin duplicar por id. */
+  private mergePaymentsById(primary: Payment[], secondary: Payment[]): Payment[] {
+    const byId = new Map<string, Payment>();
+    for (const payment of primary) {
+      byId.set(payment.id, payment);
+    }
+    for (const payment of secondary) {
+      if (!byId.has(payment.id)) {
+        byId.set(payment.id, payment);
+      }
+    }
+    return Array.from(byId.values());
+  }
+
   /**
    * Parsea una fecha solo-día (YYYY-MM-DD) como mediodía UTC para que el día no cambie al guardar/recuperar en ninguna zona horaria.
    */
@@ -2430,9 +2465,14 @@ export class PaymentsService {
       expiredClasses = await this.getExpiredClasses(updatedSubscription);
     }
 
-    const rawPayments = hasActiveSubscription && updatedSubscription
-      ? updatedSubscription.payments
-      : directPayments;
+    const subscriptionPaymentList =
+      hasActiveSubscription && updatedSubscription ? updatedSubscription.payments ?? [] : [];
+
+    // Incluir matrículas (y otros pagos sin subscriptionId) aunque haya suscripción activa
+    const rawPayments =
+      hasActiveSubscription && updatedSubscription
+        ? this.mergePaymentsById(subscriptionPaymentList, directPayments)
+        : directPayments;
 
     const allPayments = (rawPayments || [])
       .map(payment => ({
@@ -2482,7 +2522,8 @@ export class PaymentsService {
       };
     });
 
-    const pendingPayment = rawPayments?.find(
+    const pendingPaymentSource = hasActiveSubscription ? subscriptionPaymentList : directPayments;
+    const pendingPayment = pendingPaymentSource?.find(
       p => p.status === PaymentStatus.PENDING || p.status === PaymentStatus.OVERDUE,
     ) ?? null;
 
