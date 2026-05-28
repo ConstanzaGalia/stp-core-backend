@@ -107,7 +107,7 @@ export class AuthService {
     };
   }
 
-  async loginGoogle(req: any) {
+  async loginGoogle(req: any): Promise<{ token: string; needsRoleSelection: boolean }> {
     const { email, firstName, lastName, id, verified } = req.user;
     if (!req.user) {
       throw new NotFoundException('User not found in google');
@@ -132,7 +132,10 @@ export class AuthService {
           name: newUser.name,
           lastName: newUser.lastName,
         };
-        return this.jwtService.sign(payload);
+        return {
+          token: this.jwtService.sign(payload),
+          needsRoleSelection: true,
+        };
       }
       const payload: JwtPayload = {
         id: userFound.id,
@@ -142,7 +145,10 @@ export class AuthService {
         name: userFound.name,
         lastName: userFound.lastName,
       };
-      return this.jwtService.sign(payload);
+      return {
+        token: this.jwtService.sign(payload),
+        needsRoleSelection: false,
+      };
     } catch (error) {
       if (error.code === 'ER_DUP_ENTRY') {
         throw new ConflictException('This email is already registered.');
@@ -304,6 +310,40 @@ export class AuthService {
     Logger.log(`User updated own role: ${userId} -> ${updateUserRoleDto.role}`);
 
     return updatedUser;
+  }
+
+  async completeGoogleRoleOnboarding(
+    userId: string,
+    role: UserRole.ATHLETE | UserRole.TRAINER,
+  ): Promise<{ user: User; token: string }> {
+    const user = await this.userRepository.findOne({
+      where: { id: userId },
+    });
+
+    if (!user) {
+      throw new NotFoundException('User not found');
+    }
+
+    if (!user.isActive) {
+      throw new BadRequestException('User account is not active');
+    }
+
+    user.role = role;
+    const updatedUser = await this.userRepository.save(user);
+
+    const payload: JwtPayload = {
+      id: updatedUser.id,
+      email: updatedUser.email,
+      isActive: updatedUser.isActive,
+      role: [updatedUser.role],
+      name: updatedUser.name,
+      lastName: updatedUser.lastName,
+    };
+
+    return {
+      user: updatedUser,
+      token: this.jwtService.sign(payload),
+    };
   }
 
   // Método para obtener información de un usuario específico

@@ -1,4 +1,5 @@
 import {
+  BadRequestException,
   Body,
   Controller,
   HttpStatus,
@@ -32,6 +33,7 @@ import { ActivateResponseDto } from './dto/activate-response.dto';
 import { UpdateUserRoleDto } from './dto/update-user-role.dto';
 import { UpdateTrainerProfileDto } from './dto/update-trainer-profile.dto';
 import { UpdateUserProfileDto } from './dto/update-user-profile.dto';
+import { UserRole } from 'src/common/enums/enums';
 
 @Controller('auth')
 export class AuthController {
@@ -124,12 +126,41 @@ export class AuthController {
   @UseGuards(AuthGuard('google'))
   async googleAuthRedirect(@Req() req, @Res() res) {
     try {
-      const token = await this.authService.loginGoogle(req)
-      const redirectUrl = `${process.env.FRONTEND_URL}/login?token=${token}`;
+      const { token, needsRoleSelection } = await this.authService.loginGoogle(req);
+      const params = new URLSearchParams({
+        token,
+        needsRoleSelection: needsRoleSelection ? '1' : '0',
+      });
+      const redirectUrl = `${process.env.FRONTEND_URL}/login?${params.toString()}`;
       return res.redirect(redirectUrl);
     } catch (error) {
       Logger.log('/redirect',error);
     }
+  }
+
+  @Patch('/users/complete-google-role-onboarding')
+  @UseGuards(AuthGuard('jwt'))
+  async completeGoogleRoleOnboarding(
+    @Body() body: { role: UserRole.ATHLETE | UserRole.TRAINER },
+    @GetUser() user: User,
+  ) {
+    if (!body?.role || (body.role !== UserRole.ATHLETE && body.role !== UserRole.TRAINER)) {
+      throw new BadRequestException('Invalid role. Only ATHLETE or TRAINER is allowed');
+    }
+
+    const result = await this.authService.completeGoogleRoleOnboarding(user.id, body.role);
+    return {
+      message: 'Role onboarding completed successfully',
+      user: {
+        id: result.user.id,
+        email: result.user.email,
+        name: result.user.name,
+        lastName: result.user.lastName,
+        role: result.user.role,
+        isActive: result.user.isActive,
+      },
+      token: result.token,
+    };
   }
 
   @Patch('/request-reset-password')

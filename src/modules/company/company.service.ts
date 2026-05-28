@@ -45,7 +45,20 @@ export class CompanyService {
   ) {}
   public async create(createCompanyDto: CreateCompanyDto, user: User) {
     try {
-      const newCompany = this.companyRepository.create(createCompanyDto);
+      const payload: Partial<CreateCompanyDto> = {
+        name: createCompanyDto.name.trim(),
+      };
+      if (createCompanyDto.image?.trim()) {
+        payload.image = createCompanyDto.image.trim();
+      }
+      if (createCompanyDto.primary_color?.trim()) {
+        payload.primary_color = createCompanyDto.primary_color.trim();
+      }
+      if (createCompanyDto.secondary_color?.trim()) {
+        payload.secondary_color = createCompanyDto.secondary_color.trim();
+      }
+
+      const newCompany = this.companyRepository.create(payload);
       newCompany.users = [user];
       return await this.companyRepository.save(newCompany);
     } catch (error) {

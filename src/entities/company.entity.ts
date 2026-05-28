@@ -27,17 +27,17 @@ export class Company {
   @Column({length: 50, unique: true})
   name: string;
 
-  @ApiProperty()
-  @Column({length: 400})
-  image?: string;
+  @ApiProperty({ required: false })
+  @Column({ length: 400, nullable: true })
+  image?: string | null;
 
-  @ApiProperty()
-  @Column({ length: 50})
-  primary_color?: string;
+  @ApiProperty({ required: false })
+  @Column({ length: 50, nullable: true })
+  primary_color?: string | null;
 
-  @ApiProperty()
-  @Column({ length: 50})
-  secondary_color?: string;
+  @ApiProperty({ required: false })
+  @Column({ length: 50, nullable: true })
+  secondary_color?: string | null;
 
   @ApiProperty()
   @Column({type: 'boolean', default: false, name: 'is_delete'})
