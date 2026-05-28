@@ -36,6 +36,37 @@ export class AuthService {
     private jwtService: JwtService,
   ) {}
 
+  buildJwtPayloadFromUser(user: User): JwtPayload {
+    return {
+      id: user.id,
+      email: user.email,
+      isActive: user.isActive,
+      role: [user.role],
+      name: user.name,
+      lastName: user.lastName,
+    };
+  }
+
+  signAccessToken(payload: JwtPayload): string {
+    return this.jwtService.sign(payload);
+  }
+
+  signTokenForUser(user: User): string {
+    return this.signAccessToken(this.buildJwtPayloadFromUser(user));
+  }
+
+  toSessionUser(user: User) {
+    return {
+      id: user.id,
+      email: user.email,
+      name: user.name,
+      lastName: user.lastName,
+      role: user.role,
+      isActive: user.isActive,
+      evaluationPortalOnly: user.evaluationPortalOnly === true,
+    };
+  }
+
   async createUser(registerUserDTO: RegisterUserDto): Promise<UserRegiter> {
     const { name, lastName, email, password, role } = registerUserDTO;
     try {
@@ -50,16 +81,7 @@ export class AuthService {
         role,
       }
       const userSave = await this.userRepository.save(userToSave);
-      const payload: JwtPayload = {
-        id: userSave.id,
-        email,
-        isActive: userSave.isActive,
-        role: [userSave.role],
-        name: userSave.name,
-        lastName: userSave.lastName,
-      };
-
-      const token = this.jwtService.sign(payload);
+      const token = this.signTokenForUser(userSave);
       return {
         id: userSave.id,
         name,
@@ -87,15 +109,7 @@ export class AuthService {
     ) {
       throw new UnauthorizedException('Please check your credentials');
     }
-    const payload: JwtPayload = {
-      id: userFound.id,
-      email,
-      isActive: userFound.isActive,
-      role: [userFound.role],
-      name: userFound.name,
-      lastName: userFound.lastName,
-    };
-    const token = this.jwtService.sign(payload);
+    const token = this.signTokenForUser(userFound);
     return {
       id: userFound.id,
       token,
@@ -124,29 +138,13 @@ export class AuthService {
           isActive: verified,
           role: UserRole.TRAINER, // Asignar rol por defecto para nuevos usuarios
         });
-        const payload: JwtPayload = {
-          id: newUser.id,
-          email,
-          isActive: newUser.isActive,
-          role: [newUser.role],
-          name: newUser.name,
-          lastName: newUser.lastName,
-        };
         return {
-          token: this.jwtService.sign(payload),
+          token: this.signTokenForUser(newUser),
           needsRoleSelection: true,
         };
       }
-      const payload: JwtPayload = {
-        id: userFound.id,
-        email,
-        isActive: userFound.isActive,
-        role: [userFound.role],
-        name: userFound.name,
-        lastName: userFound.lastName,
-      };
       return {
-        token: this.jwtService.sign(payload),
+        token: this.signTokenForUser(userFound),
         needsRoleSelection: false,
       };
     } catch (error) {
@@ -331,18 +329,9 @@ export class AuthService {
     user.role = role;
     const updatedUser = await this.userRepository.save(user);
 
-    const payload: JwtPayload = {
-      id: updatedUser.id,
-      email: updatedUser.email,
-      isActive: updatedUser.isActive,
-      role: [updatedUser.role],
-      name: updatedUser.name,
-      lastName: updatedUser.lastName,
-    };
-
     return {
       user: updatedUser,
-      token: this.jwtService.sign(payload),
+      token: this.signTokenForUser(updatedUser),
     };
   }
 

@@ -27,8 +27,6 @@ import { AuthGuard } from '@nestjs/passport';
 import { User } from 'src/entities/user.entity';
 import { MailingService } from '../mailer/mailing.service';
 import { UserInterface } from 'src/models/interfaces/user.iterface';
-import { JwtPayload } from 'src/utils/jwt-payload.interface';
-import { JwtService } from '@nestjs/jwt';
 import { ActivateResponseDto } from './dto/activate-response.dto';
 import { UpdateUserRoleDto } from './dto/update-user-role.dto';
 import { UpdateTrainerProfileDto } from './dto/update-trainer-profile.dto';
@@ -41,7 +39,6 @@ export class AuthController {
     private authService: AuthService,
     private resendService: ResendService,
     private mailingService: MailingService,
-    private jwtService: JwtService,
   ) {}
 
   @Post('/register')
@@ -90,22 +87,29 @@ export class AuthController {
     });
   }
 
+  @Get('/me')
+  @UseGuards(AuthGuard('jwt'))
+  async getCurrentSession(@GetUser() user: User) {
+    return {
+      message: 'Session valid',
+      user: this.authService.toSessionUser(user),
+    };
+  }
+
+  @Post('/logout')
+  async logout(@Res() res) {
+    return res.status(HttpStatus.OK).json({
+      message: 'Logged out successfully',
+    });
+  }
+
   @Post('/activate-account')
   async activateAccount(
     @Res() res,
     @Body() activateUserDto: ActivateUserDTO,
   ): Promise<ActivateResponseDto> {
     const user = await this.authService.activateUser(activateUserDto);
-    const payload: JwtPayload = {
-      id: user.id,
-      email: user.email,
-      isActive: user.isActive,
-      role: [user.role],
-      name: user.name,
-      lastName: user.lastName,
-    };
-
-    const jwToken = this.jwtService.sign(payload);
+    const jwToken = this.authService.signTokenForUser(user);
     return res.status(HttpStatus.OK).json({
       id: user.id,
       isActive: user.isActive,
