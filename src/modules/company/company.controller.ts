@@ -10,6 +10,7 @@ import {
   Query,
   Req,
   BadRequestException,
+  ForbiddenException,
 } from '@nestjs/common';
 import { CompanyService } from './company.service';
 import { CreateCompanyDto } from './dto/create-company.dto';
@@ -25,6 +26,8 @@ import { PaginatedListDto } from 'src/common/pagination/DTOs/paginated-list.dto'
 import { GetUser } from '../auth/get-user.decorator';
 import { User } from 'src/entities/user.entity';
 import { UserRole } from 'src/common/enums/enums';
+import { UpdateCompanySubscriptionDto } from './dto/update-company-subscription.dto';
+import { SkipCompanySubscriptionCheck } from 'src/common/decorators/skip-company-subscription-check.decorator';
 
 @Controller('company')
 export class CompanyController {
@@ -32,16 +35,66 @@ export class CompanyController {
 
   @Post()
   @UseGuards(AuthGuard('jwt'))
+  @SkipCompanySubscriptionCheck()
   public async create(@Body() createCompanyDto: CreateCompanyDto, @GetUser() user: User) {
     return await this.companyService.create(createCompanyDto, user);
   }
 
+  @Get('admin/list')
+  @UseGuards(AuthGuard('jwt'))
+  @SkipCompanySubscriptionCheck()
+  public async listCompaniesForAdmin(
+    @GetUser() user: User,
+    @Query() pagination: PaginationQueryDto,
+    @Req() request,
+    @Query('active') active?: string,
+    @Query('search') search?: string,
+  ) {
+    if (user.role !== UserRole.STP_ADMIN) {
+      throw new ForbiddenException('Only STP_ADMIN can list all companies');
+    }
+    const activeFilter =
+      active === 'true' ? true : active === 'false' ? false : undefined;
+    return this.companyService.listCompaniesForAdmin(
+      pagination.offset,
+      pagination.limit,
+      request.url,
+      { active: activeFilter, search },
+    );
+  }
+
+  @Get('admin/operating')
+  @UseGuards(AuthGuard('jwt'))
+  @SkipCompanySubscriptionCheck()
+  public async getOperatingCompany(@GetUser() user: User) {
+    if (user.role !== UserRole.STP_ADMIN) {
+      throw new ForbiddenException('Only STP_ADMIN can access operating company');
+    }
+    return this.companyService.getOperatingCompany();
+  }
+
+  @Patch('admin/:id/subscription')
+  @UseGuards(AuthGuard('jwt'))
+  @SkipCompanySubscriptionCheck()
+  public async setCompanySubscription(
+    @Param('id') id: string,
+    @Body() dto: UpdateCompanySubscriptionDto,
+    @GetUser() user: User,
+  ) {
+    return this.companyService.setCompanySubscriptionActive(id, dto, user);
+  }
+
   @Get()
   @UseGuards(AuthGuard('jwt'))
+  @SkipCompanySubscriptionCheck()
   public async findAll(
+    @GetUser() user: User,
     @Query() pagination: PaginationQueryDto,
     @Req() request,
   ): Promise<PaginatedListDto<CreateCompanyDto>> {
+    if (user.role !== UserRole.STP_ADMIN) {
+      throw new ForbiddenException('Only STP_ADMIN can list all companies');
+    }
     return await this.companyService.findAll(
       pagination.offset,
       pagination.limit,
@@ -49,15 +102,16 @@ export class CompanyController {
     );
   }
 
+  @Get('user/:userId')
+  @SkipCompanySubscriptionCheck()
+  public async getCompaniesByUser(@Param('userId') userId: string) {
+    return this.companyService.findCompaniesByUser(userId);
+  }
+
   @Get(':id')
   @UseGuards(AuthGuard('jwt'))
   public async findOne(@Param('id') id: string): Promise<CreateCompanyDto> {
     return await this.companyService.findOne(id);
-  }
-
-  @Get('/user/:userId')
-  public async getCompaniesByUser(@Param('userId') userId: string) {
-    return this.companyService.findCompaniesByUser(userId);
   }
 
   @Patch(':id')

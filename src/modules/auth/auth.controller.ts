@@ -32,8 +32,10 @@ import { UpdateUserRoleDto } from './dto/update-user-role.dto';
 import { UpdateTrainerProfileDto } from './dto/update-trainer-profile.dto';
 import { UpdateUserProfileDto } from './dto/update-user-profile.dto';
 import { UserRole } from 'src/common/enums/enums';
+import { SkipCompanySubscriptionCheck } from 'src/common/decorators/skip-company-subscription-check.decorator';
 
 @Controller('auth')
+@SkipCompanySubscriptionCheck()
 export class AuthController {
   constructor(
     private authService: AuthService,

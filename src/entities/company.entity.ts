@@ -43,6 +43,11 @@ export class Company {
   @Column({type: 'boolean', default: false, name: 'is_delete'})
   isDelete?: boolean;
 
+  /** Plataforma habilitada para staff/atletas. Nuevos centros: false hasta activación por STP_ADMIN. */
+  @ApiProperty()
+  @Column({ type: 'boolean', default: false, name: 'subscription_active' })
+  subscriptionActive: boolean;
+
   @ManyToMany(() => User, user => user.company)
   @JoinTable()
   users: User[];

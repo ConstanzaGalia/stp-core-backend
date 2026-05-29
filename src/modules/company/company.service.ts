@@ -24,6 +24,9 @@ import { TrainerDetailResponseDto } from './dto/trainer-detail-response.dto';
 import { MailingService } from '../mailer/mailing.service';
 import { inviteStudentEmail } from '../../utils/emailTemplates';
 import { EncryptService } from 'src/services/bcrypt.service';
+import { getStpOperatingCompanyId } from 'src/common/constants/stp-operating-company';
+import { assertStpAdmin } from 'src/common/helpers/company-access.helper';
+import { UpdateCompanySubscriptionDto } from './dto/update-company-subscription.dto';
 
 const STAFF_ROLES = [
   UserRole.TRAINER,
@@ -58,7 +61,10 @@ export class CompanyService {
         payload.secondary_color = createCompanyDto.secondary_color.trim();
       }
 
-      const newCompany = this.companyRepository.create(payload);
+      const newCompany = this.companyRepository.create({
+        ...payload,
+        subscriptionActive: false,
+      });
       newCompany.users = [user];
       return await this.companyRepository.save(newCompany);
     } catch (error) {
@@ -93,12 +99,28 @@ export class CompanyService {
 
   public async findCompaniesByUser(userId: string): Promise<Company[]> {
     try {
+      const user = await this.userRepository.findOne({ where: { id: userId } });
+      if (!user) {
+        return [];
+      }
+
+      if (user.role === UserRole.STP_ADMIN) {
+        const operating = await this.getOperatingCompany();
+        return operating ? [operating] : [];
+      }
+
       return await this.companyRepository
         .createQueryBuilder('company')
         .innerJoin('company.users', 'user')
         .where('user.id = :userId', { userId })
         .andWhere('user.role IN (:...roles)', {
-          roles: [UserRole.TRAINER, UserRole.DIRECTOR, UserRole.SECRETARIA, UserRole.SUB_TRAINER],
+          roles: [
+            UserRole.TRAINER,
+            UserRole.DIRECTOR,
+            UserRole.SECRETARIA,
+            UserRole.SUB_TRAINER,
+            UserRole.STP_ADMIN,
+          ],
         })
         .orderBy('company.created_at', 'ASC')
         .getMany();
@@ -106,6 +128,81 @@ export class CompanyService {
       Logger.log('Have an error in get all companies by user', error)
       return []
     }
+  }
+
+  public async getOperatingCompany(): Promise<Company | null> {
+    const id = getStpOperatingCompanyId();
+    return this.companyRepository.findOne({ where: { id } });
+  }
+
+  public async listCompaniesForAdmin(
+    offset: number,
+    limit: number,
+    path: string,
+    options?: { active?: boolean; search?: string },
+  ): Promise<PaginatedListDto<unknown>> {
+    const qb = this.companyRepository
+      .createQueryBuilder('company')
+      .leftJoinAndSelect('company.users', 'users')
+      .orderBy('company.created_at', 'DESC');
+
+    if (options?.active === true) {
+      qb.andWhere('company.subscription_active = :active', { active: true });
+    } else if (options?.active === false) {
+      qb.andWhere('company.subscription_active = :active', { active: false });
+    }
+
+    if (options?.search?.trim()) {
+      qb.andWhere('LOWER(company.name) LIKE LOWER(:search)', {
+        search: `%${options.search.trim()}%`,
+      });
+    }
+
+    const [companies, count] = await qb.skip(offset).take(limit).getManyAndCount();
+
+    const items = companies.map(company => {
+      const directors = (company.users ?? []).filter(
+        u => u.role === UserRole.DIRECTOR || u.role === UserRole.STP_ADMIN,
+      );
+      const staffCount = (company.users ?? []).filter(u =>
+        STAFF_ROLES.includes(u.role),
+      ).length;
+
+      return {
+        id: company.id,
+        name: company.name,
+        subscriptionActive: company.subscriptionActive,
+        createdAt: company.created_at,
+        directors: directors.map(d => ({
+          id: d.id,
+          name: d.name,
+          lastName: d.lastName,
+          email: d.email,
+        })),
+        staffCount,
+      };
+    });
+
+    return new PaginatedListDto(
+      items,
+      this.pagination.buildPaginationDto(limit, offset, count, path),
+    );
+  }
+
+  public async setCompanySubscriptionActive(
+    companyId: string,
+    dto: UpdateCompanySubscriptionDto,
+    admin: User,
+  ): Promise<Company> {
+    assertStpAdmin(admin);
+
+    const company = await this.companyRepository.findOne({ where: { id: companyId } });
+    if (!company) {
+      throw new NotFoundException('Company not found');
+    }
+
+    company.subscriptionActive = dto.subscriptionActive;
+    return this.companyRepository.save(company);
   }
 
   public async update(id: string, updateCompanyDto: UpdateCompanyDto) {
@@ -400,6 +497,7 @@ export class CompanyService {
       trainersCount,
       directorsCount,
       isActive: !company.isDelete,
+      subscriptionActive: company.subscriptionActive,
     };
   }
 
