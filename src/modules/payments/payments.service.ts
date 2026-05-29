@@ -1454,6 +1454,12 @@ export class PaymentsService {
 
       const existing = studentById.get(user.id);
       if (existing) {
+        const alreadyListed = (existing.payments ?? []).some(
+          (p: { id: string }) => p.id === payment.id,
+        );
+        if (alreadyListed) {
+          continue;
+        }
         existing.payments.push(paymentItem);
         existing.payments.sort((a: any, b: any) => {
           const dateA = (a.paidDate || a.dueDate) ? new Date(a.paidDate || a.dueDate).getTime() : 0;
@@ -2497,7 +2503,7 @@ export class PaymentsService {
         return dateB - dateA;
       });
 
-    const paymentsWithSuspension = allPayments.map(payment => {
+    const paymentsWithSuspensionRaw = allPayments.map(payment => {
       let isSuspended = false;
       const paymentDate = payment.paidDate || payment.dueDate;
 
@@ -2521,6 +2527,15 @@ export class PaymentsService {
         isSuspended,
       };
     });
+
+    const paymentsWithSuspension = Array.from(
+      paymentsWithSuspensionRaw.reduce((byId, payment) => {
+        if (payment.id && !byId.has(payment.id)) {
+          byId.set(payment.id, payment);
+        }
+        return byId;
+      }, new Map<string, typeof paymentsWithSuspensionRaw[0]>()).values(),
+    );
 
     const pendingPaymentSource = hasActiveSubscription ? subscriptionPaymentList : directPayments;
     const pendingPayment = pendingPaymentSource?.find(
@@ -2584,6 +2599,8 @@ export class PaymentsService {
           dueDate: pendingPayment.dueDate,
           lateFee: pendingPayment.lateFee,
           discount: pendingPayment.discount,
+          concept: pendingPayment.concept,
+          pendingBalance: pendingPayment.pendingBalance != null ? Number(pendingPayment.pendingBalance) : null,
           isOverdue,
           isSuspended,
         };
@@ -2598,10 +2615,10 @@ export class PaymentsService {
       })),
       expiredClasses,
       statistics: {
-        totalPayments: allPayments.length,
-        paidPayments: allPayments.filter(p => p.status === PaymentStatus.PAID).length,
-        pendingPayments: allPayments.filter(p => p.status === PaymentStatus.PENDING).length,
-        overduePayments: allPayments.filter(p =>
+        totalPayments: paymentsWithSuspension.length,
+        paidPayments: paymentsWithSuspension.filter(p => p.status === PaymentStatus.PAID).length,
+        pendingPayments: paymentsWithSuspension.filter(p => p.status === PaymentStatus.PENDING).length,
+        overduePayments: paymentsWithSuspension.filter(p =>
           (p.status === PaymentStatus.PENDING || p.status === PaymentStatus.OVERDUE)
           && p.dueDate && new Date(p.dueDate) < new Date()
         ).length,
