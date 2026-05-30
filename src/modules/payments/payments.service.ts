@@ -756,7 +756,14 @@ export class PaymentsService {
   }
 
   /** Solo directores asociados a la empresa (mismo criterio estricto que estadísticas). */
-  async assertDirectorOfCompany(directorId: string, companyId: string): Promise<void> {
+  async assertDirectorOfCompany(
+    userId: string,
+    companyId: string,
+    role?: UserRole,
+  ): Promise<void> {
+    if (role === UserRole.STP_ADMIN) {
+      return;
+    }
     const company = await this.companyRepository.findOne({
       where: { id: companyId },
       relations: ['users'],
@@ -765,10 +772,14 @@ export class PaymentsService {
       throw new NotFoundException('Company not found');
     }
     const ok = company.users.some(
-      (u) => u.id === directorId && u.role === UserRole.DIRECTOR,
+      (u) =>
+        u.id === userId &&
+        (u.role === UserRole.DIRECTOR || u.role === UserRole.STP_ADMIN),
     );
     if (!ok) {
-      throw new ForbiddenException('Only company directors can view gym statistics');
+      throw new ForbiddenException(
+        'Only company directors or STP administrators can view gym statistics',
+      );
     }
   }
 

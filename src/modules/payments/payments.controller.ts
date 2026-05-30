@@ -3,7 +3,7 @@ import { AuthGuard } from '@nestjs/passport';
 import { PaymentsService } from './payments.service';
 import { GetUser } from '../auth/get-user.decorator';
 import { User } from '../../entities/user.entity';
-import { UserRole } from '../../common/enums/enums';
+import { hasDirectorPrivileges } from '../../common/helpers/company-access.helper';
 import { CreatePaymentPlanDto } from './dto/create-payment-plan.dto';
 import { CreatePaymentDto } from './dto/create-payment.dto';
 import { CreateSubscriptionDto } from './dto/create-subscription.dto';
@@ -135,8 +135,10 @@ export class PaymentsController {
     @Query('year') yearStr: string,
     @GetUser() user: User,
   ) {
-    if (!user || user.role !== UserRole.DIRECTOR) {
-      throw new ForbiddenException('Only directors can view gym statistics');
+    if (!user || !hasDirectorPrivileges(user.role)) {
+      throw new ForbiddenException(
+        'Only directors or STP administrators can view gym statistics',
+      );
     }
     const yearNum =
       yearStr != null && yearStr !== ''
@@ -145,7 +147,11 @@ export class PaymentsController {
     if (isNaN(yearNum) || yearNum < 1970 || yearNum > 2100) {
       throw new BadRequestException('Invalid year');
     }
-    await this.paymentsService.assertDirectorOfCompany(user.id, companyId);
+    await this.paymentsService.assertDirectorOfCompany(
+      user.id,
+      companyId,
+      user.role,
+    );
     return this.paymentsService.getMonthlyGymStats(companyId, yearNum);
   }
 
