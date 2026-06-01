@@ -4,6 +4,7 @@ export enum BodyZone {
   COLUMNA = 'columna',
   TREN_INFERIOR = 'tren_inferior',
   TREN_SUPERIOR = 'tren_superior',
+  HOMBRO = 'hombro',
   SISTEMICO = 'sistemico',
 }
 

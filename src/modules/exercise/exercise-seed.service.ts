@@ -48,6 +48,13 @@ const SAFETY_TAGS: { key: string; description: string; bodyZone: BodyZone }[] = 
   { key: 'no_estres_escapula', description: 'Evita cargas en escápula', bodyZone: BodyZone.TREN_SUPERIOR },
   { key: 'no_empuje_dinamico', description: 'Evita empujes explosivos de tren superior', bodyZone: BodyZone.TREN_SUPERIOR },
   { key: 'no_flexion_supina', description: 'Evita flexión en posición supina', bodyZone: BodyZone.TREN_SUPERIOR },
+  // Hombro
+  { key: 'no_abduccion_hombro', description: 'Evita abducción de hombro (vuelos laterales, elevaciones laterales)', bodyZone: BodyZone.HOMBRO },
+  { key: 'no_rotacion_externa_carga', description: 'Evita rotación externa bajo carga (manguito rotador)', bodyZone: BodyZone.HOMBRO },
+  { key: 'no_rotacion_interna_carga', description: 'Evita rotación interna bajo carga', bodyZone: BodyZone.HOMBRO },
+  { key: 'no_empuje_horizontal_carga', description: 'Evita empujes horizontales bajo carga (press banca, flexiones)', bodyZone: BodyZone.HOMBRO },
+  { key: 'no_pinzamiento_hombro', description: 'Evita patrones de pinzamiento subacromial (elevación >90°, press inclinado)', bodyZone: BodyZone.HOMBRO },
+  { key: 'no_inestabilidad_hombro', description: 'Evita posiciones de inestabilidad glenohumeral (rangos extremos, carga en posiciones inestables)', bodyZone: BodyZone.HOMBRO },
   // Condiciones Sistémicas
   { key: 'no_isometrico_puro', description: 'Evita isometrías prolongadas', bodyZone: BodyZone.SISTEMICO },
   { key: 'no_valsalva', description: 'Evita apnea / maniobra de Valsalva', bodyZone: BodyZone.SISTEMICO },
@@ -90,9 +97,7 @@ export class ExerciseSeedService implements OnModuleInit {
   }
 
   private async seedSafetyTags() {
-    const count = await this.safetyTagRepo.count();
-    if (count > 0) return;
-    this.logger.log('Seeding safety tags...');
-    await this.safetyTagRepo.save(SAFETY_TAGS);
+    this.logger.log('Upserting safety tags...');
+    await this.safetyTagRepo.upsert(SAFETY_TAGS, { conflictPaths: ['key'] });
   }
 }
