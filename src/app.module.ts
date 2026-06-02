@@ -72,7 +72,9 @@ function resolvePostgresPoolMax(config: ConfigService): number {
         const base = {
           type: 'postgres' as const,
           entities: TYPEORM_ENTITIES,
-          synchronize: true,
+          synchronize:
+            String(config.get('DB_SYNCHRONIZE', 'false')).toLowerCase() ===
+            'true',
           extra: poolExtra,
           ssl: sslEnabled ? { rejectUnauthorized: false } : false,
         };

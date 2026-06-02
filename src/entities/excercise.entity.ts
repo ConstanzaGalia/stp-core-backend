@@ -1,13 +1,30 @@
-import { Entity, PrimaryGeneratedColumn, Column, ManyToOne, ManyToMany, JoinTable } from 'typeorm';
+import {
+  Entity,
+  PrimaryGeneratedColumn,
+  Column,
+  ManyToOne,
+  ManyToMany,
+  JoinTable,
+  JoinColumn,
+} from 'typeorm';
 import { Category } from './category.entity';
 import { Tag } from './tag.entity';
 import { MovementPattern } from './movement-pattern.entity';
 import { SafetyTag } from './safety-tag.entity';
+import { Company } from './company.entity';
+import { STP_MAIN_COMPANY_ID } from '../modules/exercise/exercise.constants';
 
 @Entity()
 export class Exercise {
   @PrimaryGeneratedColumn('uuid')
   id: string;
+
+  @Column({ type: 'uuid', default: STP_MAIN_COMPANY_ID })
+  companyId: string;
+
+  @ManyToOne(() => Company, { onDelete: 'CASCADE' })
+  @JoinColumn({ name: 'companyId' })
+  company: Company;
 
   @Column()
   name: string;
