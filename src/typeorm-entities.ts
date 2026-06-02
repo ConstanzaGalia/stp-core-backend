@@ -28,6 +28,10 @@ import { Reservation } from './entities/reservation.entity';
 import { Sale } from './entities/sale.entity';
 import { ScheduleConfig } from './entities/schedule-config.entity';
 import { ScheduleException } from './entities/schedule-exception.entity';
+import { StaffCompensationProfile } from './entities/staff-compensation-profile.entity';
+import { StaffShiftAssignment } from './entities/staff-shift-assignment.entity';
+import { StaffShiftClosure } from './entities/staff-shift-closure.entity';
+import { StaffWeekNote } from './entities/staff-week-note.entity';
 import { Slot } from './entities/slot.entity';
 import { SubscriptionSuspension } from './entities/subscription-suspension.entity';
 import { Tag } from './entities/tag.entity';
@@ -69,6 +73,10 @@ export const TYPEORM_ENTITIES = [
   Sale,
   ScheduleConfig,
   ScheduleException,
+  StaffCompensationProfile,
+  StaffShiftAssignment,
+  StaffShiftClosure,
+  StaffWeekNote,
   Slot,
   SubscriptionSuspension,
   Tag,
