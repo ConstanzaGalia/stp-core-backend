@@ -699,10 +699,14 @@ export class StaffSchedulingService {
         });
       }
       profile.payType = item.payType;
-      profile.hourlyRate =
-        item.hourlyRate != null ? String(item.hourlyRate) : null;
-      profile.fixedMonthlyAmount =
-        item.fixedMonthlyAmount != null ? String(item.fixedMonthlyAmount) : null;
+      if (item.hourlyRate !== undefined) {
+        profile.hourlyRate =
+          item.hourlyRate != null ? String(item.hourlyRate) : null;
+      }
+      if (item.fixedMonthlyAmount !== undefined) {
+        profile.fixedMonthlyAmount =
+          item.fixedMonthlyAmount != null ? String(item.fixedMonthlyAmount) : null;
+      }
       if (item.displayColor !== undefined) profile.displayColor = item.displayColor;
       if (item.sortOrder !== undefined) profile.sortOrder = item.sortOrder;
       await this.compensationRepository.save(profile);
