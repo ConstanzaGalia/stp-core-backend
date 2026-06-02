@@ -89,6 +89,82 @@ export class StaffSchedulingService {
     return company;
   }
 
+  private async assertStaffScheduleReadAccess(
+    user: User,
+    companyId: string,
+    targetUserId: string,
+  ): Promise<{ company: Company; targetUser: User }> {
+    const company = await this.companyRepository.findOne({
+      where: { id: companyId },
+      relations: ['users'],
+    });
+    if (!company) {
+      throw new NotFoundException('Centro no encontrado');
+    }
+
+    const profiles = await this.compensationRepository.find({ where: { companyId } });
+    const staff = this.getSchedulableStaff(
+      company,
+      profiles.map((p) => p.userId),
+    );
+    const targetUser = staff.find((s) => s.id === targetUserId);
+    if (!targetUser) {
+      throw new NotFoundException('Profesional no encontrado en el staff del centro');
+    }
+
+    if (user.role === UserRole.STP_ADMIN) {
+      return { company, targetUser };
+    }
+
+    const isMember = (company.users ?? []).some((u) => u.id === user.id);
+    if (!isMember) {
+      throw new ForbiddenException('No tenés acceso a este centro');
+    }
+
+    if (MANAGE_ROLES.includes(user.role)) {
+      return { company, targetUser };
+    }
+
+    if (user.id === targetUserId && SCHEDULING_STAFF_ROLES.includes(user.role)) {
+      return { company, targetUser };
+    }
+
+    throw new ForbiddenException(
+      'No tenés permiso para ver los horarios de este profesional',
+    );
+  }
+
+  private async buildGridTemplate(companyId: string, weekStartParam?: string) {
+    const weekStart = weekStartParam
+      ? getWeekStartMonday(weekStartParam)
+      : getWeekStartMonday(toCalendarDateString(new Date()));
+    const weekDates = getWeekDates(weekStart);
+    const weekEnd = weekDates[6];
+    const configs = await this.getActiveScheduleConfigs(companyId);
+    const exceptions = await this.getExceptionsForRange(companyId, weekStart, weekEnd);
+    const slots = this.mergeWeekSlots(weekDates, configs, exceptions);
+
+    const days = weekDates.map((date) => ({
+      date,
+      dayOfWeek: parseCalendarDate(date).getDay(),
+      label: formatDayLabel(date),
+      isClosedAllDay: this.isDayClosedByException(date, exceptions),
+      hasSchedule: this.slotsForDate(date, configs, exceptions).length > 0,
+    }));
+
+    const noteEntity = await this.weekNoteRepository.findOne({
+      where: { companyId, weekStartDate: parseCalendarDate(weekStart) as unknown as Date },
+    });
+
+    return {
+      weekStart,
+      weekEnd,
+      note: noteEntity?.note ?? null,
+      days,
+      slots,
+    };
+  }
+
   /** Staff que puede cubrir turnos: roles operativos + cualquiera con perfil de compensación (ej. sueldo fijo). */
   private getSchedulableStaff(
     company: Company,
@@ -196,34 +272,7 @@ export class StaffSchedulingService {
 
   async getGridTemplate(companyId: string, user: User, weekStartParam?: string) {
     await this.assertCompanyAccess(user, companyId);
-    const weekStart = weekStartParam
-      ? getWeekStartMonday(weekStartParam)
-      : getWeekStartMonday(toCalendarDateString(new Date()));
-    const weekDates = getWeekDates(weekStart);
-    const weekEnd = weekDates[6];
-    const configs = await this.getActiveScheduleConfigs(companyId);
-    const exceptions = await this.getExceptionsForRange(companyId, weekStart, weekEnd);
-    const slots = this.mergeWeekSlots(weekDates, configs, exceptions);
-
-    const days = weekDates.map((date) => ({
-      date,
-      dayOfWeek: parseCalendarDate(date).getDay(),
-      label: formatDayLabel(date),
-      isClosedAllDay: this.isDayClosedByException(date, exceptions),
-      hasSchedule: this.slotsForDate(date, configs, exceptions).length > 0,
-    }));
-
-    const noteEntity = await this.weekNoteRepository.findOne({
-      where: { companyId, weekStartDate: parseCalendarDate(weekStart) as unknown as Date },
-    });
-
-    return {
-      weekStart,
-      weekEnd,
-      note: noteEntity?.note ?? null,
-      days,
-      slots,
-    };
+    return this.buildGridTemplate(companyId, weekStartParam);
   }
 
   async getWeekAssignments(companyId: string, user: User, weekStartParam?: string) {
@@ -713,5 +762,87 @@ export class StaffSchedulingService {
     }
 
     return this.getCompensationProfiles(companyId, user);
+  }
+
+  async getStaffMemberWeek(
+    companyId: string,
+    user: User,
+    targetUserId: string,
+    weekStartParam?: string,
+  ) {
+    await this.assertStaffScheduleReadAccess(user, companyId, targetUserId);
+    const grid = await this.buildGridTemplate(companyId, weekStartParam);
+
+    const assignments = await this.assignmentRepository.find({
+      where: {
+        companyId,
+        userId: targetUserId,
+        date: Between(
+          parseCalendarDate(grid.weekStart),
+          parseCalendarDate(grid.weekEnd),
+        ),
+      },
+    });
+
+    const profile = await this.compensationRepository.findOne({
+      where: { companyId, userId: targetUserId },
+    });
+
+    const shifts = assignments.map((a) => ({
+      date: toCalendarDateString(a.date),
+      startTime: a.startTime,
+      endTime: a.endTime,
+      durationMinutes: a.durationMinutes || 60,
+    }));
+
+    return {
+      ...grid,
+      userId: targetUserId,
+      displayColor: profile?.displayColor ?? undefined,
+      shifts,
+    };
+  }
+
+  async getStaffMemberHoursSummary(
+    companyId: string,
+    user: User,
+    targetUserId: string,
+    year: number,
+  ) {
+    const { targetUser } = await this.assertStaffScheduleReadAccess(
+      user,
+      companyId,
+      targetUserId,
+    );
+
+    const assignments = await this.getAssignmentsForYear(companyId, year);
+    const months = Array(12).fill(0);
+    const monthTotals = Array(12).fill(0);
+
+    for (const a of assignments) {
+      const dateStr = toCalendarDateString(a.date);
+      const y = parseInt(dateStr.slice(0, 4), 10);
+      if (y !== year) continue;
+      const month = parseInt(dateStr.slice(5, 7), 10);
+      const hours = (a.durationMinutes || 60) / 60;
+      monthTotals[month - 1] += hours;
+      if (a.userId === targetUserId) {
+        months[month - 1] += hours;
+      }
+    }
+
+    const total = months.reduce((acc, n) => acc + n, 0);
+
+    return {
+      year,
+      userId: targetUserId,
+      name: formatStaffDisplayNameFromParts(targetUser.name, targetUser.lastName),
+      months: Object.fromEntries(months.map((h, i) => [i + 1, h > 0 ? h : null])),
+      total: total > 0 ? total : null,
+      monthTotals: Object.fromEntries(
+        monthTotals.map((h, i) => [i + 1, h > 0 ? h : null]),
+      ),
+      grandTotal: monthTotals.reduce((a, b) => a + b, 0) || null,
+    };
   }
 }

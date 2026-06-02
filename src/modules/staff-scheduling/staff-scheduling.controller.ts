@@ -71,6 +71,36 @@ export class StaffSchedulingController {
     );
   }
 
+  @Get('staff/:userId/week')
+  getStaffMemberWeek(
+    @Param('companyId') companyId: string,
+    @Param('userId') userId: string,
+    @GetUser() user: User,
+    @Query('weekStart') weekStart?: string,
+  ) {
+    return this.staffSchedulingService.getStaffMemberWeek(
+      companyId,
+      user,
+      userId,
+      weekStart,
+    );
+  }
+
+  @Get('staff/:userId/hours-summary')
+  getStaffMemberHoursSummary(
+    @Param('companyId') companyId: string,
+    @Param('userId') userId: string,
+    @GetUser() user: User,
+    @Query('year') year: string,
+  ) {
+    return this.staffSchedulingService.getStaffMemberHoursSummary(
+      companyId,
+      user,
+      userId,
+      parseInt(year, 10),
+    );
+  }
+
   @Get('hours-summary')
   getHoursSummary(
     @Param('companyId') companyId: string,
