@@ -11,6 +11,8 @@ import { Company } from '../../entities/company.entity';
 import { SubscriptionSuspension } from '../../entities/subscription-suspension.entity';
 import { Expense } from '../../entities/expense.entity';
 import { ExtraIncome } from '../../entities/extra-income.entity';
+import { FixedExpenseTemplate } from '../../entities/fixed-expense-template.entity';
+import { FixedExpenseMonthStatus } from '../../entities/fixed-expense-month-status.entity';
 import { Reservation } from '../../entities/reservation.entity';
 import { TimeSlot } from '../../entities/timeSlot.entity';
 import { ReservationsModule } from '../reservation/reservation.module';
@@ -29,6 +31,8 @@ import { CompanyModule } from '../company/company.module';
       SubscriptionSuspension,
       Expense,
       ExtraIncome,
+      FixedExpenseTemplate,
+      FixedExpenseMonthStatus,
       Reservation,
       TimeSlot
     ]),

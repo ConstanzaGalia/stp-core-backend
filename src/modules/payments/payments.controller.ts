@@ -15,6 +15,11 @@ import { CreateExpenseDto } from './dto/create-expense.dto';
 import { UpdateExpenseDto } from './dto/update-expense.dto';
 import { CreateExtraIncomeDto } from './dto/create-extra-income.dto';
 import { UpdateExtraIncomeDto } from './dto/update-extra-income.dto';
+import {
+  CreateFixedExpenseTemplateDto,
+  UpdateFixedExpenseTemplateDto,
+} from './dto/fixed-expense-template.dto';
+import { UpdateFixedExpenseChecklistDto } from './dto/update-fixed-expense-checklist.dto';
 
 @Controller('payments')
 @UseGuards(AuthGuard('jwt'))
@@ -255,6 +260,76 @@ export class PaymentsController {
   ) {
     await this.paymentsService.deleteExtraIncome(id, companyId);
     return { message: 'Extra income deleted successfully' };
+  }
+
+  // ===== GASTOS FIJOS =====
+  @Get('fixed-expenses/:companyId')
+  async getFixedExpenseTemplates(@Param('companyId') companyId: string) {
+    return await this.paymentsService.getFixedExpenseTemplates(companyId);
+  }
+
+  @Post('fixed-expenses/:companyId')
+  async createFixedExpenseTemplate(
+    @Param('companyId') companyId: string,
+    @Body() dto: CreateFixedExpenseTemplateDto,
+  ) {
+    return await this.paymentsService.createFixedExpenseTemplate(companyId, dto);
+  }
+
+  @Get('fixed-expenses/:companyId/checklist')
+  async getFixedExpenseChecklist(
+    @Param('companyId') companyId: string,
+    @Query('year') yearStr: string,
+  ) {
+    const yearNum = parseInt(yearStr, 10);
+    if (isNaN(yearNum)) {
+      throw new BadRequestException('Invalid year');
+    }
+    return await this.paymentsService.getFixedExpenseChecklist(companyId, yearNum);
+  }
+
+  @Get('fixed-expenses/:companyId/summary')
+  async getFixedExpenseMonthSummary(
+    @Param('companyId') companyId: string,
+    @Query('year') yearStr: string,
+    @Query('month') monthStr: string,
+  ) {
+    const yearNum = parseInt(yearStr, 10);
+    const monthNum = parseInt(monthStr, 10);
+    if (isNaN(yearNum) || isNaN(monthNum) || monthNum < 1 || monthNum > 12) {
+      throw new BadRequestException('Invalid year or month');
+    }
+    return await this.paymentsService.getFixedExpenseMonthSummary(companyId, yearNum, monthNum);
+  }
+
+  @Put('fixed-expenses/:companyId/checklist')
+  async updateFixedExpenseChecklist(
+    @Param('companyId') companyId: string,
+    @Body() dto: UpdateFixedExpenseChecklistDto,
+  ) {
+    const result = await this.paymentsService.updateFixedExpenseChecklist(companyId, dto);
+    if (!result) {
+      return { status: 'pending', templateId: dto.templateId, year: dto.year, month: dto.month };
+    }
+    return result;
+  }
+
+  @Put('fixed-expenses/:companyId/:templateId')
+  async updateFixedExpenseTemplate(
+    @Param('companyId') companyId: string,
+    @Param('templateId') templateId: string,
+    @Body() dto: UpdateFixedExpenseTemplateDto,
+  ) {
+    return await this.paymentsService.updateFixedExpenseTemplate(companyId, templateId, dto);
+  }
+
+  @Delete('fixed-expenses/:companyId/:templateId')
+  async deleteFixedExpenseTemplate(
+    @Param('companyId') companyId: string,
+    @Param('templateId') templateId: string,
+  ) {
+    await this.paymentsService.deleteFixedExpenseTemplate(companyId, templateId);
+    return { message: 'Fixed expense template deactivated successfully' };
   }
 
   // ===== UTILIDADES =====

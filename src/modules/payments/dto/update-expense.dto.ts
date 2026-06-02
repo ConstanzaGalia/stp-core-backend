@@ -1,4 +1,4 @@
-import { IsNumber, IsOptional, IsString, IsDateString, IsIn } from 'class-validator';
+import { IsNumber, IsOptional, IsString, IsDateString, IsIn, IsUUID } from 'class-validator';
 
 export class UpdateExpenseDto {
   @IsOptional()
@@ -20,4 +20,8 @@ export class UpdateExpenseDto {
   @IsOptional()
   @IsIn(['ARS', 'USD'])
   currency?: 'ARS' | 'USD';
+
+  @IsOptional()
+  @IsUUID()
+  fixedExpenseTemplateId?: string | null;
 }

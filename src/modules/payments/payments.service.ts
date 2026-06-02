@@ -10,6 +10,12 @@ import { Company } from '../../entities/company.entity';
 import { SubscriptionSuspension } from '../../entities/subscription-suspension.entity';
 import { Expense } from '../../entities/expense.entity';
 import { ExtraIncome } from '../../entities/extra-income.entity';
+import {
+  FixedExpenseMonthStatus,
+  FixedExpenseMonthSource,
+  FixedExpenseMonthStatusValue,
+} from '../../entities/fixed-expense-month-status.entity';
+import { FixedExpenseTemplate } from '../../entities/fixed-expense-template.entity';
 import { Reservation } from '../../entities/reservation.entity';
 import { TimeSlot } from '../../entities/timeSlot.entity';
 import { AthleteSchedule, ScheduleStatus } from '../../entities/athlete-schedule.entity';
@@ -28,6 +34,11 @@ import { CreateExpenseDto } from './dto/create-expense.dto';
 import { UpdateExpenseDto } from './dto/update-expense.dto';
 import { CreateExtraIncomeDto } from './dto/create-extra-income.dto';
 import { UpdateExtraIncomeDto } from './dto/update-extra-income.dto';
+import {
+  CreateFixedExpenseTemplateDto,
+  UpdateFixedExpenseTemplateDto,
+} from './dto/fixed-expense-template.dto';
+import { UpdateFixedExpenseChecklistDto } from './dto/update-fixed-expense-checklist.dto';
 import { MailingService } from '../mailer/mailing.service';
 import { CompanyService } from '../company/company.service';
 import { UserRole } from '../../common/enums/enums';
@@ -37,6 +48,34 @@ function parseCalendarDateInput(dateStr: string): Date {
   const m = /^(\d{4})-(\d{2})-(\d{2})$/.exec(String(dateStr).trim());
   if (!m) return new Date(dateStr);
   return new Date(Number(m[1]), Number(m[2]) - 1, Number(m[3]));
+}
+
+/** Normaliza a YYYY-MM-DD usando componentes UTC (columnas `date` de PostgreSQL vía TypeORM). */
+function toCalendarDateString(date: Date | string): string {
+  if (typeof date === 'string') {
+    const m = /^(\d{4})-(\d{2})-(\d{2})/.exec(String(date).trim());
+    if (m) return `${m[1]}-${m[2]}-${m[3]}`;
+  }
+  if (date instanceof Date && !Number.isNaN(date.getTime())) {
+    const y = date.getUTCFullYear();
+    const mo = String(date.getUTCMonth() + 1).padStart(2, '0');
+    const day = String(date.getUTCDate()).padStart(2, '0');
+    return `${y}-${mo}-${day}`;
+  }
+  const parsed = new Date(String(date));
+  if (!Number.isNaN(parsed.getTime())) {
+    const y = parsed.getUTCFullYear();
+    const mo = String(parsed.getUTCMonth() + 1).padStart(2, '0');
+    const day = String(parsed.getUTCDate()).padStart(2, '0');
+    return `${y}-${mo}-${day}`;
+  }
+  return String(date).slice(0, 10);
+}
+
+function getYearMonthFromDate(date: Date | string): { year: number; month: number } {
+  const cal = toCalendarDateString(date);
+  const [year, month] = cal.split('-').map(Number);
+  return { year, month };
 }
 
 @Injectable()
@@ -62,6 +101,10 @@ export class PaymentsService {
     private readonly expenseRepository: Repository<Expense>,
     @InjectRepository(ExtraIncome)
     private readonly extraIncomeRepository: Repository<ExtraIncome>,
+    @InjectRepository(FixedExpenseTemplate)
+    private readonly fixedExpenseTemplateRepository: Repository<FixedExpenseTemplate>,
+    @InjectRepository(FixedExpenseMonthStatus)
+    private readonly fixedExpenseMonthStatusRepository: Repository<FixedExpenseMonthStatus>,
     @InjectRepository(Reservation)
     private readonly reservationRepository: Repository<Reservation>,
     @InjectRepository(TimeSlot)
@@ -709,6 +752,7 @@ export class PaymentsService {
         company: { id: companyId },
         date: Between(startDate, endDate)
       },
+      relations: ['fixedExpenseTemplate'],
       order: { date: 'DESC' }
     });
 
@@ -722,7 +766,8 @@ export class PaymentsService {
         date: e.date,
         description: e.description,
         category: e.category,
-        currency: (e.currency || 'ARS') as 'ARS' | 'USD'
+        currency: (e.currency || 'ARS') as 'ARS' | 'USD',
+        fixedExpenseTemplateId: e.fixedExpenseTemplate?.id ?? null,
       }))
     };
   }
@@ -943,22 +988,56 @@ export class PaymentsService {
       throw new NotFoundException('Company not found');
     }
 
+    if (createExpenseDto.fixedExpenseTemplateId) {
+      await this.assertFixedExpenseTemplateBelongsToCompany(
+        createExpenseDto.fixedExpenseTemplateId,
+        companyId,
+      );
+    }
+
     const expense = this.expenseRepository.create({
-      ...createExpenseDto,
+      amount: createExpenseDto.amount,
       date: parseCalendarDateInput(createExpenseDto.date),
+      description: createExpenseDto.description,
+      category: createExpenseDto.category,
       currency: createExpenseDto.currency || 'ARS',
-      company: { id: companyId }
+      company: { id: companyId },
+      ...(createExpenseDto.fixedExpenseTemplateId
+        ? { fixedExpenseTemplate: { id: createExpenseDto.fixedExpenseTemplateId } }
+        : {}),
     });
 
-    return await this.expenseRepository.save(expense);
+    const saved = await this.expenseRepository.save(expense);
+
+    if (createExpenseDto.fixedExpenseTemplateId) {
+      await this.syncExpenseToChecklist(
+        saved,
+        companyId,
+        createExpenseDto.fixedExpenseTemplateId,
+        createExpenseDto.date,
+      );
+    }
+
+    return saved;
   }
 
   async updateExpense(expenseId: string, companyId: string, updateExpenseDto: UpdateExpenseDto): Promise<Expense> {
     const expense = await this.expenseRepository.findOne({
-      where: { id: expenseId, company: { id: companyId } }
+      where: { id: expenseId, company: { id: companyId } },
+      relations: ['fixedExpenseTemplate'],
     });
     if (!expense) {
       throw new NotFoundException('Expense not found');
+    }
+
+    const previousTemplateId = expense.fixedExpenseTemplate?.id ?? null;
+    const previousYearMonth = getYearMonthFromDate(toCalendarDateString(expense.date));
+
+    if (updateExpenseDto.fixedExpenseTemplateId) {
+      await this.assertFixedExpenseTemplateBelongsToCompany(
+        updateExpenseDto.fixedExpenseTemplateId,
+        companyId,
+      );
     }
 
     expense.amount = updateExpenseDto.amount ?? expense.amount;
@@ -967,17 +1046,66 @@ export class PaymentsService {
     expense.category = updateExpenseDto.category ?? expense.category;
     if (updateExpenseDto.currency) expense.currency = updateExpenseDto.currency;
 
-    return await this.expenseRepository.save(expense);
+    if (updateExpenseDto.fixedExpenseTemplateId !== undefined) {
+      expense.fixedExpenseTemplate = updateExpenseDto.fixedExpenseTemplateId
+        ? ({ id: updateExpenseDto.fixedExpenseTemplateId } as FixedExpenseTemplate)
+        : null;
+    }
+
+    const saved = await this.expenseRepository.save(expense);
+
+    const newTemplateId =
+      updateExpenseDto.fixedExpenseTemplateId !== undefined
+        ? updateExpenseDto.fixedExpenseTemplateId
+        : previousTemplateId;
+    const newYearMonth = updateExpenseDto.date
+      ? getYearMonthFromDate(updateExpenseDto.date)
+      : getYearMonthFromDate(toCalendarDateString(saved.date));
+
+    if (
+      previousTemplateId &&
+      (previousTemplateId !== newTemplateId ||
+        previousYearMonth.year !== newYearMonth.year ||
+        previousYearMonth.month !== newYearMonth.month)
+    ) {
+      await this.clearExpenseChecklistSlot(
+        companyId,
+        previousTemplateId,
+        previousYearMonth.year,
+        previousYearMonth.month,
+        expenseId,
+      );
+    }
+
+    if (newTemplateId) {
+      await this.syncExpenseToChecklist(
+        saved,
+        companyId,
+        newTemplateId,
+        updateExpenseDto.date ?? toCalendarDateString(saved.date),
+      );
+    }
+
+    return saved;
   }
 
   async deleteExpense(expenseId: string, companyId: string): Promise<void> {
     const expense = await this.expenseRepository.findOne({
-      where: { id: expenseId, company: { id: companyId } }
+      where: { id: expenseId, company: { id: companyId } },
+      relations: ['fixedExpenseTemplate'],
     });
     if (!expense) {
       throw new NotFoundException('Expense not found');
     }
+
+    const templateId = expense.fixedExpenseTemplate?.id;
+    const { year, month } = getYearMonthFromDate(toCalendarDateString(expense.date));
+
     await this.expenseRepository.remove(expense);
+
+    if (templateId) {
+      await this.clearExpenseChecklistSlot(companyId, templateId, year, month, expenseId);
+    }
   }
 
   async createExtraIncome(companyId: string, dto: CreateExtraIncomeDto): Promise<ExtraIncome> {
@@ -2660,5 +2788,311 @@ export class PaymentsService {
       const endDate = new Date(suspension.endDate);
       return paymentDate >= startDate && paymentDate <= endDate;
     });
+  }
+
+  // ===== GASTOS FIJOS =====
+
+  private async assertFixedExpenseTemplateBelongsToCompany(
+    templateId: string,
+    companyId: string,
+  ): Promise<FixedExpenseTemplate> {
+    const template = await this.fixedExpenseTemplateRepository.findOne({
+      where: { id: templateId, company: { id: companyId }, isActive: true },
+    });
+    if (!template) {
+      throw new NotFoundException('Fixed expense template not found');
+    }
+    return template;
+  }
+
+  private async syncExpenseToChecklist(
+    expense: Expense,
+    companyId: string,
+    templateId: string,
+    calendarDate?: string,
+  ): Promise<void> {
+    const { year, month } = getYearMonthFromDate(
+      calendarDate ?? toCalendarDateString(expense.date),
+    );
+    let statusRow = await this.fixedExpenseMonthStatusRepository.findOne({
+      where: {
+        company: { id: companyId },
+        template: { id: templateId },
+        year,
+        month,
+      },
+    });
+
+    if (!statusRow) {
+      statusRow = this.fixedExpenseMonthStatusRepository.create({
+        company: { id: companyId },
+        template: { id: templateId },
+        year,
+        month,
+      });
+    }
+
+    statusRow.status = FixedExpenseMonthStatusValue.PAID;
+    statusRow.source = FixedExpenseMonthSource.EXPENSE;
+    statusRow.expense = expense;
+    statusRow.note = null;
+    await this.fixedExpenseMonthStatusRepository.save(statusRow);
+  }
+
+  private async clearExpenseChecklistSlot(
+    companyId: string,
+    templateId: string,
+    year: number,
+    month: number,
+    expenseId: string,
+  ): Promise<void> {
+    const statusRow = await this.fixedExpenseMonthStatusRepository.findOne({
+      where: {
+        company: { id: companyId },
+        template: { id: templateId },
+        year,
+        month,
+      },
+      relations: ['expense'],
+    });
+
+    if (!statusRow) return;
+
+    if (statusRow.source === FixedExpenseMonthSource.EXPENSE && statusRow.expense?.id === expenseId) {
+      await this.fixedExpenseMonthStatusRepository.remove(statusRow);
+      return;
+    }
+
+    if (statusRow.expense?.id === expenseId) {
+      statusRow.expense = null;
+      if (statusRow.source === FixedExpenseMonthSource.EXPENSE) {
+        statusRow.status = FixedExpenseMonthStatusValue.PENDING;
+        statusRow.source = null;
+      }
+      await this.fixedExpenseMonthStatusRepository.save(statusRow);
+    }
+  }
+
+  async getFixedExpenseTemplates(companyId: string): Promise<FixedExpenseTemplate[]> {
+    return this.fixedExpenseTemplateRepository.find({
+      where: { company: { id: companyId }, isActive: true },
+      order: { sortOrder: 'ASC', name: 'ASC' },
+    });
+  }
+
+  async createFixedExpenseTemplate(
+    companyId: string,
+    dto: CreateFixedExpenseTemplateDto,
+  ): Promise<FixedExpenseTemplate> {
+    const company = await this.companyRepository.findOne({ where: { id: companyId } });
+    if (!company) throw new NotFoundException('Company not found');
+
+    const maxSort = await this.fixedExpenseTemplateRepository
+      .createQueryBuilder('t')
+      .select('MAX(t.sortOrder)', 'max')
+      .where('t.companyId = :companyId', { companyId })
+      .getRawOne();
+
+    const template = this.fixedExpenseTemplateRepository.create({
+      name: dto.name.trim(),
+      sortOrder: dto.sortOrder ?? (Number(maxSort?.max ?? -1) + 1),
+      defaultCategory: dto.defaultCategory?.trim() || null,
+      defaultCurrency: dto.defaultCurrency || 'ARS',
+      company: { id: companyId },
+    });
+    return this.fixedExpenseTemplateRepository.save(template);
+  }
+
+  async updateFixedExpenseTemplate(
+    companyId: string,
+    templateId: string,
+    dto: UpdateFixedExpenseTemplateDto,
+  ): Promise<FixedExpenseTemplate> {
+    const template = await this.fixedExpenseTemplateRepository.findOne({
+      where: { id: templateId, company: { id: companyId } },
+    });
+    if (!template) throw new NotFoundException('Fixed expense template not found');
+
+    if (dto.name != null) template.name = dto.name.trim();
+    if (dto.sortOrder != null) template.sortOrder = dto.sortOrder;
+    if (dto.defaultCategory !== undefined) template.defaultCategory = dto.defaultCategory?.trim() || null;
+    if (dto.defaultCurrency != null) template.defaultCurrency = dto.defaultCurrency;
+    if (dto.isActive != null) template.isActive = dto.isActive;
+
+    return this.fixedExpenseTemplateRepository.save(template);
+  }
+
+  async deleteFixedExpenseTemplate(companyId: string, templateId: string): Promise<void> {
+    await this.updateFixedExpenseTemplate(companyId, templateId, { isActive: false });
+  }
+
+  async getFixedExpenseChecklist(companyId: string, year: number) {
+    const templates = await this.getFixedExpenseTemplates(companyId);
+    const yearStart = new Date(year, 0, 1);
+    const yearEnd = new Date(year, 11, 31, 23, 59, 59, 999);
+
+    const [statuses, yearExpenses] = await Promise.all([
+      this.fixedExpenseMonthStatusRepository.find({
+        where: { company: { id: companyId }, year },
+        relations: ['expense', 'template'],
+      }),
+      this.expenseRepository.find({
+        where: {
+          company: { id: companyId },
+          date: Between(yearStart, yearEnd),
+          fixedExpenseTemplate: Not(IsNull()),
+        },
+        relations: ['fixedExpenseTemplate'],
+        order: { date: 'DESC' },
+      }),
+    ]);
+
+    const statusMap = new Map<string, FixedExpenseMonthStatus>();
+    for (const s of statuses) {
+      const templateId = s.template?.id;
+      if (!templateId) continue;
+      statusMap.set(`${templateId}-${s.month}`, s);
+    }
+
+    const expenseByTemplateMonth = new Map<string, Expense>();
+    for (const expense of yearExpenses) {
+      const templateId = expense.fixedExpenseTemplate?.id;
+      if (!templateId) continue;
+      const { month } = getYearMonthFromDate(toCalendarDateString(expense.date));
+      if (month < 1 || month > 12) continue;
+      const key = `${templateId}-${month}`;
+      if (!expenseByTemplateMonth.has(key)) {
+        expenseByTemplateMonth.set(key, expense);
+      }
+    }
+
+    const rows = templates.map((template) => {
+      const months: Record<number, {
+        status: string;
+        source?: string;
+        note?: string;
+        expenseId?: string;
+        expenseAmount?: number;
+        expenseCurrency?: string;
+        expenseDate?: string;
+      }> = {};
+
+      for (let month = 1; month <= 12; month++) {
+        const s = statusMap.get(`${template.id}-${month}`);
+        const linkedExpense = s?.expense ?? expenseByTemplateMonth.get(`${template.id}-${month}`);
+        if (!s) {
+          months[month] = {
+            status: FixedExpenseMonthStatusValue.PENDING,
+            ...(linkedExpense
+              ? {
+                  expenseId: linkedExpense.id,
+                  expenseAmount: Number(linkedExpense.amount),
+                  expenseCurrency: linkedExpense.currency || 'ARS',
+                  expenseDate: toCalendarDateString(linkedExpense.date),
+                }
+              : {}),
+          };
+        } else {
+          months[month] = {
+            status: s.status,
+            source: s.source ?? undefined,
+            note: s.note ?? undefined,
+            expenseId: linkedExpense?.id,
+            expenseAmount: linkedExpense ? Number(linkedExpense.amount) : undefined,
+            expenseCurrency: linkedExpense?.currency || template.defaultCurrency || 'ARS',
+            expenseDate: linkedExpense?.date
+              ? toCalendarDateString(linkedExpense.date)
+              : undefined,
+          };
+        }
+      }
+
+      return {
+        template: {
+          id: template.id,
+          name: template.name,
+          sortOrder: template.sortOrder,
+          defaultCategory: template.defaultCategory,
+          defaultCurrency: template.defaultCurrency,
+        },
+        months,
+      };
+    });
+
+    return { year, rows };
+  }
+
+  async getFixedExpenseMonthSummary(companyId: string, year: number, month: number) {
+    const templates = await this.getFixedExpenseTemplates(companyId);
+    if (templates.length === 0) {
+      return { year, month, paid: 0, total: 0 };
+    }
+
+    const statuses = await this.fixedExpenseMonthStatusRepository.find({
+      where: {
+        company: { id: companyId },
+        year,
+        month,
+        status: FixedExpenseMonthStatusValue.PAID,
+      },
+    });
+
+    return {
+      year,
+      month,
+      paid: statuses.length,
+      total: templates.length,
+    };
+  }
+
+  async updateFixedExpenseChecklist(
+    companyId: string,
+    dto: UpdateFixedExpenseChecklistDto,
+  ): Promise<FixedExpenseMonthStatus> {
+    await this.assertFixedExpenseTemplateBelongsToCompany(dto.templateId, companyId);
+
+    let statusRow = await this.fixedExpenseMonthStatusRepository.findOne({
+      where: {
+        company: { id: companyId },
+        template: { id: dto.templateId },
+        year: dto.year,
+        month: dto.month,
+      },
+      relations: ['expense'],
+    });
+
+    if (dto.status === FixedExpenseMonthStatusValue.PENDING) {
+      if (statusRow?.source === FixedExpenseMonthSource.EXPENSE && statusRow.expense) {
+        throw new BadRequestException(
+          'Este mes tiene un gasto registrado vinculado. Editá o eliminá el gasto desde el balance.',
+        );
+      }
+      if (statusRow) {
+        await this.fixedExpenseMonthStatusRepository.remove(statusRow);
+      }
+      return null as unknown as FixedExpenseMonthStatus;
+    }
+
+    if (!statusRow) {
+      statusRow = this.fixedExpenseMonthStatusRepository.create({
+        company: { id: companyId },
+        template: { id: dto.templateId },
+        year: dto.year,
+        month: dto.month,
+      });
+    }
+
+    statusRow.status = dto.status as FixedExpenseMonthStatusValue;
+    statusRow.note = dto.note?.trim() || null;
+
+    if (dto.status === FixedExpenseMonthStatusValue.PAID) {
+      statusRow.source = FixedExpenseMonthSource.MANUAL;
+      statusRow.expense = null;
+    } else {
+      statusRow.source = FixedExpenseMonthSource.MANUAL;
+      statusRow.expense = null;
+    }
+
+    return this.fixedExpenseMonthStatusRepository.save(statusRow);
   }
 }

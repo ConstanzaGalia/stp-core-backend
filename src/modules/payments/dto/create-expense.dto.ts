@@ -1,4 +1,4 @@
-import { IsNotEmpty, IsNumber, IsOptional, IsString, IsDateString, IsIn } from 'class-validator';
+import { IsNotEmpty, IsNumber, IsOptional, IsString, IsDateString, IsIn, IsUUID } from 'class-validator';
 
 export class CreateExpenseDto {
   @IsNotEmpty()
@@ -20,4 +20,8 @@ export class CreateExpenseDto {
   @IsOptional()
   @IsIn(['ARS', 'USD'])
   currency?: 'ARS' | 'USD';
+
+  @IsOptional()
+  @IsUUID()
+  fixedExpenseTemplateId?: string;
 }

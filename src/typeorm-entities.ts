@@ -14,6 +14,8 @@ import { PhysicalEvaluation } from './entities/physical-evaluation.entity';
 import { PhysicalEvaluationTest } from './entities/physical-evaluation-test.entity';
 import { Exercise } from './entities/excercise.entity';
 import { Expense } from './entities/expense.entity';
+import { FixedExpenseTemplate } from './entities/fixed-expense-template.entity';
+import { FixedExpenseMonthStatus } from './entities/fixed-expense-month-status.entity';
 import { Injury } from './entities/injury.entity';
 import { MovementPattern } from './entities/movement-pattern.entity';
 import { SafetyTag } from './entities/safety-tag.entity';
@@ -53,6 +55,8 @@ export const TYPEORM_ENTITIES = [
   Company,
   Exercise,
   Expense,
+  FixedExpenseTemplate,
+  FixedExpenseMonthStatus,
   Injury,
   MovementPattern,
   SafetyTag,
