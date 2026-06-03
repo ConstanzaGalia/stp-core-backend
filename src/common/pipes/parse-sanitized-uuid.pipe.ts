@@ -10,7 +10,7 @@ export class ParseSanitizedUUIDPipe implements PipeTransform<string, string> {
     const cleaned = sanitizeUuidParam(value);
     if (!isValidUuidParam(cleaned)) {
       throw new BadRequestException(
-        'ID inválido. Usá el UUID del centro sin comillas (ej. 7623d786-23a5-447b-b970-bb58ee2a70ac).',
+        'ID inválido. Pegá el UUID completo del centro (36 caracteres con guiones), sin comillas.',
       );
     }
     return cleaned;
