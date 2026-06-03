@@ -27,6 +27,28 @@ export class AthletesService {
 
   // === MÉTODOS PARA ATLETAS ===
 
+  /** Última solicitud atleta↔centro; consolida duplicados históricos. */
+  private async findLatestAthleteCompanyInvitation(
+    athleteId: string,
+    companyId: string,
+  ): Promise<AthleteInvitation | null> {
+    const rows = await this.invitationRepository.find({
+      where: {
+        user: { id: athleteId },
+        company: { id: companyId },
+      },
+      order: { updatedAt: 'DESC', createdAt: 'DESC' },
+    });
+    if (rows.length === 0) {
+      return null;
+    }
+    const [latest, ...duplicates] = rows;
+    if (duplicates.length > 0) {
+      await this.invitationRepository.remove(duplicates);
+    }
+    return latest;
+  }
+
   /**
    * El atleta envía solicitud de unión a un centro
    */
@@ -35,46 +57,51 @@ export class AthletesService {
     companyId: string,
     message?: string
   ): Promise<AthleteInvitation> {
-    // Verificar que el atleta existe
     const athlete = await this.userRepository.findOne({
-      where: { id: athleteId }
+      where: { id: athleteId },
     });
     if (!athlete || athlete.role !== UserRole.ATHLETE) {
-      throw new BadRequestException('User is not a valid athlete');
+      throw new BadRequestException('Solo los atletas pueden solicitar unirse a un centro');
     }
 
-    // Verificar que el centro existe
     const company = await this.companyRepository.findOne({
-      where: { id: companyId }
+      where: { id: companyId },
     });
     if (!company) {
-      throw new NotFoundException('Company not found');
+      throw new NotFoundException('No se encontró un centro con ese ID');
+    }
+    if (company.isDelete) {
+      throw new BadRequestException('Este centro no está activo');
     }
 
-    // Verificar que no hay invitación pendiente o ya aceptada
-    const existingInvitation = await this.invitationRepository.findOne({
-      where: {
-        user: { id: athleteId },
-        company: { id: companyId }
-      }
-    });
+    const existingInvitation = await this.findLatestAthleteCompanyInvitation(
+      athleteId,
+      companyId,
+    );
 
     if (existingInvitation) {
       if (existingInvitation.status === InvitationStatus.PENDING) {
-        throw new ConflictException('You already have a pending invitation to this company');
+        throw new ConflictException(
+          'Ya tenés una solicitud pendiente para este centro',
+        );
       }
       if (existingInvitation.status === InvitationStatus.APPROVED) {
-        throw new ConflictException('You are already a member of this company');
+        throw new ConflictException('Ya sos miembro de este centro');
       }
-      // Si fue rechazada en el pasado, permite nueva solicitud
+      existingInvitation.status = InvitationStatus.PENDING;
+      existingInvitation.message = message ?? null;
+      existingInvitation.companyResponse = null;
+      existingInvitation.approvedAt = null;
+      existingInvitation.rejectedAt = null;
+      existingInvitation.leftAt = null;
+      return await this.invitationRepository.save(existingInvitation);
     }
 
-    // Crear nueva invitación
     const invitation = this.invitationRepository.create({
       user: { id: athleteId },
       company: { id: companyId },
       status: InvitationStatus.PENDING,
-      message
+      message: message ?? null,
     });
 
     return await this.invitationRepository.save(invitation);
@@ -95,13 +122,16 @@ export class AthletesService {
    * Verificar si un atleta está suscrito a un centro específico
    */
   async checkAthleteSubscription(athleteId: string, companyId: string) {
-    const invitation = await this.invitationRepository.findOne({
-      where: {
-        user: { id: athleteId },
-        company: { id: companyId }
-      },
-      relations: ['user', 'company']
-    });
+    const latest = await this.findLatestAthleteCompanyInvitation(
+      athleteId,
+      companyId,
+    );
+    const invitation = latest
+      ? await this.invitationRepository.findOne({
+          where: { id: latest.id },
+          relations: ['user', 'company'],
+        })
+      : null;
 
     if (!invitation) {
       return {
@@ -128,7 +158,7 @@ export class AthletesService {
         return {
           isSubscribed: true,
           status: 'approved',
-          message: `Eres miembro de ${invitation.company.name}`,
+          message: `Eres miembro de ${invitation.company?.name ?? 'este centro'}`,
           invitation: {
             id: invitation.id,
             approvedAt: invitation.approvedAt,

@@ -9,6 +9,7 @@ import { RequestJoinDto } from './dto/request-join-dto';
 import { ResponseInvitationDto } from './dto/response-invitation-dto';
 import { CreateAthleteDto } from './dto/create-athlete.dto';
 import { ForbiddenException } from '@nestjs/common';
+import { SkipCompanySubscriptionCheck } from 'src/common/decorators/skip-company-subscription-check.decorator';
 
 const STAFF_ROLES = [UserRole.STP_ADMIN, UserRole.DIRECTOR, UserRole.TRAINER, UserRole.SUB_TRAINER, UserRole.SECRETARIA];
 
@@ -37,25 +38,31 @@ export class AthletesController {
 
   @Post(':companyId/request-join')
   @UseGuards(AuthGuard('jwt'))
+  @SkipCompanySubscriptionCheck()
   async requestToJoinCompany(
     @Param('companyId') companyId: string,
     @Body() requestJoinDto: RequestJoinDto,
     @GetUser() athlete: User
   ) {
-    // Verificar que el usuario es un atleta
     if (athlete.role !== UserRole.ATHLETE) {
-      throw new ForbiddenException('Only athletes can request to join companies');
+      throw new ForbiddenException('Solo los atletas pueden solicitar unirse a un centro');
     }
 
-    return await this.athletesService.requestToJoinCompany(
+    const invitation = await this.athletesService.requestToJoinCompany(
       athlete.id,
       companyId,
-      requestJoinDto.message
+      requestJoinDto?.message,
     );
+    return {
+      message:
+        'Solicitud enviada correctamente. El director del centro la revisará pronto.',
+      data: invitation,
+    };
   }
 
   @Get('my-invitations')
   @UseGuards(AuthGuard('jwt'))
+  @SkipCompanySubscriptionCheck()
   async getMyInvitations(@GetUser() athlete: User) {
     // Verificar que el usuario es un atleta
     if (athlete.role !== UserRole.ATHLETE) {
@@ -67,6 +74,7 @@ export class AthletesController {
 
   @Get('check-subscription/:companyId')
   @UseGuards(AuthGuard('jwt'))
+  @SkipCompanySubscriptionCheck()
   async checkAthleteSubscription(
     @Param('companyId') companyId: string,
     @GetUser() athlete: User
@@ -81,6 +89,7 @@ export class AthletesController {
 
   @Get('my-centers')
   @UseGuards(AuthGuard('jwt'))
+  @SkipCompanySubscriptionCheck()
   async getMySubscribedCenters(@GetUser() athlete: User) {
     // Verificar que el usuario es un atleta
     if (athlete.role !== UserRole.ATHLETE) {

@@ -2,6 +2,7 @@ import {
   Controller,
   Get,
   Post,
+  Put,
   Body,
   Patch,
   Param,
@@ -18,6 +19,7 @@ import { UpdateCompanyDto } from './dto/update-company.dto';
 import { AssociateTrainerDto } from './dto/associate-trainer.dto';
 import { AddStaffDto } from './dto/add-staff.dto';
 import { JoinCompanyDto } from './dto/join-company.dto';
+import { AssociationRequestDto } from './dto/association-request.dto';
 import { TrainerResponseDto } from './dto/trainer-response.dto';
 import { TrainerDetailResponseDto } from './dto/trainer-detail-response.dto';
 import { AuthGuard } from '@nestjs/passport';
@@ -179,6 +181,72 @@ export class CompanyController {
     @Body() joinCompanyDto: JoinCompanyDto,
   ) {
     return await this.companyService.joinCompanyAsTrainer(companyId, joinCompanyDto);
+  }
+
+  @Post(':companyId/association-request')
+  @UseGuards(AuthGuard('jwt'))
+  @SkipCompanySubscriptionCheck()
+  public async requestStaffAssociation(
+    @Param('companyId') companyId: string,
+    @Body() dto: AssociationRequestDto,
+    @GetUser() user: User,
+  ) {
+    const request = await this.companyService.requestStaffAssociation(
+      companyId,
+      user,
+      dto.message,
+    );
+    return {
+      message: 'Solicitud enviada correctamente. El director del centro será notificado.',
+      data: request,
+    };
+  }
+
+  @Get(':companyId/association-requests/pending')
+  @UseGuards(AuthGuard('jwt'))
+  @SkipCompanySubscriptionCheck()
+  public async getPendingStaffAssociationRequests(
+    @Param('companyId') companyId: string,
+    @GetUser() user: User,
+  ) {
+    return await this.companyService.getPendingStaffAssociationRequests(
+      companyId,
+      user.id,
+    );
+  }
+
+  @Put(':companyId/association-requests/:requestId/approve')
+  @UseGuards(AuthGuard('jwt'))
+  @SkipCompanySubscriptionCheck()
+  public async approveStaffAssociationRequest(
+    @Param('companyId') companyId: string,
+    @Param('requestId') requestId: string,
+    @Body() body: { companyResponse?: string },
+    @GetUser() user: User,
+  ) {
+    return await this.companyService.approveStaffAssociationRequest(
+      companyId,
+      requestId,
+      user.id,
+      body?.companyResponse,
+    );
+  }
+
+  @Put(':companyId/association-requests/:requestId/reject')
+  @UseGuards(AuthGuard('jwt'))
+  @SkipCompanySubscriptionCheck()
+  public async rejectStaffAssociationRequest(
+    @Param('companyId') companyId: string,
+    @Param('requestId') requestId: string,
+    @Body() body: { companyResponse?: string },
+    @GetUser() user: User,
+  ) {
+    return await this.companyService.rejectStaffAssociationRequest(
+      companyId,
+      requestId,
+      user.id,
+      body?.companyResponse,
+    );
   }
 
   // Endpoints para obtener entrenadores/staff del centro

@@ -4,6 +4,7 @@ import { CompanyService } from './company.service';
 import { CompanyController } from './company.controller';
 import { Pagination } from 'src/common/pagination/pagination';
 import { Company } from 'src/entities/company.entity';
+import { StaffAssociationRequest } from 'src/entities/staff-association-request.entity';
 import { User } from 'src/entities/user.entity';
 import { TypeOrmModule } from '@nestjs/typeorm';
 import { AuthModule } from '../auth/auth.module';
@@ -13,7 +14,7 @@ import { CompanySubscriptionGuard } from 'src/common/guards/company-subscription
 
 @Module({
   imports: [
-    TypeOrmModule.forFeature([Company, User]), 
+    TypeOrmModule.forFeature([Company, User, StaffAssociationRequest]), 
     AuthModule,
     MailingModule
   ],

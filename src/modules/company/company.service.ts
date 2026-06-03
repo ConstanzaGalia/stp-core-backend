@@ -11,6 +11,8 @@ import { CreateCompanyDto } from './dto/create-company.dto';
 import { UpdateCompanyDto } from './dto/update-company.dto';
 import { InjectRepository } from '@nestjs/typeorm';
 import { Company } from 'src/entities/company.entity';
+import { InvitationStatus } from 'src/entities/athlete-invitation.entity';
+import { StaffAssociationRequest } from 'src/entities/staff-association-request.entity';
 import { Repository, In } from 'typeorm';
 import { PaginatedListDto } from 'src/common/pagination/DTOs/paginated-list.dto';
 import { Pagination } from 'src/common/pagination/pagination';
@@ -35,6 +37,12 @@ const STAFF_ROLES = [
   UserRole.SECRETARIA,
 ];
 
+const STAFF_ASSOCIATION_REQUEST_ROLES = [
+  UserRole.TRAINER,
+  UserRole.SUB_TRAINER,
+  UserRole.SECRETARIA,
+];
+
 @Injectable()
 export class CompanyService {
   constructor(
@@ -42,6 +50,8 @@ export class CompanyService {
     private readonly companyRepository: Repository<Company>,
     @InjectRepository(User)
     private readonly userRepository: Repository<User>,
+    @InjectRepository(StaffAssociationRequest)
+    private readonly staffAssociationRequestRepository: Repository<StaffAssociationRequest>,
     private pagination: Pagination,
     private readonly mailingService: MailingService,
     private readonly encryptService: EncryptService,
@@ -1125,5 +1135,182 @@ export class CompanyService {
       updatedAt: trainer.updated_at,
       companies: trainer.company || [],
     };
+  }
+
+  private async assertDirectorCanManageCompany(
+    companyId: string,
+    actorId: string,
+  ): Promise<Company> {
+    const company = await this.companyRepository.findOne({
+      where: { id: companyId },
+      relations: ['users'],
+    });
+    if (!company) {
+      throw new NotFoundException('Company not found');
+    }
+    const actor = await this.userRepository.findOne({ where: { id: actorId } });
+    if (!actor) {
+      throw new ForbiddenException('Usuario no autorizado');
+    }
+    if (actor.role === UserRole.STP_ADMIN) {
+      return company;
+    }
+    const isDirector = company.users.some(
+      (u) => u.id === actorId && u.role === UserRole.DIRECTOR,
+    );
+    if (!isDirector) {
+      throw new ForbiddenException(
+        'Only directors can manage staff association requests',
+      );
+    }
+    return company;
+  }
+
+  public async requestStaffAssociation(
+    companyId: string,
+    user: User,
+    message?: string,
+  ): Promise<StaffAssociationRequest> {
+    if (!STAFF_ASSOCIATION_REQUEST_ROLES.includes(user.role)) {
+      throw new BadRequestException(
+        'Solo entrenadores y secretarias pueden solicitar asociación a un centro',
+      );
+    }
+
+    const company = await this.companyRepository.findOne({
+      where: { id: companyId },
+      relations: ['users'],
+    });
+    if (!company) {
+      throw new NotFoundException('Company not found');
+    }
+    if (company.isDelete) {
+      throw new BadRequestException('Company is not active');
+    }
+
+    const alreadyMember = company.users.some((u) => u.id === user.id);
+    if (alreadyMember) {
+      throw new ConflictException('Ya estás asociado a este centro');
+    }
+
+    const otherCompanies = await this.findCompaniesByUser(user.id);
+    if (otherCompanies.length > 0) {
+      throw new ConflictException(
+        'Ya estás asociado a otro centro. Debes desvincularte antes de solicitar uno nuevo.',
+      );
+    }
+
+    const existing = await this.staffAssociationRequestRepository.findOne({
+      where: {
+        user: { id: user.id },
+        company: { id: companyId },
+      },
+    });
+
+    if (existing) {
+      if (existing.status === InvitationStatus.PENDING) {
+        throw new ConflictException(
+          'Ya tienes una solicitud pendiente para este centro',
+        );
+      }
+      if (existing.status === InvitationStatus.APPROVED) {
+        throw new ConflictException('Ya estás asociado a este centro');
+      }
+      existing.status = InvitationStatus.PENDING;
+      existing.message = message ?? null;
+      existing.companyResponse = null;
+      existing.approvedAt = null;
+      existing.rejectedAt = null;
+      return await this.staffAssociationRequestRepository.save(existing);
+    }
+
+    const request = this.staffAssociationRequestRepository.create({
+      user: { id: user.id },
+      company: { id: companyId },
+      status: InvitationStatus.PENDING,
+      message: message ?? null,
+    });
+    return await this.staffAssociationRequestRepository.save(request);
+  }
+
+  public async getPendingStaffAssociationRequests(
+    companyId: string,
+    directorId: string,
+  ) {
+    await this.assertDirectorCanManageCompany(companyId, directorId);
+    return await this.staffAssociationRequestRepository.find({
+      where: {
+        company: { id: companyId },
+        status: InvitationStatus.PENDING,
+      },
+      relations: ['user'],
+      order: { createdAt: 'DESC' },
+    });
+  }
+
+  public async approveStaffAssociationRequest(
+    companyId: string,
+    requestId: string,
+    directorId: string,
+    companyResponse?: string,
+  ): Promise<StaffAssociationRequest> {
+    const company = await this.assertDirectorCanManageCompany(
+      companyId,
+      directorId,
+    );
+
+    const request = await this.staffAssociationRequestRepository.findOne({
+      where: {
+        id: requestId,
+        company: { id: companyId },
+        status: InvitationStatus.PENDING,
+      },
+      relations: ['user'],
+    });
+    if (!request?.user) {
+      throw new NotFoundException('Solicitud no encontrada o ya procesada');
+    }
+
+    if (!STAFF_ASSOCIATION_REQUEST_ROLES.includes(request.user.role)) {
+      throw new BadRequestException('El usuario no puede asociarse como staff');
+    }
+
+    const isAlreadyAssociated = company.users.some(
+      (u) => u.id === request.user.id,
+    );
+    if (!isAlreadyAssociated) {
+      company.users.push(request.user);
+      await this.companyRepository.save(company);
+    }
+
+    request.status = InvitationStatus.APPROVED;
+    request.approvedAt = new Date();
+    request.companyResponse = companyResponse ?? null;
+    return await this.staffAssociationRequestRepository.save(request);
+  }
+
+  public async rejectStaffAssociationRequest(
+    companyId: string,
+    requestId: string,
+    directorId: string,
+    companyResponse?: string,
+  ): Promise<StaffAssociationRequest> {
+    await this.assertDirectorCanManageCompany(companyId, directorId);
+
+    const request = await this.staffAssociationRequestRepository.findOne({
+      where: {
+        id: requestId,
+        company: { id: companyId },
+        status: InvitationStatus.PENDING,
+      },
+    });
+    if (!request) {
+      throw new NotFoundException('Solicitud no encontrada o ya procesada');
+    }
+
+    request.status = InvitationStatus.REJECTED;
+    request.rejectedAt = new Date();
+    request.companyResponse = companyResponse ?? null;
+    return await this.staffAssociationRequestRepository.save(request);
   }
 }
