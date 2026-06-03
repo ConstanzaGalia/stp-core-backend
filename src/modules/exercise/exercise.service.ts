@@ -20,6 +20,7 @@ import { CreateExerciseDto } from './dto/create-exercise.dto';
 import { UpdateExerciseDto } from './dto/update-exercise.dto';
 import {
   EXERCISE_PUBLISHER_COMPANY_IDS,
+  isExerciseInPublisherCatalog,
   isExercisePublisherCompany,
 } from './exercise.constants';
 import { ExerciseWithAccess } from './exercise.types';
@@ -76,7 +77,9 @@ export class ExerciseService {
     exercise: Exercise,
     requestCompanyId: string,
   ): ExerciseWithAccess {
-    const canEdit = exercise.companyId === requestCompanyId;
+    const canEdit = isExercisePublisherCompany(requestCompanyId)
+      ? isExerciseInPublisherCatalog(exercise.companyId)
+      : exercise.companyId === requestCompanyId;
     return Object.assign(exercise, {
       canEdit,
       isShared: !canEdit,
@@ -88,7 +91,9 @@ export class ExerciseService {
     companyId: string,
   ): void {
     if (isExercisePublisherCompany(companyId)) {
-      qb.andWhere('exercise.companyId = :companyId', { companyId });
+      qb.andWhere('exercise.companyId IN (:...publisherIds)', {
+        publisherIds: [...EXERCISE_PUBLISHER_COMPANY_IDS],
+      });
     } else {
       qb.andWhere(
         '(exercise.companyId = :companyId OR exercise.companyId IN (:...publisherIds))',
@@ -101,6 +106,14 @@ export class ExerciseService {
     exercise: Exercise,
     companyId: string,
   ): void {
+    if (isExercisePublisherCompany(companyId)) {
+      if (!isExerciseInPublisherCatalog(exercise.companyId)) {
+        throw new ForbiddenException(
+          'No podés modificar ejercicios fuera del catálogo STP',
+        );
+      }
+      return;
+    }
     if (exercise.companyId !== companyId) {
       throw new ForbiddenException(
         'No podés modificar ejercicios del catálogo compartido',

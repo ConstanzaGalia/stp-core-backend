@@ -14,3 +14,9 @@ export function isExercisePublisherCompany(companyId: string): boolean {
     companyId,
   );
 }
+
+export function isExerciseInPublisherCatalog(
+  companyId: string | null | undefined,
+): boolean {
+  return !!companyId && isExercisePublisherCompany(companyId);
+}
