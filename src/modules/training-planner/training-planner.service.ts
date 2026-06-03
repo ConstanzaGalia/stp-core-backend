@@ -268,6 +268,7 @@ export class TrainingPlannerService {
     feedbackStatus?: string;
     feedback?: unknown;
     review?: unknown;
+    athleteCompletionStatus?: string;
   }) {
     let entity = await this.sessionRepo.findOne({ where: { id: data.id } });
 
@@ -300,6 +301,7 @@ export class TrainingPlannerService {
       feedbackStatus: data.feedbackStatus ?? 'none',
       feedback: data.feedback ?? null,
       review: data.review ?? null,
+      athleteCompletionStatus: data.athleteCompletionStatus ?? 'pending',
     });
 
     const saved = await this.sessionRepo.save(entity);
@@ -338,6 +340,7 @@ export class TrainingPlannerService {
       feedbackStatus: e.feedbackStatus,
       feedback: e.feedback ?? null,
       review: e.review ?? null,
+      athleteCompletionStatus: e.athleteCompletionStatus ?? 'pending',
       createdAt: toIso(e.createdAt),
       updatedAt: toIso(e.updatedAt),
     };

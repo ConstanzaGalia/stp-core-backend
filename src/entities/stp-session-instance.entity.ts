@@ -86,6 +86,15 @@ export class STPSessionInstance {
   @Column({ type: 'jsonb', nullable: true, default: () => 'null' })
   review: unknown | null;
 
+  /** Marcado del atleta: pending | completed | skipped */
+  @Column({
+    name: 'athlete_completion_status',
+    type: 'varchar',
+    length: 20,
+    default: 'pending',
+  })
+  athleteCompletionStatus: string;
+
   @CreateDateColumn({ name: 'created_at' })
   createdAt: Date;
 
