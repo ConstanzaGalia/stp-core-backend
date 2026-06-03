@@ -8,9 +8,9 @@ import {
   Param,
   Body,
   UseGuards,
-  ParseUUIDPipe,
   DefaultValuePipe,
 } from '@nestjs/common';
+import { ParseSanitizedUUIDPipe } from 'src/common/pipes/parse-sanitized-uuid.pipe';
 import { AuthGuard } from '@nestjs/passport';
 import { GetUser } from '../auth/get-user.decorator';
 import { User } from '../../entities/user.entity';
@@ -52,7 +52,7 @@ export class AthletesController {
   @UseGuards(AuthGuard('jwt'))
   @SkipCompanySubscriptionCheck()
   async requestToJoinCompany(
-    @Param('companyId', ParseUUIDPipe) companyId: string,
+    @Param('companyId', ParseSanitizedUUIDPipe) companyId: string,
     @Body(new DefaultValuePipe({})) requestJoinDto: RequestJoinDto,
     @GetUser() athlete: User,
   ) {
@@ -92,10 +92,9 @@ export class AthletesController {
   @UseGuards(AuthGuard('jwt'))
   @SkipCompanySubscriptionCheck()
   async checkAthleteSubscription(
-    @Param('companyId', ParseUUIDPipe) companyId: string,
+    @Param('companyId', ParseSanitizedUUIDPipe) companyId: string,
     @GetUser() athlete: User,
   ) {
-    // Verificar que el usuario es un atleta
     if (athlete.role !== UserRole.ATHLETE) {
       throw new ForbiddenException('Only athletes can check their subscription status');
     }

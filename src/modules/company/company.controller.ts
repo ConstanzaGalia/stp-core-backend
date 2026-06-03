@@ -30,6 +30,7 @@ import { User } from 'src/entities/user.entity';
 import { UserRole } from 'src/common/enums/enums';
 import { UpdateCompanySubscriptionDto } from './dto/update-company-subscription.dto';
 import { SkipCompanySubscriptionCheck } from 'src/common/decorators/skip-company-subscription-check.decorator';
+import { ParseSanitizedUUIDPipe } from 'src/common/pipes/parse-sanitized-uuid.pipe';
 
 @Controller('company')
 export class CompanyController {
@@ -171,7 +172,9 @@ export class CompanyController {
 
   // Endpoints públicos para que entrenadores se unan a centros
   @Get('public/:companyId')
-  public async getCompanyPublicInfo(@Param('companyId') companyId: string) {
+  public async getCompanyPublicInfo(
+    @Param('companyId', ParseSanitizedUUIDPipe) companyId: string,
+  ) {
     return await this.companyService.getCompanyPublicInfo(companyId);
   }
 
@@ -187,7 +190,7 @@ export class CompanyController {
   @UseGuards(AuthGuard('jwt'))
   @SkipCompanySubscriptionCheck()
   public async requestStaffAssociation(
-    @Param('companyId') companyId: string,
+    @Param('companyId', ParseSanitizedUUIDPipe) companyId: string,
     @Body() dto: AssociationRequestDto,
     @GetUser() user: User,
   ) {

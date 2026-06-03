@@ -10,6 +10,7 @@ import { Repository } from 'typeorm';
 import { Company } from 'src/entities/company.entity';
 import { UserRole } from 'src/common/enums/enums';
 import { SKIP_COMPANY_SUBSCRIPTION_CHECK } from '../decorators/skip-company-subscription-check.decorator';
+import { sanitizeUuidParam } from '../helpers/uuid-param.helper';
 
 @Injectable()
 export class CompanySubscriptionGuard implements CanActivate {
@@ -82,12 +83,15 @@ export class CompanySubscriptionGuard implements CanActivate {
     const body = request.body ?? {};
     const query = request.query ?? {};
 
-    if (params.companyId) return params.companyId;
-    if (typeof body.companyId === 'string') return body.companyId;
-    if (query.companyId) return query.companyId;
+    if (params.companyId) return sanitizeUuidParam(params.companyId);
+    if (typeof body.companyId === 'string') {
+      return sanitizeUuidParam(body.companyId);
+    }
+    if (query.companyId) return sanitizeUuidParam(query.companyId);
 
-    if (params.id && /^[0-9a-f-]{36}$/i.test(params.id)) {
-      return params.id;
+    const paramId = sanitizeUuidParam(params.id);
+    if (paramId && /^[0-9a-f-]{36}$/i.test(paramId)) {
+      return paramId;
     }
 
     return undefined;
