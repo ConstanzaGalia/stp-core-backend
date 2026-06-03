@@ -1,4 +1,16 @@
-import { Controller, Get, Post, Put, Patch, Delete, Param, Body, UseGuards } from '@nestjs/common';
+import {
+  Controller,
+  Get,
+  Post,
+  Put,
+  Patch,
+  Delete,
+  Param,
+  Body,
+  UseGuards,
+  ParseUUIDPipe,
+  DefaultValuePipe,
+} from '@nestjs/common';
 import { AuthGuard } from '@nestjs/passport';
 import { GetUser } from '../auth/get-user.decorator';
 import { User } from '../../entities/user.entity';
@@ -40,9 +52,9 @@ export class AthletesController {
   @UseGuards(AuthGuard('jwt'))
   @SkipCompanySubscriptionCheck()
   async requestToJoinCompany(
-    @Param('companyId') companyId: string,
-    @Body() requestJoinDto: RequestJoinDto,
-    @GetUser() athlete: User
+    @Param('companyId', ParseUUIDPipe) companyId: string,
+    @Body(new DefaultValuePipe({})) requestJoinDto: RequestJoinDto,
+    @GetUser() athlete: User,
   ) {
     if (athlete.role !== UserRole.ATHLETE) {
       throw new ForbiddenException('Solo los atletas pueden solicitar unirse a un centro');
@@ -56,7 +68,11 @@ export class AthletesController {
     return {
       message:
         'Solicitud enviada correctamente. El director del centro la revisará pronto.',
-      data: invitation,
+      data: {
+        id: invitation.id,
+        status: invitation.status,
+        createdAt: invitation.createdAt,
+      },
     };
   }
 
@@ -76,8 +92,8 @@ export class AthletesController {
   @UseGuards(AuthGuard('jwt'))
   @SkipCompanySubscriptionCheck()
   async checkAthleteSubscription(
-    @Param('companyId') companyId: string,
-    @GetUser() athlete: User
+    @Param('companyId', ParseUUIDPipe) companyId: string,
+    @GetUser() athlete: User,
   ) {
     // Verificar que el usuario es un atleta
     if (athlete.role !== UserRole.ATHLETE) {

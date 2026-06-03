@@ -1,4 +1,12 @@
-import { Entity, PrimaryGeneratedColumn, Column, ManyToOne, CreateDateColumn, UpdateDateColumn } from 'typeorm';
+import {
+  Entity,
+  PrimaryGeneratedColumn,
+  Column,
+  ManyToOne,
+  JoinColumn,
+  CreateDateColumn,
+  UpdateDateColumn,
+} from 'typeorm';
 import { User } from './user.entity';
 import { Company } from './company.entity';
 
@@ -39,11 +47,14 @@ export class AthleteInvitation {
   @Column({ type: 'boolean', default: false, name: 'is_online' })
   isOnline: boolean; // Atleta online: no ve turnos ni horario fijo
 
-  // Relaciones
-  @ManyToOne(() => User, user => user.athleteInvitations, { onDelete: 'CASCADE' })
+  @ManyToOne(() => User, (user) => user.athleteInvitations, { onDelete: 'CASCADE' })
+  @JoinColumn({ name: 'userId' })
   user: User;
 
-  @ManyToOne(() => Company, company => company.athleteInvitations, { onDelete: 'CASCADE' })
+  @ManyToOne(() => Company, (company) => company.athleteInvitations, {
+    onDelete: 'CASCADE',
+  })
+  @JoinColumn({ name: 'companyId' })
   company: Company;
 
   @CreateDateColumn()

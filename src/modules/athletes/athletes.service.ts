@@ -1,6 +1,13 @@
-import { Injectable, BadRequestException, ForbiddenException, NotFoundException, ConflictException } from '@nestjs/common';
+import {
+  Injectable,
+  BadRequestException,
+  ForbiddenException,
+  NotFoundException,
+  ConflictException,
+  Logger,
+} from '@nestjs/common';
 import { InjectRepository } from '@nestjs/typeorm';
-import { Repository } from 'typeorm';
+import { QueryFailedError, Repository } from 'typeorm';
 import { AthleteInvitation, InvitationStatus } from '../../entities/athlete-invitation.entity';
 import { User } from '../../entities/user.entity';
 import { Company } from '../../entities/company.entity';
@@ -14,6 +21,8 @@ const DEFAULT_ATHLETE_PASSWORD = 'EntrenamientoSTP1@';
 
 @Injectable()
 export class AthletesService {
+  private readonly logger = new Logger(AthletesService.name);
+
   constructor(
     @InjectRepository(AthleteInvitation)
     private readonly invitationRepository: Repository<AthleteInvitation>,
@@ -27,7 +36,6 @@ export class AthletesService {
 
   // === MÉTODOS PARA ATLETAS ===
 
-  /** Última solicitud atleta↔centro; consolida duplicados históricos. */
   private async findLatestAthleteCompanyInvitation(
     athleteId: string,
     companyId: string,
@@ -38,15 +46,28 @@ export class AthletesService {
         company: { id: companyId },
       },
       order: { updatedAt: 'DESC', createdAt: 'DESC' },
+      take: 1,
     });
-    if (rows.length === 0) {
-      return null;
+    return rows[0] ?? null;
+  }
+
+  private async saveAthleteInvitation(
+    invitation: AthleteInvitation,
+  ): Promise<AthleteInvitation> {
+    try {
+      return await this.invitationRepository.save(invitation);
+    } catch (error) {
+      if (error instanceof QueryFailedError) {
+        this.logger.error(
+          `saveAthleteInvitation failed: ${error.message}`,
+          error.stack,
+        );
+        throw new BadRequestException(
+          'No se pudo guardar la solicitud. Verificá el ID del centro o contactá al administrador.',
+        );
+      }
+      throw error;
     }
-    const [latest, ...duplicates] = rows;
-    if (duplicates.length > 0) {
-      await this.invitationRepository.remove(duplicates);
-    }
-    return latest;
   }
 
   /**
@@ -94,7 +115,8 @@ export class AthletesService {
       existingInvitation.approvedAt = null;
       existingInvitation.rejectedAt = null;
       existingInvitation.leftAt = null;
-      return await this.invitationRepository.save(existingInvitation);
+      existingInvitation.isOnline = false;
+      return await this.saveAthleteInvitation(existingInvitation);
     }
 
     const invitation = this.invitationRepository.create({
@@ -102,9 +124,10 @@ export class AthletesService {
       company: { id: companyId },
       status: InvitationStatus.PENDING,
       message: message ?? null,
+      isOnline: false,
     });
 
-    return await this.invitationRepository.save(invitation);
+    return await this.saveAthleteInvitation(invitation);
   }
 
   /**
