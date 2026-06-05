@@ -7,7 +7,7 @@ import { ScheduleConfig } from 'src/entities/schedule-config.entity';
 import { ScheduleException } from 'src/entities/schedule-exception.entity';
 import { TimeSlotGeneration } from 'src/entities/time-slot-generation.entity';
 import { AthleteSchedule, ScheduleFrequency, ScheduleEndType, ScheduleStatus } from 'src/entities/athlete-schedule.entity';
-import { UserPaymentSubscription, SubscriptionStatus } from 'src/entities/user-payment-subscription.entity';
+import { UserPaymentSubscription } from 'src/entities/user-payment-subscription.entity';
 import { AthleteInvitation, InvitationStatus } from 'src/entities/athlete-invitation.entity';
 import { Repository, Between, In } from 'typeorm';
 import { UserRole } from 'src/common/enums/enums';
@@ -147,37 +147,44 @@ export class ReservationsService {
   }
 
   /**
-   * Obtener la suscripción activa de un usuario
+   * Obtener la suscripción accesible de un usuario (período pagado vigente).
    */
-  private async getActiveSubscriptionForUser(userId: string): Promise<UserPaymentSubscription | null> {
-    return await this.subscriptionRepository.findOne({
-      where: { 
-        user: { id: userId },
-        status: SubscriptionStatus.ACTIVE
-      },
-      relations: ['paymentPlan', 'company']
-    });
+  private async getActiveSubscriptionForUser(
+    userId: string,
+    companyId?: string,
+    referenceDate?: Date,
+  ): Promise<UserPaymentSubscription | null> {
+    return this.paymentsService.getAccessibleSubscriptionForUser(
+      userId,
+      companyId,
+      referenceDate,
+    );
   }
 
   async createReservation(userId: string, timeSlotId: string): Promise<Reservation> {
     this.logger.debug(`createReservation -> userId=${userId}, timeSlotId=${timeSlotId}`);
-    // 1. Validar que el usuario tenga suscripción activa
-    const activeSubscription = await this.getActiveSubscriptionForUser(userId);
-    if (!activeSubscription) {
-      throw new BadRequestException('No tienes una suscripción activa para reservar clases');
-    }
-    this.logger.debug(`createReservation -> activeSubscription=${activeSubscription.id}`);
 
-    // 2. Validar que el time slot existe
+    // 1. Validar que el time slot existe
     let timeSlot = await this.timeSlotRepository.findOne({
       where: { id: timeSlotId },
-      relations: ['reservations'],
+      relations: ['reservations', 'company'],
     });
 
     if (!timeSlot) {
       this.logger.warn(`createReservation -> timeSlot not found: ${timeSlotId}`);
       throw new BadRequestException('Time slot not found');
     }
+
+    const companyId = timeSlot.company?.id;
+    const activeSubscription = await this.getActiveSubscriptionForUser(
+      userId,
+      companyId,
+      timeSlot.date,
+    );
+    if (!activeSubscription) {
+      throw new BadRequestException('No tienes una suscripción activa para reservar clases');
+    }
+    this.logger.debug(`createReservation -> activeSubscription=${activeSubscription.id}`);
 
     // 3. Validar que puede reservar (plan pagado para este período, clases disponibles)
     // Pasar la fecha del turno para validar que haya un pago pagado para ese período

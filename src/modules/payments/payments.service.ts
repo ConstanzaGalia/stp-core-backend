@@ -413,6 +413,79 @@ export class PaymentsService {
   }
 
   // ===== GESTIÓN DE CLASES =====
+  /**
+   * Suscripción accesible del atleta según último pago PAID y período vigente.
+   * Reemplaza la búsqueda por status === 'active' como único criterio.
+   */
+  async getAccessibleSubscriptionForUser(
+    userId: string,
+    companyId?: string,
+    referenceDate: Date = new Date(),
+  ): Promise<UserPaymentSubscription | null> {
+    const paymentWhere: { user: { id: string }; company?: { id: string } } = {
+      user: { id: userId },
+    };
+    if (companyId) {
+      paymentWhere.company = { id: companyId };
+    }
+
+    const directPayments = await this.paymentRepository.find({
+      where: paymentWhere,
+      relations: ['paymentPlan', 'subscription'],
+      order: { dueDate: 'DESC' },
+    });
+
+    const lastPaidPayment = this.findLastPaidSubscriptionPayment(directPayments);
+    const lastPaidSubscriptionId = lastPaidPayment?.subscription?.id ?? null;
+
+    let subscription: UserPaymentSubscription | null = null;
+    if (lastPaidSubscriptionId) {
+      subscription = await this.subscriptionRepository.findOne({
+        where: { id: lastPaidSubscriptionId },
+        relations: ['paymentPlan', 'company', 'payments'],
+      });
+    }
+
+    if (!subscription && companyId) {
+      subscription = await this.subscriptionRepository.findOne({
+        where: { user: { id: userId }, company: { id: companyId } },
+        relations: ['paymentPlan', 'company', 'payments'],
+        order: { startDate: 'DESC' },
+      });
+    }
+
+    if (!subscription) {
+      subscription = await this.subscriptionRepository.findOne({
+        where: { user: { id: userId } },
+        relations: ['paymentPlan', 'company', 'payments'],
+        order: { startDate: 'DESC' },
+      });
+    }
+
+    if (!subscription) {
+      return null;
+    }
+
+    const subscriptionPayments = companyId
+      ? directPayments
+      : await this.paymentRepository.find({
+          where: {
+            user: { id: userId },
+            company: { id: subscription.company?.id ?? subscription.companyId },
+          },
+          relations: ['paymentPlan', 'subscription'],
+          order: { dueDate: 'DESC' },
+        });
+
+    const paidPeriodAccess = this.resolvePaidPeriodAccess(
+      subscription,
+      subscriptionPayments,
+      referenceDate,
+    );
+
+    return paidPeriodAccess.hasActiveSubscription ? subscription : null;
+  }
+
   async canUserBookClass(subscriptionId: string, reservationDate?: Date): Promise<boolean> {
     const subscription = await this.subscriptionRepository.findOne({
       where: { id: subscriptionId },
@@ -2766,12 +2839,12 @@ export class PaymentsService {
         classesRemainingThisWeek: updatedSubscription.classesRemainingThisWeek,
         classesAllowedPerWeek: updatedSubscription.paymentPlan?.classesPerWeek,
       };
-    })() : (subscription ? {
-      id: subscription.id,
-      status: subscription.status,
-      periodStartDate: subscription.periodStartDate,
-      periodEndDate: subscription.periodEndDate,
-      nextBillingDate: subscription.nextBillingDate,
+    })() : (subscription || paidPeriodAccess.lastPaidPayment ? {
+      id: subscription?.id ?? null,
+      status: subscription?.status ?? null,
+      periodStartDate: paidPeriodAccess.periodStartDate ?? subscription?.periodStartDate ?? null,
+      periodEndDate: paidPeriodAccess.periodEndDate ?? subscription?.periodEndDate ?? null,
+      nextBillingDate: subscription?.nextBillingDate ?? null,
     } : null);
 
     return {
