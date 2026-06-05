@@ -423,60 +423,28 @@ export class PaymentsService {
       throw new NotFoundException('Subscription not found');
     }
 
-    // Verificar que la suscripción esté activa
-    if (subscription.status !== SubscriptionStatus.ACTIVE) {
+    const paidPeriodAccess = this.resolvePaidPeriodAccess(
+      subscription,
+      subscription.payments ?? [],
+      reservationDate ?? new Date(),
+    );
+
+    if (!paidPeriodAccess.hasActiveSubscription) {
       return false;
     }
 
-    // Si se proporciona una fecha de reserva, verificar que haya un pago pagado para ese período
     if (reservationDate) {
       const reservationDateOnly = new Date(reservationDate);
       reservationDateOnly.setHours(0, 0, 0, 0);
 
-      // Buscar un pago pagado cuyo período incluya la fecha de la reserva
-      const paidPayment = subscription.payments.find(payment => {
-        if (payment.status !== PaymentStatus.PAID || !payment.paidDate) {
-          return false;
-        }
-
-        // Obtener el período de la suscripción cuando se pagó este pago
-        // El período es de 30 días desde el paidDate
-        const paymentDate = new Date(payment.paidDate);
-        paymentDate.setHours(0, 0, 0, 0);
-        
-        const periodStart = new Date(paymentDate);
-        const periodEnd = new Date(paymentDate);
-        periodEnd.setDate(periodEnd.getDate() + 30);
-
-        // Verificar que la fecha de reserva esté dentro del período pagado
-        return reservationDateOnly >= periodStart && reservationDateOnly <= periodEnd;
-      });
-
-      if (!paidPayment) {
-        return false; // No hay pago pagado para este período
+      const periodStart = paidPeriodAccess.periodStartDate;
+      const periodEnd = paidPeriodAccess.periodEndDate;
+      if (!periodStart || !periodEnd) {
+        return false;
       }
-    } else {
-      // Si no se proporciona fecha, verificar que haya un pago pagado para el período actual
-      const today = new Date();
-      today.setHours(0, 0, 0, 0);
 
-      const paidPayment = subscription.payments.find(payment => {
-        if (payment.status !== PaymentStatus.PAID || !payment.paidDate) {
-          return false;
-        }
-
-        const paymentDate = new Date(payment.paidDate);
-        paymentDate.setHours(0, 0, 0, 0);
-        
-        const periodStart = new Date(paymentDate);
-        const periodEnd = new Date(paymentDate);
-        periodEnd.setDate(periodEnd.getDate() + 30);
-
-        return today >= periodStart && today <= periodEnd;
-      });
-
-      if (!paidPayment) {
-        return false; // No hay pago pagado para el período actual
+      if (reservationDateOnly < periodStart || reservationDateOnly > periodEnd) {
+        return false;
       }
     }
 
@@ -2391,6 +2359,88 @@ export class PaymentsService {
     return Array.from(byId.values());
   }
 
+  /** Último pago PAID de suscripción (excluye matrícula y otros conceptos). */
+  private findLastPaidSubscriptionPayment(payments: Payment[]): Payment | null {
+    return [...payments]
+      .filter(
+        p =>
+          p.status === PaymentStatus.PAID
+          && p.paidDate
+          && p.concept === PaymentConcept.SUBSCRIPTION,
+      )
+      .sort(
+        (a, b) => new Date(b.paidDate!).getTime() - new Date(a.paidDate!).getTime(),
+      )[0] ?? null;
+  }
+
+  /**
+   * Determina si el atleta tiene acceso por período pagado vigente,
+   * basado en el último pago PAID y la fecha de vencimiento.
+   */
+  private resolvePaidPeriodAccess(
+    subscription: UserPaymentSubscription | null,
+    payments: Payment[],
+    referenceDate: Date = new Date(),
+  ): {
+    hasActiveSubscription: boolean;
+    lastPaidPayment: Payment | null;
+    periodStartDate: Date | null;
+    periodEndDate: Date | null;
+    plan: PaymentPlan | null;
+  } {
+    const today = new Date(referenceDate);
+    today.setHours(0, 0, 0, 0);
+
+    const lastPaidPayment = this.findLastPaidSubscriptionPayment(payments);
+    if (!lastPaidPayment) {
+      return {
+        hasActiveSubscription: false,
+        lastPaidPayment: null,
+        periodStartDate: null,
+        periodEndDate: null,
+        plan: subscription?.paymentPlan ?? null,
+      };
+    }
+
+    let periodStartDate: Date | null = null;
+    if (subscription?.periodStartDate) {
+      periodStartDate = new Date(subscription.periodStartDate);
+      periodStartDate.setHours(0, 0, 0, 0);
+    } else if (lastPaidPayment.paidDate) {
+      periodStartDate = new Date(lastPaidPayment.paidDate);
+      periodStartDate.setHours(0, 0, 0, 0);
+    }
+
+    let periodEndDate: Date | null = null;
+    if (subscription?.periodEndDate) {
+      periodEndDate = new Date(subscription.periodEndDate);
+    } else if (lastPaidPayment.dueDate) {
+      periodEndDate = new Date(lastPaidPayment.dueDate);
+    } else if (lastPaidPayment.paidDate) {
+      const paidDate = new Date(lastPaidPayment.paidDate);
+      periodEndDate = new Date(
+        paidDate.getFullYear(),
+        paidDate.getMonth() + 1,
+        paidDate.getDate(),
+      );
+    }
+
+    if (periodEndDate) {
+      periodEndDate.setHours(23, 59, 59, 999);
+    }
+
+    const hasActiveSubscription = periodEndDate !== null && today <= periodEndDate;
+    const plan = lastPaidPayment.paymentPlan ?? subscription?.paymentPlan ?? null;
+
+    return {
+      hasActiveSubscription,
+      lastPaidPayment,
+      periodStartDate,
+      periodEndDate,
+      plan,
+    };
+  }
+
   /**
    * Parsea una fecha solo-día (YYYY-MM-DD) como mediodía UTC para que el día no cambie al guardar/recuperar en ninguna zona horaria.
    */
@@ -2584,24 +2634,39 @@ export class PaymentsService {
 
   // ===== OBTENER PLAN Y PAGOS DEL ALUMNO =====
   async getStudentPlanAndPayments(userId: string, companyId: string): Promise<any> {
-    const [subscription, allSuspensions, directPayments] = await Promise.all([
-      this.subscriptionRepository.findOne({
-        where: { user: { id: userId }, company: { id: companyId } },
-        relations: ['user', 'paymentPlan', 'company', 'payments'],
-        order: { startDate: 'DESC' },
-      }),
+    const [allSuspensions, directPayments] = await Promise.all([
       this.suspensionRepository.find({
         where: { userId, companyId },
         order: { startDate: 'DESC' },
       }),
       this.paymentRepository.find({
         where: { user: { id: userId }, company: { id: companyId } },
-        relations: ['paymentPlan'],
+        relations: ['paymentPlan', 'subscription'],
         order: { dueDate: 'DESC' },
       }),
     ]);
 
-    const hasActiveSubscription = subscription?.status === SubscriptionStatus.ACTIVE;
+    const lastPaidPayment = this.findLastPaidSubscriptionPayment(directPayments);
+    const lastPaidSubscriptionId = lastPaidPayment?.subscription?.id ?? null;
+
+    let subscription: UserPaymentSubscription | null = null;
+    if (lastPaidSubscriptionId) {
+      subscription = await this.subscriptionRepository.findOne({
+        where: { id: lastPaidSubscriptionId },
+        relations: ['user', 'paymentPlan', 'company', 'payments'],
+      });
+    }
+
+    if (!subscription) {
+      subscription = await this.subscriptionRepository.findOne({
+        where: { user: { id: userId }, company: { id: companyId } },
+        relations: ['user', 'paymentPlan', 'company', 'payments'],
+        order: { startDate: 'DESC' },
+      });
+    }
+
+    const paidPeriodAccess = this.resolvePaidPeriodAccess(subscription, directPayments);
+    const hasActiveSubscription = paidPeriodAccess.hasActiveSubscription;
 
     let updatedSubscription = subscription;
     let expiredClasses: any[] = [];
@@ -2681,7 +2746,7 @@ export class PaymentsService {
       p => p.status === PaymentStatus.PENDING || p.status === PaymentStatus.OVERDUE,
     ) ?? null;
 
-    const plan = updatedSubscription?.paymentPlan ?? null;
+    const plan = paidPeriodAccess.plan ?? updatedSubscription?.paymentPlan ?? null;
 
     const subscriptionInfo = hasActiveSubscription && updatedSubscription ? (() => {
       const currentWeekEnd = new Date(updatedSubscription.weekStartDate);
@@ -2689,8 +2754,8 @@ export class PaymentsService {
       return {
         id: updatedSubscription.id,
         status: updatedSubscription.status,
-        periodStartDate: updatedSubscription.periodStartDate,
-        periodEndDate: updatedSubscription.periodEndDate,
+        periodStartDate: paidPeriodAccess.periodStartDate ?? updatedSubscription.periodStartDate,
+        periodEndDate: paidPeriodAccess.periodEndDate ?? updatedSubscription.periodEndDate,
         nextBillingDate: updatedSubscription.nextBillingDate,
         classesUsedThisPeriod: updatedSubscription.classesUsedThisPeriod,
         classesRemainingThisPeriod: updatedSubscription.classesRemainingThisPeriod,
