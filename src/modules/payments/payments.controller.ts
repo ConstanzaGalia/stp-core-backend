@@ -1,5 +1,6 @@
 import { Controller, Get, Post, Put, Delete, Body, Param, Query, UseGuards, BadRequestException, ForbiddenException } from '@nestjs/common';
 import { AuthGuard } from '@nestjs/passport';
+import { SkipCompanySubscriptionCheck } from 'src/common/decorators/skip-company-subscription-check.decorator';
 import { PaymentsService } from './payments.service';
 import { GetUser } from '../auth/get-user.decorator';
 import { User } from '../../entities/user.entity';
@@ -77,6 +78,7 @@ export class PaymentsController {
   }
 
   @Get('student/:userId/company/:companyId/plan-payments')
+  @SkipCompanySubscriptionCheck()
   async getStudentPlanAndPayments(
     @Param('userId') userId: string,
     @Param('companyId') companyId: string

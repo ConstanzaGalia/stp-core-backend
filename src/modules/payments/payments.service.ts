@@ -489,16 +489,26 @@ export class PaymentsService {
   async canUserBookClass(subscriptionId: string, reservationDate?: Date): Promise<boolean> {
     const subscription = await this.subscriptionRepository.findOne({
       where: { id: subscriptionId },
-      relations: ['paymentPlan', 'payments']
+      relations: ['paymentPlan', 'payments', 'user', 'company'],
     });
 
     if (!subscription) {
       throw new NotFoundException('Subscription not found');
     }
 
+    const companyId = subscription.company?.id ?? subscription.companyId;
+    const userId = subscription.user?.id;
+    const directPayments = userId && companyId
+      ? await this.paymentRepository.find({
+          where: { user: { id: userId }, company: { id: companyId } },
+          relations: ['paymentPlan'],
+          order: { dueDate: 'DESC' },
+        })
+      : (subscription.payments ?? []);
+
     const paidPeriodAccess = this.resolvePaidPeriodAccess(
       subscription,
-      subscription.payments ?? [],
+      directPayments,
       reservationDate ?? new Date(),
     );
 
@@ -507,16 +517,17 @@ export class PaymentsService {
     }
 
     if (reservationDate) {
-      const reservationDateOnly = new Date(reservationDate);
-      reservationDateOnly.setHours(0, 0, 0, 0);
-
+      const reservationDateOnly = this.toCalendarDate(reservationDate);
       const periodStart = paidPeriodAccess.periodStartDate;
       const periodEnd = paidPeriodAccess.periodEndDate;
-      if (!periodStart || !periodEnd) {
+      if (!reservationDateOnly || !periodStart || !periodEnd) {
         return false;
       }
 
-      if (reservationDateOnly < periodStart || reservationDateOnly > periodEnd) {
+      if (
+        reservationDateOnly.getTime() < periodStart.getTime()
+        || reservationDateOnly.getTime() > periodEnd.getTime()
+      ) {
         return false;
       }
     }
@@ -2432,6 +2443,31 @@ export class PaymentsService {
     return Array.from(byId.values());
   }
 
+  /** Normaliza a fecha calendario local (YYYY-MM-DD) sin desfase de zona horaria. */
+  private toCalendarDate(value: Date | string | null | undefined): Date | null {
+    if (!value) return null;
+    if (value instanceof Date) {
+      return new Date(value.getFullYear(), value.getMonth(), value.getDate(), 0, 0, 0, 0);
+    }
+    const datePart = String(value).split('T')[0];
+    const parts = datePart.split('-').map(Number);
+    if (parts.length !== 3 || parts.some(n => Number.isNaN(n))) return null;
+    return new Date(parts[0], parts[1] - 1, parts[2], 0, 0, 0, 0);
+  }
+
+  private toCalendarEndOfDay(value: Date | string | null | undefined): Date | null {
+    const date = this.toCalendarDate(value);
+    if (!date) return null;
+    date.setHours(23, 59, 59, 999);
+    return date;
+  }
+
+  private addOneCalendarMonth(value: Date | string): Date | null {
+    const start = this.toCalendarDate(value);
+    if (!start) return null;
+    return new Date(start.getFullYear(), start.getMonth() + 1, start.getDate(), 23, 59, 59, 999);
+  }
+
   /** Último pago PAID de suscripción (excluye matrícula y otros conceptos). */
   private findLastPaidSubscriptionPayment(payments: Payment[]): Payment | null {
     return [...payments]
@@ -2439,7 +2475,7 @@ export class PaymentsService {
         p =>
           p.status === PaymentStatus.PAID
           && p.paidDate
-          && p.concept === PaymentConcept.SUBSCRIPTION,
+          && (p.concept === PaymentConcept.SUBSCRIPTION || !p.concept),
       )
       .sort(
         (a, b) => new Date(b.paidDate!).getTime() - new Date(a.paidDate!).getTime(),
@@ -2461,8 +2497,7 @@ export class PaymentsService {
     periodEndDate: Date | null;
     plan: PaymentPlan | null;
   } {
-    const today = new Date(referenceDate);
-    today.setHours(0, 0, 0, 0);
+    const today = this.toCalendarDate(referenceDate);
 
     const lastPaidPayment = this.findLastPaidSubscriptionPayment(payments);
     if (!lastPaidPayment) {
@@ -2475,34 +2510,18 @@ export class PaymentsService {
       };
     }
 
-    let periodStartDate: Date | null = null;
-    if (subscription?.periodStartDate) {
-      periodStartDate = new Date(subscription.periodStartDate);
-      periodStartDate.setHours(0, 0, 0, 0);
-    } else if (lastPaidPayment.paidDate) {
-      periodStartDate = new Date(lastPaidPayment.paidDate);
-      periodStartDate.setHours(0, 0, 0, 0);
-    }
+    const periodStartDate =
+      this.toCalendarDate(lastPaidPayment.paidDate)
+      ?? this.toCalendarDate(subscription?.periodStartDate);
 
-    let periodEndDate: Date | null = null;
-    if (subscription?.periodEndDate) {
-      periodEndDate = new Date(subscription.periodEndDate);
-    } else if (lastPaidPayment.dueDate) {
-      periodEndDate = new Date(lastPaidPayment.dueDate);
-    } else if (lastPaidPayment.paidDate) {
-      const paidDate = new Date(lastPaidPayment.paidDate);
-      periodEndDate = new Date(
-        paidDate.getFullYear(),
-        paidDate.getMonth() + 1,
-        paidDate.getDate(),
-      );
-    }
+    // El último pago PAID manda sobre subscription.periodEndDate (puede estar desactualizado).
+    const periodEndDate =
+      this.toCalendarEndOfDay(lastPaidPayment.dueDate)
+      ?? this.toCalendarEndOfDay(subscription?.periodEndDate)
+      ?? (lastPaidPayment.paidDate ? this.addOneCalendarMonth(lastPaidPayment.paidDate) : null);
 
-    if (periodEndDate) {
-      periodEndDate.setHours(23, 59, 59, 999);
-    }
-
-    const hasActiveSubscription = periodEndDate !== null && today <= periodEndDate;
+    const hasActiveSubscription =
+      today !== null && periodEndDate !== null && today.getTime() <= periodEndDate.getTime();
     const plan = lastPaidPayment.paymentPlan ?? subscription?.paymentPlan ?? null;
 
     return {
