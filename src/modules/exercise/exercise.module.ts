@@ -9,6 +9,7 @@ import { Category } from 'src/entities/category.entity';
 import { MovementPattern } from 'src/entities/movement-pattern.entity';
 import { SafetyTag } from 'src/entities/safety-tag.entity';
 import { Tag } from 'src/entities/tag.entity';
+import { AthleteInvitation } from 'src/entities/athlete-invitation.entity';
 import { Pagination } from 'src/common/pagination/pagination';
 
 @Module({
@@ -20,6 +21,7 @@ import { Pagination } from 'src/common/pagination/pagination';
       MovementPattern,
       SafetyTag,
       Tag,
+      AthleteInvitation,
     ]),
   ],
   controllers: [ExerciseController],

@@ -15,6 +15,10 @@ import { MovementPattern } from 'src/entities/movement-pattern.entity';
 import { SafetyTag } from 'src/entities/safety-tag.entity';
 import { Tag } from 'src/entities/tag.entity';
 import { User } from 'src/entities/user.entity';
+import {
+  AthleteInvitation,
+  InvitationStatus,
+} from 'src/entities/athlete-invitation.entity';
 import { In, Repository, SelectQueryBuilder } from 'typeorm';
 import { CreateExerciseDto } from './dto/create-exercise.dto';
 import { UpdateExerciseDto } from './dto/update-exercise.dto';
@@ -42,6 +46,8 @@ export class ExerciseService {
     private readonly safetyTagRepository: Repository<SafetyTag>,
     @InjectRepository(Tag)
     private readonly tagRepository: Repository<Tag>,
+    @InjectRepository(AthleteInvitation)
+    private readonly athleteInvitationRepository: Repository<AthleteInvitation>,
     private pagination: Pagination,
   ) {}
 
@@ -67,10 +73,24 @@ export class ExerciseService {
       return company;
     }
     const isMember = (company.users ?? []).some((u) => u.id === user.id);
-    if (!isMember) {
-      throw new ForbiddenException('No tenés acceso a este centro');
+    if (isMember) {
+      return company;
     }
-    return company;
+
+    if (user.role === UserRole.ATHLETE) {
+      const invitation = await this.athleteInvitationRepository.findOne({
+        where: {
+          user: { id: user.id },
+          company: { id: companyId },
+          status: InvitationStatus.APPROVED,
+        },
+      });
+      if (invitation) {
+        return company;
+      }
+    }
+
+    throw new ForbiddenException('No tenés acceso a este centro');
   }
 
   private enrichExercise(
