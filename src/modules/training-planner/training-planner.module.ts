@@ -4,6 +4,7 @@ import { STPTrainingProfile } from 'src/entities/stp-training-profile.entity';
 import { STPMacroPlan } from 'src/entities/stp-macro-plan.entity';
 import { STPWeeklyTemplate } from 'src/entities/stp-weekly-template.entity';
 import { STPSessionInstance } from 'src/entities/stp-session-instance.entity';
+import { Exercise } from 'src/entities/excercise.entity';
 import { TrainingPlannerService } from './training-planner.service';
 import { TrainingPlannerController } from './training-planner.controller';
 
@@ -14,6 +15,7 @@ import { TrainingPlannerController } from './training-planner.controller';
       STPMacroPlan,
       STPWeeklyTemplate,
       STPSessionInstance,
+      Exercise,
     ]),
   ],
   providers: [TrainingPlannerService],

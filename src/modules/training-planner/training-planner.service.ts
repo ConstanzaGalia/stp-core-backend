@@ -1,10 +1,17 @@
 import { Injectable, NotFoundException } from '@nestjs/common';
 import { InjectRepository } from '@nestjs/typeorm';
-import { Repository } from 'typeorm';
+import { In, Repository } from 'typeorm';
 import { STPTrainingProfile } from 'src/entities/stp-training-profile.entity';
 import { STPMacroPlan } from 'src/entities/stp-macro-plan.entity';
 import { STPWeeklyTemplate } from 'src/entities/stp-weekly-template.entity';
 import { STPSessionInstance } from 'src/entities/stp-session-instance.entity';
+import { Exercise } from 'src/entities/excercise.entity';
+
+interface SessionExerciseMeta {
+  videoUrl: string | null;
+  esIsometrico: boolean;
+  unilateral: boolean;
+}
 
 function toIso(d: Date | string | null | undefined): string {
   if (!d) return new Date().toISOString();
@@ -22,6 +29,8 @@ export class TrainingPlannerService {
     private readonly weeklyTemplateRepo: Repository<STPWeeklyTemplate>,
     @InjectRepository(STPSessionInstance)
     private readonly sessionRepo: Repository<STPSessionInstance>,
+    @InjectRepository(Exercise)
+    private readonly exerciseRepo: Repository<Exercise>,
   ) {}
 
   // ── Training Profile ────────────────────────────────────────────────────────
@@ -243,7 +252,8 @@ export class TrainingPlannerService {
       where: { id: sessionId, athleteId },
     });
     if (!entity) return null;
-    return this.serializeSession(entity);
+    const serialized = this.serializeSession(entity);
+    return this.enrichSessionWithExerciseMeta(serialized);
   }
 
   async saveSession(data: {
@@ -343,6 +353,88 @@ export class TrainingPlannerService {
       athleteCompletionStatus: e.athleteCompletionStatus ?? 'pending',
       createdAt: toIso(e.createdAt),
       updatedAt: toIso(e.updatedAt),
+    };
+  }
+
+  private collectExerciseIdsFromBlocks(blocks: unknown[]): string[] {
+    const ids = new Set<string>();
+    for (const block of blocks) {
+      if (!block || typeof block !== 'object') continue;
+      const exercises = (block as { exercises?: unknown[] }).exercises;
+      if (!Array.isArray(exercises)) continue;
+      for (const exercise of exercises) {
+        if (!exercise || typeof exercise !== 'object') continue;
+        const exerciseId = (exercise as { exerciseId?: string }).exerciseId;
+        if (typeof exerciseId === 'string' && exerciseId.trim()) {
+          ids.add(exerciseId.trim());
+        }
+      }
+    }
+    return [...ids];
+  }
+
+  private async loadExerciseMetaByIds(
+    exerciseIds: string[],
+  ): Promise<Map<string, SessionExerciseMeta>> {
+    const map = new Map<string, SessionExerciseMeta>();
+    if (exerciseIds.length === 0) return map;
+
+    const exercises = await this.exerciseRepo.find({
+      where: { id: In(exerciseIds) },
+      select: ['id', 'video', 'esIsometrico', 'unilateral'],
+    });
+
+    for (const exercise of exercises) {
+      map.set(exercise.id, {
+        videoUrl: exercise.video?.trim() || null,
+        esIsometrico: exercise.esIsometrico ?? false,
+        unilateral: exercise.unilateral ?? false,
+      });
+    }
+
+    return map;
+  }
+
+  private enrichBlocksWithExerciseMeta(
+    blocks: unknown[],
+    metaById: Map<string, SessionExerciseMeta>,
+  ): unknown[] {
+    return blocks.map((block) => {
+      if (!block || typeof block !== 'object') return block;
+      const blockObj = block as { exercises?: unknown[] };
+      if (!Array.isArray(blockObj.exercises)) return block;
+
+      return {
+        ...blockObj,
+        exercises: blockObj.exercises.map((exercise) => {
+          if (!exercise || typeof exercise !== 'object') return exercise;
+          const ex = exercise as { exerciseId?: string };
+          const exerciseId =
+            typeof ex.exerciseId === 'string' ? ex.exerciseId.trim() : '';
+          const meta = exerciseId ? metaById.get(exerciseId) : undefined;
+          if (!meta) return exercise;
+
+          return {
+            ...ex,
+            videoUrl: meta.videoUrl,
+            esIsometrico: meta.esIsometrico,
+            unilateral: meta.unilateral,
+          };
+        }),
+      };
+    });
+  }
+
+  private async enrichSessionWithExerciseMeta(
+    session: ReturnType<TrainingPlannerService['serializeSession']>,
+  ) {
+    const blocks = Array.isArray(session.blocks) ? session.blocks : [];
+    const exerciseIds = this.collectExerciseIdsFromBlocks(blocks);
+    const metaById = await this.loadExerciseMetaByIds(exerciseIds);
+
+    return {
+      ...session,
+      blocks: this.enrichBlocksWithExerciseMeta(blocks, metaById),
     };
   }
 }
