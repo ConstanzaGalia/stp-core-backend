@@ -14,6 +14,7 @@ const MOVEMENT_PATTERNS = [
   { name: 'Tracción Vertical', description: 'Dominadas, polea alta' },
   { name: 'Rotación', description: 'Leñadores, lanzamientos rotacionales' },
   { name: 'Anti-extensión', description: 'Plancha, rueda abdominal' },
+  { name: 'Anti-flexión', description: 'Dead bug, hollow hold, resistencia a flexión lumbar' },
   { name: 'Anti-rotación', description: 'Pallof press, plancha lateral' },
   { name: 'Core Tradicional', description: 'Abs crunch, cortitos, tijeras' },
   { name: 'Saltos y Rebotes', description: 'Carrera, desplazamientos laterales, skipping' },
