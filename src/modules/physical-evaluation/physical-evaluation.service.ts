@@ -180,15 +180,13 @@ export class PhysicalEvaluationService {
    * Staff: lectura/escritura si comparte centro con el atleta (STP_ADMIN sin restricción de centro).
    */
   async assertCanAccessAthlete(actor: User, athleteUserId: string, write: boolean): Promise<User> {
-    const target = await this.userRepo.findOne({ where: { id: athleteUserId } });
-    if (!target) throw new NotFoundException('Atleta no encontrado');
-    if (target.role !== UserRole.ATHLETE) {
-      throw new BadRequestException('El usuario indicado no es un atleta');
-    }
-
+    // Atletas: la autorización es local (sin DB para el chequeo de permisos)
     if (actor.role === UserRole.ATHLETE) {
       if (actor.id !== athleteUserId) throw new ForbiddenException('No puedes ver evaluaciones de otro atleta');
       if (write) throw new ForbiddenException('Los atletas no pueden crear evaluaciones físicas');
+      const target = await this.userRepo.findOne({ where: { id: athleteUserId } });
+      if (!target) throw new NotFoundException('Atleta no encontrado');
+      if (target.role !== UserRole.ATHLETE) throw new BadRequestException('El usuario indicado no es un atleta');
       return target;
     }
 
@@ -196,13 +194,25 @@ export class PhysicalEvaluationService {
       throw new ForbiddenException('Sin permiso');
     }
 
+    // STP_ADMIN: solo necesita verificar que el usuario exista y sea atleta
     if (actor.role === UserRole.STP_ADMIN) {
+      const target = await this.userRepo.findOne({ where: { id: athleteUserId } });
+      if (!target) throw new NotFoundException('Atleta no encontrado');
+      if (target.role !== UserRole.ATHLETE) throw new BadRequestException('El usuario indicado no es un atleta');
       return target;
     }
 
-    const staffCompanies = await this.companyService.findCompaniesByUser(actor.id);
+    // Staff normal: verificar atleta y empresas compartidas en paralelo (1 ronda vs 4 secuenciales)
+    const [target, staffCompanies, subs] = await Promise.all([
+      this.userRepo.findOne({ where: { id: athleteUserId } }),
+      this.companyService.findCompaniesByUser(actor.id),
+      this.athletesService.getMySubscribedCenters(athleteUserId),
+    ]);
+
+    if (!target) throw new NotFoundException('Atleta no encontrado');
+    if (target.role !== UserRole.ATHLETE) throw new BadRequestException('El usuario indicado no es un atleta');
+
     const staffIds = new Set(staffCompanies.map((c) => c.id));
-    const subs = await this.athletesService.getMySubscribedCenters(athleteUserId);
     const athleteCompanyIds = subs.map((inv) => inv.company?.id).filter(Boolean) as string[];
     const shares = athleteCompanyIds.some((id) => staffIds.has(id));
     if (!shares) {
