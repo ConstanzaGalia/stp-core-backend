@@ -95,6 +95,10 @@ export class STPSessionInstance {
   })
   athleteCompletionStatus: string;
 
+  /** Texto libre del entrenador. Usado principalmente en sesiones de tipo "libre". */
+  @Column({ type: 'text', nullable: true, default: () => 'null' })
+  notes: string | null;
+
   @CreateDateColumn({ name: 'created_at' })
   createdAt: Date;
 

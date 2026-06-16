@@ -1,0 +1,2 @@
+ALTER TABLE stp_session_instances
+  ADD COLUMN IF NOT EXISTS notes TEXT DEFAULT NULL;
