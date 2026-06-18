@@ -74,6 +74,7 @@ export class CompanyService {
       const newCompany = this.companyRepository.create({
         ...payload,
         subscriptionActive: false,
+        ...(createCompanyDto.accountType ? { accountType: createCompanyDto.accountType } : {}),
       });
       newCompany.users = [user];
       return await this.companyRepository.save(newCompany);
@@ -149,7 +150,7 @@ export class CompanyService {
     offset: number,
     limit: number,
     path: string,
-    options?: { active?: boolean; search?: string },
+    options?: { active?: boolean; search?: string; accountType?: string },
   ): Promise<PaginatedListDto<unknown>> {
     const qb = this.companyRepository
       .createQueryBuilder('company')
@@ -168,6 +169,10 @@ export class CompanyService {
       });
     }
 
+    if (options?.accountType?.trim()) {
+      qb.andWhere('company.account_type = :accountType', { accountType: options.accountType.trim() });
+    }
+
     const [companies, count] = await qb.skip(offset).take(limit).getManyAndCount();
 
     const items = companies.map(company => {
@@ -182,6 +187,7 @@ export class CompanyService {
         id: company.id,
         name: company.name,
         subscriptionActive: company.subscriptionActive,
+        accountType: company.accountType,
         createdAt: company.created_at,
         directors: directors.map(d => ({
           id: d.id,

@@ -218,8 +218,11 @@ export class AthletesController {
 
   @Get('company/:companyId/athletes')
   @UseGuards(AuthGuard('jwt'))
-  async getCompanyAthletes(@Param('companyId') companyId: string) {
-    return await this.athletesService.getCompanyAthletes(companyId);
+  async getCompanyAthletes(
+    @Param('companyId') companyId: string,
+    @GetUser() user: User,
+  ) {
+    return await this.athletesService.getCompanyAthletes(companyId, user);
   }
 
   @Get('company/:companyId/birthdays-today')

@@ -1,6 +1,7 @@
 import { Column, CreateDateColumn, DeleteDateColumn, Entity, JoinTable, ManyToMany, OneToMany, PrimaryGeneratedColumn, UpdateDateColumn } from 'typeorm';
 import { ApiProperty } from '@nestjs/swagger';
 import { User } from './user.entity';
+import { CompanyAccountType } from '../common/enums/enums';
 import { Payment } from './payment.entity';
 import { PaymentPlan } from './payment-plan.entity';
 import { UserPaymentSubscription } from './user-payment-subscription.entity';
@@ -47,6 +48,16 @@ export class Company {
   @ApiProperty()
   @Column({ type: 'boolean', default: false, name: 'subscription_active' })
   subscriptionActive: boolean;
+
+  /** Tipo de cuenta: centro de entrenamiento o club deportivo. */
+  @ApiProperty({ enum: CompanyAccountType })
+  @Column({
+    type: 'enum',
+    enum: CompanyAccountType,
+    default: CompanyAccountType.TRAINING_CENTER,
+    name: 'account_type',
+  })
+  accountType: CompanyAccountType;
 
   @ManyToMany(() => User, user => user.company)
   @JoinTable()
@@ -96,6 +107,9 @@ export class Company {
 
   @OneToMany(() => Sale, sale => sale.company)
   sales: Sale[];
+
+  @OneToMany('Division', (d: any) => d.company)
+  divisions: any[];
 
   @CreateDateColumn({ type: "timestamp", default: () => "CURRENT_TIMESTAMP(6)" })
   public created_at: Date;
