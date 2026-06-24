@@ -24,7 +24,7 @@ import { AddStaffDto } from './dto/add-staff.dto';
 import { TrainerResponseDto } from './dto/trainer-response.dto';
 import { TrainerDetailResponseDto } from './dto/trainer-detail-response.dto';
 import { MailingService } from '../mailer/mailing.service';
-import { inviteStudentEmail } from '../../utils/emailTemplates';
+import { inviteStudentEmail, staffAssociationApprovedEmail, staffAssociationRejectedEmail, staffAssociationRequestEmail } from '../../utils/emailTemplates';
 import { EncryptService } from 'src/services/bcrypt.service';
 import { getStpOperatingCompanyId } from 'src/common/constants/stp-operating-company';
 import { assertStpAdmin } from 'src/common/helpers/company-access.helper';
@@ -1227,7 +1227,9 @@ export class CompanyService {
       existing.companyResponse = null;
       existing.approvedAt = null;
       existing.rejectedAt = null;
-      return await this.staffAssociationRequestRepository.save(existing);
+      const saved = await this.staffAssociationRequestRepository.save(existing);
+      await this.notifyDirectorsOfStaffAssociationRequest(company, user, message);
+      return saved;
     }
 
     const request = this.staffAssociationRequestRepository.create({
@@ -1236,7 +1238,130 @@ export class CompanyService {
       status: InvitationStatus.PENDING,
       message: message ?? null,
     });
-    return await this.staffAssociationRequestRepository.save(request);
+    const saved = await this.staffAssociationRequestRepository.save(request);
+    await this.notifyDirectorsOfStaffAssociationRequest(company, user, message);
+    return saved;
+  }
+
+  public async getMyStaffAssociationRequest(userId: string) {
+    try {
+      const [request] = await this.staffAssociationRequestRepository.find({
+        where: {
+          user: { id: userId },
+          status: InvitationStatus.PENDING,
+        },
+        relations: ['company'],
+        order: { createdAt: 'DESC' },
+        take: 1,
+      });
+
+      if (!request) {
+        return { request: null };
+      }
+
+      return {
+        request: {
+          id: request.id,
+          companyId: request.company?.id,
+          companyName: request.company?.name,
+          status: request.status,
+          message: request.message,
+          createdAt: request.createdAt,
+        },
+      };
+    } catch (error) {
+      Logger.warn(
+        `getMyStaffAssociationRequest failed for user ${userId}: ${error instanceof Error ? error.message : error}`,
+      );
+      return { request: null };
+    }
+  }
+
+  private getFrontendUrl(): string {
+    return (process.env.FRONTEND_URL || 'http://localhost:3000').replace(/\/$/, '');
+  }
+
+  private async notifyDirectorsOfStaffAssociationRequest(
+    company: Company,
+    applicant: User,
+    message?: string,
+  ): Promise<void> {
+    try {
+      const companyWithUsers = await this.companyRepository.findOne({
+        where: { id: company.id },
+        relations: ['users'],
+      });
+      if (!companyWithUsers?.users?.length) return;
+
+      const directors = companyWithUsers.users.filter(
+        (u) => u.role === UserRole.DIRECTOR && u.email,
+      );
+      if (!directors.length) return;
+
+      const from = process.env.RESEND_FROM_EMAIL || 'noreply@stp.com';
+      const reviewUrl = `${this.getFrontendUrl()}/entrenadores`;
+      const applicantName = `${applicant.name} ${applicant.lastName}`.trim();
+
+      for (const director of directors) {
+        const mail = staffAssociationRequestEmail(
+          director.email,
+          director.name,
+          applicantName,
+          applicant.role,
+          companyWithUsers.name,
+          reviewUrl,
+          from,
+          message,
+        );
+        await this.mailingService.sendMail(mail);
+      }
+    } catch (error) {
+      Logger.error('Error sending staff association request emails', error);
+    }
+  }
+
+  private async notifyStaffAssociationApproved(
+    request: StaffAssociationRequest,
+    companyName: string,
+    companyResponse?: string,
+  ): Promise<void> {
+    try {
+      if (!request.user?.email) return;
+      const from = process.env.RESEND_FROM_EMAIL || 'noreply@stp.com';
+      const dashboardUrl = `${this.getFrontendUrl()}/dashboard`;
+      const mail = staffAssociationApprovedEmail(
+        request.user.email,
+        request.user.name,
+        companyName,
+        dashboardUrl,
+        from,
+        companyResponse,
+      );
+      await this.mailingService.sendMail(mail);
+    } catch (error) {
+      Logger.error('Error sending staff association approved email', error);
+    }
+  }
+
+  private async notifyStaffAssociationRejected(
+    request: StaffAssociationRequest,
+    companyName: string,
+    companyResponse?: string,
+  ): Promise<void> {
+    try {
+      if (!request.user?.email) return;
+      const from = process.env.RESEND_FROM_EMAIL || 'noreply@stp.com';
+      const mail = staffAssociationRejectedEmail(
+        request.user.email,
+        request.user.name,
+        companyName,
+        from,
+        companyResponse,
+      );
+      await this.mailingService.sendMail(mail);
+    } catch (error) {
+      Logger.error('Error sending staff association rejected email', error);
+    }
   }
 
   public async getPendingStaffAssociationRequests(
@@ -1292,7 +1417,9 @@ export class CompanyService {
     request.status = InvitationStatus.APPROVED;
     request.approvedAt = new Date();
     request.companyResponse = companyResponse ?? null;
-    return await this.staffAssociationRequestRepository.save(request);
+    const saved = await this.staffAssociationRequestRepository.save(request);
+    await this.notifyStaffAssociationApproved(saved, company.name, companyResponse);
+    return saved;
   }
 
   public async rejectStaffAssociationRequest(
@@ -1301,7 +1428,10 @@ export class CompanyService {
     directorId: string,
     companyResponse?: string,
   ): Promise<StaffAssociationRequest> {
-    await this.assertDirectorCanManageCompany(companyId, directorId);
+    const company = await this.assertDirectorCanManageCompany(
+      companyId,
+      directorId,
+    );
 
     const request = await this.staffAssociationRequestRepository.findOne({
       where: {
@@ -1309,6 +1439,7 @@ export class CompanyService {
         company: { id: companyId },
         status: InvitationStatus.PENDING,
       },
+      relations: ['user'],
     });
     if (!request) {
       throw new NotFoundException('Solicitud no encontrada o ya procesada');
@@ -1317,6 +1448,8 @@ export class CompanyService {
     request.status = InvitationStatus.REJECTED;
     request.rejectedAt = new Date();
     request.companyResponse = companyResponse ?? null;
-    return await this.staffAssociationRequestRepository.save(request);
+    const saved = await this.staffAssociationRequestRepository.save(request);
+    await this.notifyStaffAssociationRejected(saved, company.name, companyResponse);
+    return saved;
   }
 }

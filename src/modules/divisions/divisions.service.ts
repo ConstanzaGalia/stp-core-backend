@@ -2,6 +2,7 @@ import {
   Injectable,
   ForbiddenException,
   NotFoundException,
+  BadRequestException,
 } from '@nestjs/common';
 import { InjectRepository } from '@nestjs/typeorm';
 import { Repository } from 'typeorm';
@@ -9,7 +10,7 @@ import { Division } from '../../entities/division.entity';
 import { Company } from '../../entities/company.entity';
 import { User } from '../../entities/user.entity';
 import { AthleteInvitation, InvitationStatus } from '../../entities/athlete-invitation.entity';
-import { UserRole } from '../../common/enums/enums';
+import { UserRole, CompanyAccountType } from '../../common/enums/enums';
 
 @Injectable()
 export class DivisionsService {
@@ -25,21 +26,30 @@ export class DivisionsService {
   ) {}
 
   private async assertCanManage(actor: User, companyId: string): Promise<Company> {
+    let company: Company | null = null;
+
     if (actor.role === UserRole.STP_ADMIN) {
-      const company = await this.companyRepository.findOne({ where: { id: companyId } });
+      company = await this.companyRepository.findOne({ where: { id: companyId } });
       if (!company) throw new NotFoundException('Centro no encontrado');
       return company;
     }
-    const companies = await this.companyRepository
+
+    company = await this.companyRepository
       .createQueryBuilder('c')
       .innerJoin('c.users', 'u', 'u.id = :uid', { uid: actor.id })
       .where('c.id = :cid', { cid: companyId })
       .getOne();
-    if (!companies) throw new ForbiddenException('No perteneces a este centro');
+
+    if (!company) throw new ForbiddenException('No perteneces a este centro');
     if (actor.role !== UserRole.DIRECTOR) {
       throw new ForbiddenException('Solo el coordinador o STP_ADMIN puede gestionar divisiones');
     }
-    return companies;
+    if (company.accountType !== CompanyAccountType.SPORTS_CLUB) {
+      throw new BadRequestException(
+        'Las divisiones solo están disponibles para clubes deportivos',
+      );
+    }
+    return company;
   }
 
   async listByCompany(companyId: string): Promise<Division[]> {

@@ -488,12 +488,13 @@ export class AthletesService {
       return rows.filter((inv) => !inv.user?.evaluationPortalOnly);
     }
 
+    const relations = isSportsClub ? ['user', 'division'] : ['user'];
     const rows = await this.invitationRepository.find({
       where: {
         company: { id: companyId },
         status: InvitationStatus.APPROVED,
       },
-      relations: ['user', 'division'],
+      relations,
       order: { approvedAt: 'DESC' },
     });
     return rows.filter((inv) => !inv.user?.evaluationPortalOnly);

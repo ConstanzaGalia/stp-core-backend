@@ -112,6 +112,13 @@ export class CompanyController {
     return this.companyService.findCompaniesByUser(userId);
   }
 
+  @Get('association-requests/mine')
+  @UseGuards(AuthGuard('jwt'))
+  @SkipCompanySubscriptionCheck()
+  public async getMyStaffAssociationRequest(@GetUser() user: User) {
+    return this.companyService.getMyStaffAssociationRequest(user.id);
+  }
+
   @Get(':id')
   @UseGuards(AuthGuard('jwt'))
   public async findOne(@Param('id') id: string): Promise<CreateCompanyDto> {

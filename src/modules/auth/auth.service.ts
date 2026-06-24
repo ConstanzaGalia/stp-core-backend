@@ -28,6 +28,11 @@ import { UpdateUserRoleDto } from './dto/update-user-role.dto';
 import { UpdateTrainerProfileDto } from './dto/update-trainer-profile.dto';
 import { UpdateUserProfileDto } from './dto/update-user-profile.dto';
 import { TrainerProfileResponseDto } from './dto/trainer-profile-response.dto';
+import { ResendVerificationDto } from './dto/resend-verification.dto';
+
+const DEFAULT_OTP_EXPIRES_MINUTES = 15;
+const DEFAULT_RESET_TOKEN_EXPIRES_MINUTES = 60;
+
 @Injectable()
 export class AuthService {
   constructor(
@@ -72,16 +77,17 @@ export class AuthService {
     try {
       const passEncrypted = await this.encryptService.encryptedData(password);
       const activeToken = this.generateOTP();
+      const activeTokenExpiresAt = this.getOtpExpiryDate();
       const userToSave = {
         name,
         lastName,
         email,
         password: passEncrypted,
         activeToken,
+        activeTokenExpiresAt,
         role,
       }
       const userSave = await this.userRepository.save(userToSave);
-      const token = this.signTokenForUser(userSave);
       return {
         id: userSave.id,
         name,
@@ -90,8 +96,8 @@ export class AuthService {
         role,
         isActive: userSave.isActive,
         activeToken,
-        token,
-      }
+        nameForEmail: name,
+      } as UserRegiter & { activeToken: string; nameForEmail: string };
     } catch (error) {
       if (error.code === '23505') {
         throw new ConflictException('USER_HAS_BEEN_REGISTERED');
@@ -156,33 +162,57 @@ export class AuthService {
   }
 
   async activateUser(activateUserDto: ActivateUserDTO): Promise<User> {
-    try {
-      const { token } = activateUserDto;
-      const user = await this.userRepository.findOne({where: {activeToken: token, isActive: false}});
-      if (!user) {
-        throw new UnprocessableEntityException(
-          'User not found or is already active',
-        );
-      }
-      user.isActive = true;
-      const activeUser = await this.userRepository.save(user);
-      return activeUser
-    } catch (error) {
-      Logger.log('Activate-User-Endpoint', error)
+    const { token } = activateUserDto;
+    const user = await this.userRepository.findOne({where: {activeToken: token, isActive: false}});
+    if (!user) {
+      throw new UnprocessableEntityException(
+        'User not found or is already active',
+      );
     }
+    if (this.isTokenExpired(user.activeTokenExpiresAt)) {
+      throw new UnprocessableEntityException('Verification code has expired');
+    }
+    user.isActive = true;
+    user.activeToken = null;
+    user.activeTokenExpiresAt = null;
+    return await this.userRepository.save(user);
+  }
+
+  async resendVerification(
+    resendVerificationDto: ResendVerificationDto,
+  ): Promise<{ sent: boolean; name?: string; email?: string; activeToken?: string }> {
+    const { email } = resendVerificationDto;
+    const user = await this.userRepository.findOne({
+      where: { email, isActive: false },
+    });
+    if (!user) {
+      return { sent: false };
+    }
+    const activeToken = this.generateOTP();
+    user.activeToken = activeToken;
+    user.activeTokenExpiresAt = this.getOtpExpiryDate();
+    await this.userRepository.save(user);
+    return {
+      sent: true,
+      name: user.name,
+      email: user.email,
+      activeToken,
+    };
   }
 
   async resetPasswordRequest(
     resetPasswordDto: RequestResetPasswordDto,
-  ): Promise<User> {
+  ): Promise<{ user: User; resetPasswordToken: string } | null> {
     const { email } = resetPasswordDto;
     const resetPasswordToken = v4();
     const user = await this.userRepository.findOne({where:{email:email}});
     if (!user) {
-      throw new NotFoundException('User not found');
+      return null;
     }
     user.resetPasswordToken = resetPasswordToken;
-    return await this.userRepository.save(user);
+    user.resetPasswordTokenExpiresAt = this.getResetTokenExpiryDate();
+    const saved = await this.userRepository.save(user);
+    return { user: saved, resetPasswordToken };
   }
 
   async resetPassword(
@@ -192,9 +222,16 @@ export class AuthService {
     const passEncrypted = await this.encryptService.encryptedData(password);
     const user = await this.userRepository.findOne({where: {resetPasswordToken: resetPasswordToken}});
     if (!user) {
-      throw new NotFoundException('User not found');
+      throw new NotFoundException('Invalid or expired reset token');
+    }
+    if (this.isTokenExpired(user.resetPasswordTokenExpiresAt)) {
+      user.resetPasswordToken = null;
+      user.resetPasswordTokenExpiresAt = null;
+      await this.userRepository.save(user);
+      throw new UnprocessableEntityException('Reset token has expired');
     }
     user.resetPasswordToken = null;
+    user.resetPasswordTokenExpiresAt = null;
     user.password = passEncrypted;
     return await this.userRepository.save(user);
   }
@@ -221,6 +258,35 @@ export class AuthService {
   private generateOTP(): string {
     const otp = Math.floor(100000 + Math.random() * 900000);
     return otp.toString();
+  }
+
+  private getOtpExpiryMinutes(): number {
+    const configured = Number(process.env.OTP_EXPIRES_MINUTES);
+    return Number.isFinite(configured) && configured > 0
+      ? configured
+      : DEFAULT_OTP_EXPIRES_MINUTES;
+  }
+
+  private getResetTokenExpiryMinutes(): number {
+    const configured = Number(process.env.RESET_TOKEN_EXPIRES_MINUTES);
+    return Number.isFinite(configured) && configured > 0
+      ? configured
+      : DEFAULT_RESET_TOKEN_EXPIRES_MINUTES;
+  }
+
+  private getOtpExpiryDate(): Date {
+    return new Date(Date.now() + this.getOtpExpiryMinutes() * 60 * 1000);
+  }
+
+  private getResetTokenExpiryDate(): Date {
+    return new Date(Date.now() + this.getResetTokenExpiryMinutes() * 60 * 1000);
+  }
+
+  private isTokenExpired(expiresAt?: Date | null): boolean {
+    if (!expiresAt) {
+      return false;
+    }
+    return new Date() > new Date(expiresAt);
   }
 
   async updateUserRole(
