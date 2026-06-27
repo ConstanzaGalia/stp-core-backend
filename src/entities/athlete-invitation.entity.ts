@@ -9,6 +9,7 @@ import {
 } from 'typeorm';
 import { User } from './user.entity';
 import { Company } from './company.entity';
+import { Division } from './division.entity';
 
 export enum InvitationStatus {
   PENDING = 'pending',
@@ -56,6 +57,14 @@ export class AthleteInvitation {
   })
   @JoinColumn({ name: 'companyId' })
   company: Company;
+
+  /** División a la que pertenece la jugadora (solo para clubs deportivos). Nullable. */
+  @ManyToOne(() => Division, { nullable: true, onDelete: 'SET NULL', eager: false })
+  @JoinColumn({ name: 'division_id' })
+  division: Division | null;
+
+  @Column({ name: 'division_id', type: 'uuid', nullable: true })
+  divisionId: string | null;
 
   @CreateDateColumn()
   createdAt: Date;

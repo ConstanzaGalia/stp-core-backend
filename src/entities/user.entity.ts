@@ -86,6 +86,12 @@ export class User {
   @Column({default: null, name: 'reset_password_token'})
   resetPasswordToken?: string;
 
+  @Column({ name: 'active_token_expires_at', type: 'timestamp', nullable: true })
+  activeTokenExpiresAt?: Date | null;
+
+  @Column({ name: 'reset_password_token_expires_at', type: 'timestamp', nullable: true })
+  resetPasswordTokenExpiresAt?: Date | null;
+
   @ApiProperty()
   @Column({type: 'boolean', default: false, name: 'is_delete'})
   isDelete?: boolean;

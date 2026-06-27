@@ -4,6 +4,7 @@
  * si el patrón no resuelve igual en watch/dist).
  */
 import { AthleteInvitation } from './entities/athlete-invitation.entity';
+import { Division } from './entities/division.entity';
 import { AthleteSchedule } from './entities/athlete-schedule.entity';
 import { AvailableClass } from './entities/available-class.entity';
 import { Category } from './entities/category.entity';
@@ -54,6 +55,7 @@ export const TYPEORM_ENTITIES = [
   PhysicalEvaluationTest,
   AthleteInvitation,
   AthleteSchedule,
+  Division,
   AvailableClass,
   Category,
   ClassUsage,

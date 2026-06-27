@@ -1,5 +1,17 @@
-export const registerEmail = (email: string, code: string, name: string, from: string) => {
-  // Validar que el email no sea null o undefined
+import {
+  escapeHtml,
+  renderStpEmailLayout,
+  stpButton,
+  stpHeading,
+  stpInfoBox,
+  stpLink,
+  stpOtpBox,
+  stpParagraph,
+  stpWarningBox,
+  STP_EMAIL_COLORS,
+} from './emailBrand';
+
+export const registerEmail = (email: string, code: string, name: string, from: string, expiresMinutes = 15) => {
   if (!email || email.trim() === '') {
     throw new Error('Email is required for registration email');
   }
@@ -8,43 +20,22 @@ export const registerEmail = (email: string, code: string, name: string, from: s
     to: email.trim(),
     subject: '¡Bienvenido a STP!, Confirmá tu email.',
     from,
-    html: `
-      <!DOCTYPE html>
-      <html>
-        <head>
-          <meta charset="utf-8">
-          <title>Confirmación de Email - STP</title>
-        </head>
-        <body style="font-family: Arial, sans-serif; margin: 0; padding: 0; background-color: #f4f4f4;">
-          <div style="max-width: 600px; margin: 0 auto; background-color: white; padding: 40px;">
-            <div style="text-align: center; margin-bottom: 30px;">
-              <h1 style="color: #333; margin: 0;">STP</h1>
-              <p style="color: #666; margin: 10px 0;">Entrenamiento Profesional</p>
-            </div>
-            
-            <h2 style="color: #333; text-align: center;">¡Hola ${name}!</h2>
-            <h3 style="color: #555; text-align: center;">Estás a un solo paso de formar parte de la mejor comunidad de entrenadores</h3>
-            
-            <div style="background-color: #f8f9fa; padding: 30px; border-radius: 10px; text-align: center; margin: 30px 0;">
-              <p style="color: #666; margin-bottom: 20px;">Ingresá el siguiente código para confirmar tu dirección de correo electrónico:</p>
-              <div style="background-color: #007bff; color: white; padding: 15px 30px; border-radius: 5px; font-size: 24px; font-weight: bold; display: inline-block;">
-                ${code}
-              </div>
-            </div>
-            
-            <p style="color: #666; text-align: center; font-size: 14px;">
-              Si no solicitaste este código, puedes ignorar este email.
-            </p>
-          </div>
-        </body>
-      </html>
-    `,
-  }
+    html: renderStpEmailLayout({
+      title: 'Confirmá tu email',
+      preheader: `Tu código de verificación es ${code}`,
+      bodyHtml: `
+        ${stpHeading(`¡Hola ${name}!`)}
+        ${stpParagraph('Estás a un solo paso de formar parte de la mejor comunidad de entrenadores.')}
+        ${stpOtpBox(code)}
+        ${stpParagraph(`Este código expira en ${expiresMinutes} minutos.`, { muted: true })}
+        ${stpParagraph('Si no solicitaste este código, podés ignorar este email.', { muted: true, marginBottom: '0' })}
+      `,
+    }),
+  };
   return mail;
 };
 
-export const resetPassEmail = (email: string, url: string, name: string, from: string) => {
-  // Validar que el email no sea null o undefined
+export const resetPassEmail = (email: string, url: string, name: string, from: string, expiresMinutes = 60) => {
   if (!email || email.trim() === '') {
     throw new Error('Email is required for reset password email');
   }
@@ -53,161 +44,102 @@ export const resetPassEmail = (email: string, url: string, name: string, from: s
     to: email.trim(),
     subject: '¡Restablecé tu contraseña!',
     from,
-    html: `
-      <!DOCTYPE html>
-      <html>
-        <head>
-          <meta charset="utf-8">
-          <title>Restablecer Contraseña - STP</title>
-        </head>
-        <body style="font-family: Arial, sans-serif; margin: 0; padding: 0; background-color: #f4f4f4;">
-          <div style="max-width: 600px; margin: 0 auto; background-color: white; padding: 40px;">
-            <div style="text-align: center; margin-bottom: 30px;">
-              <h1 style="color: #333; margin: 0;">STP</h1>
-              <p style="color: #666; margin: 10px 0;">Entrenamiento Profesional</p>
-            </div>
-            
-            <h2 style="color: #333; text-align: center;">¡Hola ${name}!</h2>
-            <p style="color: #666; text-align: center; font-size: 16px;">Solicitaste cambiar tu contraseña</p>
-            
-            <div style="text-align: center; margin: 30px 0;">
-              <p style="color: #666; margin-bottom: 20px;">Al hacer click en el siguiente botón, podrás realizar el cambio de clave:</p>
-              <a href="${url}" style="background-color: #dc3545; color: white; padding: 15px 30px; text-decoration: none; border-radius: 5px; font-weight: bold; display: inline-block;">
-                Restablecer Contraseña
-              </a>
-            </div>
-            
-            <p style="color: #666; text-align: center; font-size: 14px;">
-              Si no solicitaste este cambio, puedes ignorar este email.
-            </p>
-          </div>
-        </body>
-      </html>
-    `,
-  }
+    html: renderStpEmailLayout({
+      title: 'Restablecer contraseña',
+      preheader: 'Solicitaste cambiar tu contraseña en STP',
+      bodyHtml: `
+        ${stpHeading(`¡Hola ${name}!`)}
+        ${stpParagraph('Solicitaste cambiar tu contraseña. Hacé click en el botón para continuar.')}
+        ${stpButton(url, 'Restablecer contraseña')}
+        ${stpParagraph(`Si el botón no funciona, copiá y pegá este enlace en tu navegador:<br/>${stpLink(url)}`, { muted: true })}
+        ${stpParagraph(`Este enlace expira en ${expiresMinutes} minutos.`, { muted: true })}
+        ${stpParagraph('Si no solicitaste este cambio, podés ignorar este email.', { muted: true, marginBottom: '0' })}
+      `,
+    }),
+  };
   return mail;
 };
 
 export const inviteStudentEmail = (
-  email: string, 
-  name: string, 
-  companyName: string, 
-  joinUrl: string, 
-  from: string
+  email: string,
+  name: string,
+  companyName: string,
+  joinUrl: string,
+  from: string,
 ) => {
-  // Validar que el email no sea null o undefined
   if (!email || email.trim() === '') {
     throw new Error('Email is required for student invitation');
   }
+
+  const safeCompany = escapeHtml(companyName);
 
   const mail = {
     to: email.trim(),
     subject: `¡${companyName} te invita al centro de entrenamiento!`,
     from,
-    html: `
-      <!DOCTYPE html>
-      <html>
-        <head>
-          <meta charset="utf-8">
-          <title>Invitación al Centro - STP</title>
-        </head>
-        <body style="font-family: Arial, sans-serif; margin: 0; padding: 0; background-color: #f4f4f4;">
-          <div style="max-width: 600px; margin: 0 auto; background-color: white; padding: 40px;">
-            <div style="text-align: center; margin-bottom: 30px;">
-              <h1 style="color: #333; margin: 0;">STP</h1>
-              <p style="color: #666; margin: 10px 0;">Entrenamiento Profesional</p>
-            </div>
-            
-            <h2 style="color: #333; text-align: center;">¡Hola ${name}!</h2>
-            <h3 style="color: #555; text-align: center;">¡${companyName} te invita a formar parte de su centro de entrenamiento!</h3>
-            
-            <div style="background-color: #f8f9fa; padding: 30px; border-radius: 10px; text-align: center; margin: 30px 0;">
-              <p style="color: #666; margin-bottom: 20px; font-size: 16px;">
-                Un director de <strong>${companyName}</strong> te ha invitado a unirte como alumno/a a su centro de entrenamiento.
-              </p>
-              <p style="color: #666; margin-bottom: 30px;">
-                ¡Hacé click en el botón para aceptar la invitación y empezar tu entrenamiento!
-              </p>
-              <a href="${joinUrl}" style="background-color: #28a745; color: white; padding: 15px 30px; text-decoration: none; border-radius: 5px; font-weight: bold; display: inline-block;">
-                ¡Aceptar Invitación!
-              </a>
-            </div>
-            
-            <div style="background-color: #e9ecef; padding: 20px; border-radius: 5px; margin: 20px 0;">
-              <p style="color: #666; font-size: 14px; margin: 0;">
-                <strong>¿Qué significa esto?</strong><br>
-                Al aceptar esta invitación podrás:
-              </p>
-              <ul style="color: #666; font-size: 14px; text-align: left; margin: 10px 0;">
-                <li>Acceder a los planes de entrenamiento del centro</li>
-                <li>Reservar clases personalizadas</li>
-                <li>Recibir seguimiento personalizado</li>
-                <li>Formar parte de la comunidad de ${companyName}</li>
-              </ul>
-            </div>
-            
-            <p style="color: #666; text-align: center; font-size: 14px;">
-              Si no te interesa formar parte de este centro, podés ignorar este email.
-            </p>
-          </div>
-        </body>
-      </html>
-    `,
-  }
+    html: renderStpEmailLayout({
+      title: 'Invitación al centro',
+      preheader: `${companyName} te invita a unirte como alumno/a`,
+      bodyHtml: `
+        ${stpHeading(`¡Hola ${name}!`)}
+        ${stpHeading(`¡${companyName} te invita a formar parte de su centro!`, 3)}
+        ${stpInfoBox(`
+          ${stpParagraph(`Un director de <strong>${safeCompany}</strong> te invitó a unirte como alumno/a a su centro de entrenamiento.`, { align: 'left' })}
+          ${stpParagraph('Hacé click en el botón para aceptar la invitación y empezar tu entrenamiento.', { align: 'left', marginBottom: '0' })}
+        `)}
+        ${stpButton(joinUrl, 'Aceptar invitación')}
+        ${stpInfoBox(`
+          <p style="margin: 0 0 10px; color: ${STP_EMAIL_COLORS.secondary}; font-size: 15px; font-weight: 700;">¿Qué significa esto?</p>
+          <p style="margin: 0 0 10px; color: ${STP_EMAIL_COLORS.text}; font-size: 14px;">Al aceptar esta invitación podrás:</p>
+          <ul style="margin: 0; padding-left: 20px; color: ${STP_EMAIL_COLORS.text}; font-size: 14px; line-height: 1.6;">
+            <li>Acceder a los planes de entrenamiento del centro</li>
+            <li>Reservar clases personalizadas</li>
+            <li>Recibir seguimiento personalizado</li>
+            <li>Formar parte de la comunidad de ${safeCompany}</li>
+          </ul>
+        `)}
+        ${stpParagraph('Si no te interesa formar parte de este centro, podés ignorar este email.', { muted: true, marginBottom: '0' })}
+      `,
+    }),
+  };
   return mail;
 };
 
-/**
- * Email cuando el centro aprueba la solicitud del alumno (ya forma parte del centro).
- * Mismo estilo que el correo de verificación (registerEmail).
- */
 export const approvalStudentEmail = (
   email: string,
   name: string,
   companyName: string,
   dashboardUrl: string,
   from: string,
-  companyMessage?: string
+  companyMessage?: string,
 ) => {
   if (!email || email.trim() === '') {
     throw new Error('Email is required for approval notification');
   }
+
+  const safeCompany = escapeHtml(companyName);
+  const messageBlock = companyMessage
+    ? stpParagraph(`"${escapeHtml(companyMessage)}"`, { align: 'center', muted: true })
+    : '';
+
   const mail = {
     to: email.trim(),
     subject: `¡Tu solicitud fue aprobada! Ya formás parte de ${companyName}`,
     from,
-    html: `
-      <!DOCTYPE html>
-      <html>
-        <head>
-          <meta charset="utf-8">
-          <title>Solicitud aprobada - STP</title>
-        </head>
-        <body style="font-family: Arial, sans-serif; margin: 0; padding: 0; background-color: #f4f4f4;">
-          <div style="max-width: 600px; margin: 0 auto; background-color: white; padding: 40px;">
-            <div style="text-align: center; margin-bottom: 30px;">
-              <h1 style="color: #333; margin: 0;">STP</h1>
-              <p style="color: #666; margin: 10px 0;">Entrenamiento Profesional</p>
-            </div>
-            
-            <h2 style="color: #333; text-align: center;">¡Hola ${name}!</h2>
-            <h3 style="color: #555; text-align: center;">Tu solicitud para unirte a ${companyName} fue aprobada</h3>
-            
-            <div style="background-color: #f8f9fa; padding: 30px; border-radius: 10px; text-align: center; margin: 30px 0;">
-              <p style="color: #666; margin-bottom: 20px;">Ya formás parte del centro de entrenamiento. Hacé click en el botón para acceder a tu panel de atleta:</p>
-              ${companyMessage ? `<p style="color: #555; margin-bottom: 20px; font-style: italic;">"${companyMessage}"</p>` : ''}
-              <a href="${dashboardUrl}" style="background-color: #007bff; color: white; padding: 15px 30px; text-decoration: none; border-radius: 5px; font-size: 16px; font-weight: bold; display: inline-block;">
-                Ir a mi dashboard
-              </a>
-            </div>
-            
-            <p style="color: #666; text-align: center; font-size: 14px;">
-              Si no solicitaste unirte a este centro, podés ignorar este email.
-            </p>
-          </div>
-        </body>
-      </html>
-    `,
+    html: renderStpEmailLayout({
+      title: 'Solicitud aprobada',
+      preheader: `Ya formás parte de ${companyName}`,
+      bodyHtml: `
+        ${stpHeading(`¡Hola ${name}!`)}
+        ${stpHeading(`Tu solicitud para unirte a ${companyName} fue aprobada`, 3)}
+        ${stpInfoBox(`
+          ${stpParagraph('Ya formás parte del centro de entrenamiento. Hacé click en el botón para acceder a tu panel de atleta.', { align: 'left', marginBottom: companyMessage ? '16px' : '0' })}
+          ${messageBlock}
+        `)}
+        ${stpButton(dashboardUrl, 'Ir a mi dashboard')}
+        ${stpParagraph('Si no solicitaste unirte a este centro, podés ignorar este email.', { muted: true, marginBottom: '0' })}
+      `,
+    }),
   };
   return mail;
 };
@@ -218,69 +150,150 @@ export const notifyTeachersAvailableClassesEmail = (
   studentName: string,
   companyName: string,
   availableClassesCount: number,
-  from: string
+  from: string,
 ) => {
   if (!email || email.trim() === '') {
     throw new Error('Email is required for teacher notification');
   }
 
+  const safeStudent = escapeHtml(studentName);
+  const safeCompany = escapeHtml(companyName);
+  const classesLabel = `${availableClassesCount} clase${availableClassesCount !== 1 ? 's' : ''}`;
+
   const mail = {
     to: email.trim(),
-    subject: `⚠️ Clases no reservadas automáticamente - ${studentName}`,
+    subject: `Clases no reservadas automáticamente - ${studentName}`,
     from,
-    html: `
-      <!DOCTYPE html>
-      <html>
-        <head>
-          <meta charset="utf-8">
-          <title>Notificación de Clases Disponibles - STP</title>
-        </head>
-        <body style="font-family: Arial, sans-serif; margin: 0; padding: 0; background-color: #f4f4f4;">
-          <div style="max-width: 600px; margin: 0 auto; background-color: white; padding: 40px;">
-            <div style="text-align: center; margin-bottom: 30px;">
-              <h1 style="color: #333; margin: 0;">STP</h1>
-              <p style="color: #666; margin: 10px 0;">Entrenamiento Profesional</p>
-            </div>
-            
-            <h2 style="color: #333; text-align: center;">¡Hola ${trainerName}!</h2>
-            
-            <div style="background-color: #fff3cd; border-left: 4px solid #ffc107; padding: 20px; border-radius: 5px; margin: 30px 0;">
-              <h3 style="color: #856404; margin-top: 0;">⚠️ Atención Requerida</h3>
-              <p style="color: #856404; margin-bottom: 0; font-size: 16px;">
-                Después de procesar el pago de <strong>${studentName}</strong> en <strong>${companyName}</strong>, 
-                se crearon <strong>${availableClassesCount} clase${availableClassesCount !== 1 ? 's' : ''}</strong> 
-                que no pudieron reservarse automáticamente.
-              </p>
-            </div>
-            
-            <div style="background-color: #f8f9fa; padding: 30px; border-radius: 10px; margin: 30px 0;">
-              <h3 style="color: #333; margin-top: 0;">¿Qué significa esto?</h3>
-              <p style="color: #666; margin-bottom: 15px;">
-                Las clases no se pudieron reservar automáticamente debido a:
-              </p>
-              <ul style="color: #666; font-size: 14px; text-align: left; margin: 10px 0;">
-                <li><strong>Falta de cupo:</strong> Los turnos ya estaban completos</li>
-                <li><strong>Turnos no cargados:</strong> No se han generado los turnos para las fechas correspondientes</li>
-              </ul>
-              <p style="color: #666; margin-top: 20px; font-weight: bold;">
-                El alumno puede reservar estas clases manualmente hasta su fecha de vencimiento.
-              </p>
-            </div>
-            
-            <div style="background-color: #e7f3ff; padding: 20px; border-radius: 5px; margin: 20px 0;">
-              <p style="color: #004085; margin: 0; font-size: 14px;">
-                <strong>Recomendación:</strong> Verifica que los turnos estén cargados correctamente y que haya cupo disponible 
-                para evitar que esto vuelva a ocurrir.
-              </p>
-            </div>
-            
-            <p style="color: #666; text-align: center; font-size: 14px; margin-top: 30px;">
-              Este es un email automático del sistema STP.
-            </p>
-          </div>
-        </body>
-      </html>
-    `,
+    html: renderStpEmailLayout({
+      title: 'Clases no reservadas',
+      preheader: `${studentName} tiene ${classesLabel} sin reservar automáticamente`,
+      bodyHtml: `
+        ${stpHeading(`¡Hola ${trainerName}!`)}
+        ${stpWarningBox(`
+          <p style="margin: 0 0 8px; color: ${STP_EMAIL_COLORS.warningText}; font-size: 16px; font-weight: 700;">Atención requerida</p>
+          <p style="margin: 0; color: ${STP_EMAIL_COLORS.warningText}; font-size: 15px; line-height: 1.5;">
+            Después de procesar el pago de <strong>${safeStudent}</strong> en <strong>${safeCompany}</strong>,
+            se crearon <strong>${classesLabel}</strong> que no pudieron reservarse automáticamente.
+          </p>
+        `)}
+        ${stpInfoBox(`
+          <p style="margin: 0 0 12px; color: ${STP_EMAIL_COLORS.secondary}; font-size: 16px; font-weight: 700;">¿Qué significa esto?</p>
+          <p style="margin: 0 0 12px; color: ${STP_EMAIL_COLORS.text}; font-size: 14px;">Las clases no se pudieron reservar automáticamente debido a:</p>
+          <ul style="margin: 0 0 16px; padding-left: 20px; color: ${STP_EMAIL_COLORS.text}; font-size: 14px; line-height: 1.6;">
+            <li><strong>Falta de cupo:</strong> los turnos ya estaban completos</li>
+            <li><strong>Turnos no cargados:</strong> no se generaron turnos para las fechas correspondientes</li>
+          </ul>
+          <p style="margin: 0; color: ${STP_EMAIL_COLORS.text}; font-size: 14px; font-weight: 700;">
+            El alumno puede reservar estas clases manualmente hasta su fecha de vencimiento.
+          </p>
+        `)}
+        ${stpInfoBox(`
+          <p style="margin: 0; color: ${STP_EMAIL_COLORS.infoText}; font-size: 14px; line-height: 1.5;">
+            <strong>Recomendación:</strong> verificá que los turnos estén cargados correctamente y que haya cupo disponible para evitar que esto vuelva a ocurrir.
+          </p>
+        `)}
+      `,
+    }),
   };
   return mail;
+};
+
+export const staffAssociationRequestEmail = (
+  directorEmail: string,
+  directorName: string,
+  applicantName: string,
+  applicantRole: string,
+  companyName: string,
+  reviewUrl: string,
+  from: string,
+  applicantMessage?: string,
+) => {
+  if (!directorEmail?.trim()) {
+    throw new Error('Email is required for staff association request');
+  }
+
+  const messageBlock = applicantMessage
+    ? stpParagraph(`Mensaje del solicitante: "${escapeHtml(applicantMessage)}"`, { align: 'left', muted: true })
+    : '';
+
+  return {
+    to: directorEmail.trim(),
+    subject: `Nueva solicitud de asociación — ${companyName}`,
+    from,
+    html: renderStpEmailLayout({
+      title: 'Solicitud de asociación',
+      preheader: `${applicantName} quiere unirse a ${companyName}`,
+      bodyHtml: `
+        ${stpHeading(`¡Hola ${directorName}!`)}
+        ${stpParagraph(`<strong>${escapeHtml(applicantName)}</strong> (${escapeHtml(applicantRole)}) solicitó asociarse a <strong>${escapeHtml(companyName)}</strong>.`, { align: 'left' })}
+        ${messageBlock}
+        ${stpButton(reviewUrl, 'Revisar solicitudes')}
+      `,
+    }),
+  };
+};
+
+export const staffAssociationApprovedEmail = (
+  email: string,
+  name: string,
+  companyName: string,
+  dashboardUrl: string,
+  from: string,
+  companyResponse?: string,
+) => {
+  if (!email?.trim()) {
+    throw new Error('Email is required for staff association approval');
+  }
+
+  const responseBlock = companyResponse
+    ? stpParagraph(`"${escapeHtml(companyResponse)}"`, { align: 'center', muted: true })
+    : '';
+
+  return {
+    to: email.trim(),
+    subject: `¡Tu solicitud fue aprobada! — ${companyName}`,
+    from,
+    html: renderStpEmailLayout({
+      title: 'Solicitud aprobada',
+      preheader: `Ya formás parte de ${companyName}`,
+      bodyHtml: `
+        ${stpHeading(`¡Hola ${name}!`)}
+        ${stpParagraph(`Tu solicitud para unirte a <strong>${escapeHtml(companyName)}</strong> fue aprobada.`)}
+        ${responseBlock}
+        ${stpButton(dashboardUrl, 'Ir al dashboard')}
+      `,
+    }),
+  };
+};
+
+export const staffAssociationRejectedEmail = (
+  email: string,
+  name: string,
+  companyName: string,
+  from: string,
+  companyResponse?: string,
+) => {
+  if (!email?.trim()) {
+    throw new Error('Email is required for staff association rejection');
+  }
+
+  const responseBlock = companyResponse
+    ? stpParagraph(`"${escapeHtml(companyResponse)}"`, { align: 'center', muted: true })
+    : '';
+
+  return {
+    to: email.trim(),
+    subject: `Actualización de tu solicitud — ${companyName}`,
+    from,
+    html: renderStpEmailLayout({
+      title: 'Solicitud no aprobada',
+      preheader: `Tu solicitud para ${companyName} no fue aprobada`,
+      bodyHtml: `
+        ${stpHeading(`¡Hola ${name}!`)}
+        ${stpParagraph(`Tu solicitud para unirte a <strong>${escapeHtml(companyName)}</strong> no fue aprobada en este momento.`)}
+        ${responseBlock}
+        ${stpParagraph('Podés contactar al director del centro si tenés dudas.', { muted: true, marginBottom: '0' })}
+      `,
+    }),
+  };
 };

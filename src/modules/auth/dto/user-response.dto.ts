@@ -6,7 +6,5 @@ export class UserRegiter {
   lastName: string;
   email: string;
   role: UserRole;
-  activeToken: string;
   isActive: boolean;
-  token: string;
 }

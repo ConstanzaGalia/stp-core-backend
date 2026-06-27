@@ -52,6 +52,7 @@ export class CompanyController {
     @Req() request,
     @Query('active') active?: string,
     @Query('search') search?: string,
+    @Query('accountType') accountType?: string,
   ) {
     if (user.role !== UserRole.STP_ADMIN) {
       throw new ForbiddenException('Only STP_ADMIN can list all companies');
@@ -62,7 +63,7 @@ export class CompanyController {
       pagination.offset,
       pagination.limit,
       request.url,
-      { active: activeFilter, search },
+      { active: activeFilter, search, accountType },
     );
   }
 
@@ -109,6 +110,13 @@ export class CompanyController {
   @SkipCompanySubscriptionCheck()
   public async getCompaniesByUser(@Param('userId') userId: string) {
     return this.companyService.findCompaniesByUser(userId);
+  }
+
+  @Get('association-requests/mine')
+  @UseGuards(AuthGuard('jwt'))
+  @SkipCompanySubscriptionCheck()
+  public async getMyStaffAssociationRequest(@GetUser() user: User) {
+    return this.companyService.getMyStaffAssociationRequest(user.id);
   }
 
   @Get(':id')

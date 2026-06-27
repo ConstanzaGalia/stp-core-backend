@@ -11,7 +11,8 @@ import { QueryFailedError, Repository } from 'typeorm';
 import { AthleteInvitation, InvitationStatus } from '../../entities/athlete-invitation.entity';
 import { User } from '../../entities/user.entity';
 import { Company } from '../../entities/company.entity';
-import { UserRole } from '../../common/enums/enums';
+import { Division } from '../../entities/division.entity';
+import { CompanyAccountType, UserRole } from '../../common/enums/enums';
 import { MailingService } from '../mailer/mailing.service';
 import { EncryptService } from '../../services/bcrypt.service';
 import { inviteStudentEmail, approvalStudentEmail } from '../../utils/emailTemplates';
@@ -30,6 +31,8 @@ export class AthletesService {
     private readonly userRepository: Repository<User>,
     @InjectRepository(Company)
     private readonly companyRepository: Repository<Company>,
+    @InjectRepository(Division)
+    private readonly divisionRepository: Repository<Division>,
     private readonly mailingService: MailingService,
     private readonly encryptService: EncryptService,
   ) {}
@@ -450,14 +453,49 @@ export class AthletesService {
   /**
    * La empresa ve sus atletas aprobados
    */
-  async getCompanyAthletes(companyId: string) {
+  async getCompanyAthletes(companyId: string, actor?: User) {
+    const company = await this.companyRepository.findOne({ where: { id: companyId } });
+
+    const isScopedRole =
+      actor &&
+      (actor.role === UserRole.TRAINER || actor.role === UserRole.SUB_TRAINER);
+
+    const isSportsClub = company?.accountType === CompanyAccountType.SPORTS_CLUB;
+
+    if (isScopedRole && isSportsClub) {
+      // Solo ver atletas de las divisiones asignadas al entrenador
+      const coachDivisions = await this.divisionRepository
+        .createQueryBuilder('d')
+        .innerJoin('d.coaches', 'c', 'c.id = :uid', { uid: actor.id })
+        .where('d.company_id = :cid', { cid: companyId })
+        .select(['d.id'])
+        .getMany();
+
+      const divisionIds = coachDivisions.map((d) => d.id);
+
+      if (divisionIds.length === 0) return [];
+
+      const rows = await this.invitationRepository
+        .createQueryBuilder('inv')
+        .innerJoinAndSelect('inv.user', 'user')
+        .leftJoinAndSelect('inv.division', 'division')
+        .where('inv.companyId = :cid', { cid: companyId })
+        .andWhere('inv.status = :status', { status: InvitationStatus.APPROVED })
+        .andWhere('inv.division_id IN (:...divIds)', { divIds: divisionIds })
+        .orderBy('inv.approvedAt', 'DESC')
+        .getMany();
+
+      return rows.filter((inv) => !inv.user?.evaluationPortalOnly);
+    }
+
+    const relations = isSportsClub ? ['user', 'division'] : ['user'];
     const rows = await this.invitationRepository.find({
       where: {
         company: { id: companyId },
-        status: InvitationStatus.APPROVED
+        status: InvitationStatus.APPROVED,
       },
-      relations: ['user'],
-      order: { approvedAt: 'DESC' }
+      relations,
+      order: { approvedAt: 'DESC' },
     });
     return rows.filter((inv) => !inv.user?.evaluationPortalOnly);
   }

@@ -5,13 +5,18 @@ export class AddStaffScheduling1749800000000 implements MigrationInterface {
 
   public async up(queryRunner: QueryRunner): Promise<void> {
     await queryRunner.query(`
-      CREATE TYPE "staff_compensation_profile_pay_type_enum" AS ENUM (
-        'hourly', 'fixed_monthly', 'weekly_hours_x4'
-      )
+      DO $$
+      BEGIN
+        IF NOT EXISTS (SELECT 1 FROM pg_type WHERE typname = 'staff_compensation_profile_pay_type_enum') THEN
+          CREATE TYPE "staff_compensation_profile_pay_type_enum" AS ENUM (
+            'hourly', 'fixed_monthly', 'weekly_hours_x4'
+          );
+        END IF;
+      END $$;
     `);
 
     await queryRunner.query(`
-      CREATE TABLE "staff_compensation_profile" (
+      CREATE TABLE IF NOT EXISTS "staff_compensation_profile" (
         "id" uuid NOT NULL DEFAULT uuid_generate_v4(),
         "companyId" uuid NOT NULL,
         "userId" uuid NOT NULL,
@@ -32,7 +37,7 @@ export class AddStaffScheduling1749800000000 implements MigrationInterface {
     `);
 
     await queryRunner.query(`
-      CREATE TABLE "staff_shift_assignment" (
+      CREATE TABLE IF NOT EXISTS "staff_shift_assignment" (
         "id" uuid NOT NULL DEFAULT uuid_generate_v4(),
         "companyId" uuid NOT NULL,
         "userId" uuid NOT NULL,
@@ -51,12 +56,12 @@ export class AddStaffScheduling1749800000000 implements MigrationInterface {
       )
     `);
     await queryRunner.query(`
-      CREATE INDEX "IDX_staff_shift_assignment_company_date"
+      CREATE INDEX IF NOT EXISTS "IDX_staff_shift_assignment_company_date"
       ON "staff_shift_assignment" ("companyId", "date")
     `);
 
     await queryRunner.query(`
-      CREATE TABLE "staff_shift_closure" (
+      CREATE TABLE IF NOT EXISTS "staff_shift_closure" (
         "id" uuid NOT NULL DEFAULT uuid_generate_v4(),
         "companyId" uuid NOT NULL,
         "date" date NOT NULL,
@@ -71,12 +76,12 @@ export class AddStaffScheduling1749800000000 implements MigrationInterface {
       )
     `);
     await queryRunner.query(`
-      CREATE INDEX "IDX_staff_shift_closure_company_date"
+      CREATE INDEX IF NOT EXISTS "IDX_staff_shift_closure_company_date"
       ON "staff_shift_closure" ("companyId", "date")
     `);
 
     await queryRunner.query(`
-      CREATE TABLE "staff_week_note" (
+      CREATE TABLE IF NOT EXISTS "staff_week_note" (
         "id" uuid NOT NULL DEFAULT uuid_generate_v4(),
         "companyId" uuid NOT NULL,
         "week_start_date" date NOT NULL,

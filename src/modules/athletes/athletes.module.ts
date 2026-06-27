@@ -5,6 +5,7 @@ import { AthletesService } from './athletes.service';
 import { AthleteInvitation } from '../../entities/athlete-invitation.entity';
 import { User } from '../../entities/user.entity';
 import { Company } from '../../entities/company.entity';
+import { Division } from '../../entities/division.entity';
 import { AuthModule } from '../auth/auth.module';
 import { MailingModule } from '../mailer/mailing.module';
 import { CompanyModule } from '../company/company.module';
@@ -15,7 +16,8 @@ import { EncryptService } from '../../services/bcrypt.service';
     TypeOrmModule.forFeature([
       AthleteInvitation,
       User,
-      Company
+      Company,
+      Division,
     ]),
     AuthModule,
     MailingModule,

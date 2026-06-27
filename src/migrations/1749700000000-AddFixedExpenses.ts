@@ -5,14 +5,24 @@ export class AddFixedExpenses1749700000000 implements MigrationInterface {
 
   public async up(queryRunner: QueryRunner): Promise<void> {
     await queryRunner.query(`
-      CREATE TYPE "fixed_expense_month_status_status_enum" AS ENUM ('pending', 'paid', 'na', 'no')
+      DO $$
+      BEGIN
+        IF NOT EXISTS (SELECT 1 FROM pg_type WHERE typname = 'fixed_expense_month_status_status_enum') THEN
+          CREATE TYPE "fixed_expense_month_status_status_enum" AS ENUM ('pending', 'paid', 'na', 'no');
+        END IF;
+      END $$;
     `);
     await queryRunner.query(`
-      CREATE TYPE "fixed_expense_month_status_source_enum" AS ENUM ('manual', 'expense')
+      DO $$
+      BEGIN
+        IF NOT EXISTS (SELECT 1 FROM pg_type WHERE typname = 'fixed_expense_month_status_source_enum') THEN
+          CREATE TYPE "fixed_expense_month_status_source_enum" AS ENUM ('manual', 'expense');
+        END IF;
+      END $$;
     `);
 
     await queryRunner.query(`
-      CREATE TABLE "fixed_expense_template" (
+      CREATE TABLE IF NOT EXISTS "fixed_expense_template" (
         "id" uuid NOT NULL DEFAULT uuid_generate_v4(),
         "name" character varying(150) NOT NULL,
         "sort_order" integer NOT NULL DEFAULT 0,
@@ -29,7 +39,7 @@ export class AddFixedExpenses1749700000000 implements MigrationInterface {
     `);
 
     await queryRunner.query(`
-      CREATE TABLE "fixed_expense_month_status" (
+      CREATE TABLE IF NOT EXISTS "fixed_expense_month_status" (
         "id" uuid NOT NULL DEFAULT uuid_generate_v4(),
         "year" integer NOT NULL,
         "month" integer NOT NULL,
@@ -54,9 +64,19 @@ export class AddFixedExpenses1749700000000 implements MigrationInterface {
 
     await queryRunner.query(`
       ALTER TABLE "expense"
-      ADD COLUMN IF NOT EXISTS "fixedExpenseTemplateId" uuid,
-      ADD CONSTRAINT "FK_expense_fixed_expense_template" FOREIGN KEY ("fixedExpenseTemplateId")
-        REFERENCES "fixed_expense_template"("id") ON DELETE SET NULL
+      ADD COLUMN IF NOT EXISTS "fixedExpenseTemplateId" uuid
+    `);
+    await queryRunner.query(`
+      DO $$
+      BEGIN
+        IF NOT EXISTS (
+          SELECT 1 FROM pg_constraint WHERE conname = 'FK_expense_fixed_expense_template'
+        ) THEN
+          ALTER TABLE "expense"
+          ADD CONSTRAINT "FK_expense_fixed_expense_template" FOREIGN KEY ("fixedExpenseTemplateId")
+            REFERENCES "fixed_expense_template"("id") ON DELETE SET NULL;
+        END IF;
+      END $$;
     `);
   }
 

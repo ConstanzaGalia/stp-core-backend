@@ -13,7 +13,6 @@ import {
   Logger,
   Param,
 } from '@nestjs/common';
-import { ResendService } from 'src/services/resend.service';
 import { AuthService } from './auth.service';
 import { LoginUserDto } from './dto/login-user.dto';
 import { RegisterUserDto } from './dto/register-user.dto';
@@ -22,11 +21,11 @@ import { ActivateUserDTO } from './dto/activate-user.dto';
 import { RequestResetPasswordDto } from './dto/request-reset-password.dto';
 import { ResetPasswordDto } from './dto/reset-password.dto';
 import { ChangePasswordDto } from './dto/change-password.dto';
+import { ResendVerificationDto } from './dto/resend-verification.dto';
 import { GetUser } from './get-user.decorator';
 import { AuthGuard } from '@nestjs/passport';
 import { User } from 'src/entities/user.entity';
 import { MailingService } from '../mailer/mailing.service';
-import { UserInterface } from 'src/models/interfaces/user.iterface';
 import { ActivateResponseDto } from './dto/activate-response.dto';
 import { UpdateUserRoleDto } from './dto/update-user-role.dto';
 import { UpdateTrainerProfileDto } from './dto/update-trainer-profile.dto';
@@ -39,7 +38,6 @@ import { SkipCompanySubscriptionCheck } from 'src/common/decorators/skip-company
 export class AuthController {
   constructor(
     private authService: AuthService,
-    private resendService: ResendService,
     private mailingService: MailingService,
   ) {}
 
@@ -47,7 +45,6 @@ export class AuthController {
   async createUser(@Res() res, @Body() registerUserDTO: RegisterUserDto) {
     const user = await this.authService.createUser(registerUserDTO);
     
-    // Validar que el usuario tenga email
     if (!user.email) {
       return res.status(HttpStatus.BAD_REQUEST).json({
         message: 'User email is required',
@@ -55,24 +52,41 @@ export class AuthController {
       });
     }
 
+    const createdUser = user as typeof user & { activeToken?: string; nameForEmail?: string };
     const mail = registerEmail(
       user.email,
-      user.activeToken,
-      user.name,
+      createdUser.activeToken,
+      createdUser.nameForEmail || user.name,
       process.env.RESEND_FROM_EMAIL || 'noreply@stp.com',
+      Number(process.env.OTP_EXPIRES_MINUTES) || 15,
     );
 
     try {
       await this.mailingService.sendMail(mail);
       res.status(HttpStatus.OK).json({
         message: `The user was created successfully and send email to ${user.email}`,
-        user
+        user: {
+          id: user.id,
+          name: user.name,
+          lastName: user.lastName,
+          email: user.email,
+          role: user.role,
+          isActive: user.isActive,
+        },
       });
     } catch (error) {
       console.error('Error sending email:', error);
       res.status(HttpStatus.CREATED).json({
         message: `The user was created successfully but have an error send verify email to ${user.email}`,
-        error: error.message
+        error: error.message,
+        user: {
+          id: user.id,
+          name: user.name,
+          lastName: user.lastName,
+          email: user.email,
+          role: user.role,
+          isActive: user.isActive,
+        },
       });
     }
   }
@@ -169,33 +183,79 @@ export class AuthController {
     };
   }
 
+  @Post('/resend-verification')
+  async resendVerification(
+    @Res() res,
+    @Body() resendVerificationDto: ResendVerificationDto,
+  ) {
+    const result = await this.authService.resendVerification(resendVerificationDto);
+
+    if (result.sent && result.email && result.activeToken) {
+      const mail = registerEmail(
+        result.email,
+        result.activeToken,
+        result.name,
+        process.env.RESEND_FROM_EMAIL || 'noreply@stp.com',
+        Number(process.env.OTP_EXPIRES_MINUTES) || 15,
+      );
+      try {
+        await this.mailingService.sendMail(mail);
+      } catch (error) {
+        Logger.error('Error resending verification email:', error);
+        return res.status(HttpStatus.INTERNAL_SERVER_ERROR).json({
+          message: 'No se pudo reenviar el código de verificación',
+        });
+      }
+    }
+
+    return res.status(HttpStatus.OK).json({
+      message: 'Si el email existe y la cuenta no está verificada, se envió un nuevo código',
+    });
+  }
+
   @Patch('/request-reset-password')
   async requestResetPassword(
     @Res() res,
     @Body() requestResetPasswordDto: RequestResetPasswordDto,
-  ): Promise<UserInterface> {
-    const user = await this.authService.resetPasswordRequest(
+  ) {
+    const result = await this.authService.resetPasswordRequest(
       requestResetPasswordDto,
     );
-    const url = `${process.env.HOST}${process.env.PORT}/auth/reset-password?token=${user.resetPasswordToken}`;
-    const mail = resetPassEmail(
-      user.email,
-      url,
-      user.name,
-      process.env.RESEND_FROM_EMAIL || 'noreply@stp.com',
-    );
-    await this.resendService.sendEmail(mail.to, mail.subject, mail.html, mail.from);
+
+    if (result) {
+      const frontendUrl = (process.env.FRONTEND_URL || 'http://localhost:3000').replace(/\/$/, '');
+      const url = `${frontendUrl}/restablecer-password?token=${result.resetPasswordToken}`;
+      const mail = resetPassEmail(
+        result.user.email,
+        url,
+        result.user.name,
+        process.env.RESEND_FROM_EMAIL || 'noreply@stp.com',
+        Number(process.env.RESET_TOKEN_EXPIRES_MINUTES) || 60,
+      );
+      try {
+        await this.mailingService.sendMail(mail);
+      } catch (error) {
+        Logger.error('Error sending reset password email:', error);
+        return res.status(HttpStatus.INTERNAL_SERVER_ERROR).json({
+          message: 'No se pudo enviar el email de recuperación',
+        });
+      }
+    }
+
     return res.status(HttpStatus.OK).json({
-      message: `Send the email to ${user.email}, for reset password`,
-      user,
+      message: 'Si el email existe, recibirás instrucciones para restablecer tu contraseña',
     });
   }
 
   @Patch('/reset-password')
   async resetPassword(
+    @Res() res,
     @Body() resertPasswordDto: ResetPasswordDto,
-  ): Promise<User> {
-    return this.authService.resetPassword(resertPasswordDto);
+  ) {
+    await this.authService.resetPassword(resertPasswordDto);
+    return res.status(HttpStatus.OK).json({
+      message: 'Password reset successfully',
+    });
   }
 
   @Patch('/change-password')
