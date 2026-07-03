@@ -120,6 +120,12 @@ export class PaymentsService {
       throw new NotFoundException('Company not found');
     }
 
+    if (createPaymentPlanDto.maxClassesPerPeriod < createPaymentPlanDto.classesPerWeek) {
+      throw new BadRequestException(
+        `maxClassesPerPeriod debe ser al menos ${createPaymentPlanDto.classesPerWeek} para ${createPaymentPlanDto.classesPerWeek} clases por semana`
+      );
+    }
+
     const paymentPlan = this.paymentPlanRepository.create({
       ...createPaymentPlanDto,
       frequencyDays: 30, // Siempre 30 días
@@ -144,14 +150,13 @@ export class PaymentsService {
       throw new NotFoundException('Payment plan not found');
     }
 
-    // Validar que los datos sean coherentes
-    if (updateData.classesPerWeek && updateData.maxClassesPerPeriod) {
-      const minClasses = updateData.classesPerWeek * 4;
-      if (updateData.maxClassesPerPeriod < minClasses) {
-        throw new BadRequestException(
-          `maxClassesPerPeriod debe ser al menos ${minClasses} para ${updateData.classesPerWeek} clases por semana`
-        );
-      }
+    // Validar coherencia mínima: el período debe cubrir al menos una semana de clases
+    const classesPerWeek = updateData.classesPerWeek ?? paymentPlan.classesPerWeek;
+    const maxClassesPerPeriod = updateData.maxClassesPerPeriod ?? paymentPlan.maxClassesPerPeriod;
+    if (maxClassesPerPeriod < classesPerWeek) {
+      throw new BadRequestException(
+        `maxClassesPerPeriod debe ser al menos ${classesPerWeek} para ${classesPerWeek} clases por semana`
+      );
     }
 
     Object.assign(paymentPlan, updateData);
