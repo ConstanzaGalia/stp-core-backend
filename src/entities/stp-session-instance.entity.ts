@@ -99,6 +99,18 @@ export class STPSessionInstance {
   @Column({ type: 'text', nullable: true, default: () => 'null' })
   notes: string | null;
 
+  @Column({ name: 'created_by_user_id', type: 'uuid', nullable: true })
+  createdByUserId: string | null;
+
+  @Column({ name: 'created_by_name', type: 'text', nullable: true })
+  createdByName: string | null;
+
+  @Column({ name: 'last_saved_by_user_id', type: 'uuid', nullable: true })
+  lastSavedByUserId: string | null;
+
+  @Column({ name: 'last_saved_by_name', type: 'text', nullable: true })
+  lastSavedByName: string | null;
+
   @CreateDateColumn({ name: 'created_at' })
   createdAt: Date;
 

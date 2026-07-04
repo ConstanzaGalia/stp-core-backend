@@ -1,0 +1,5 @@
+ALTER TABLE stp_session_instances
+  ADD COLUMN IF NOT EXISTS created_by_user_id UUID DEFAULT NULL,
+  ADD COLUMN IF NOT EXISTS created_by_name TEXT DEFAULT NULL,
+  ADD COLUMN IF NOT EXISTS last_saved_by_user_id UUID DEFAULT NULL,
+  ADD COLUMN IF NOT EXISTS last_saved_by_name TEXT DEFAULT NULL;

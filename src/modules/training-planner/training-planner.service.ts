@@ -1,11 +1,13 @@
 import { Injectable, NotFoundException } from '@nestjs/common';
 import { InjectRepository } from '@nestjs/typeorm';
 import { In, Repository } from 'typeorm';
+import { UserRole } from 'src/common/enums/enums';
 import { STPTrainingProfile } from 'src/entities/stp-training-profile.entity';
 import { STPMacroPlan } from 'src/entities/stp-macro-plan.entity';
 import { STPWeeklyTemplate } from 'src/entities/stp-weekly-template.entity';
 import { STPSessionInstance } from 'src/entities/stp-session-instance.entity';
 import { Exercise } from 'src/entities/excercise.entity';
+import { User } from 'src/entities/user.entity';
 
 interface SessionExerciseMeta {
   videoUrl: string | null;
@@ -16,6 +18,14 @@ interface SessionExerciseMeta {
 function toIso(d: Date | string | null | undefined): string {
   if (!d) return new Date().toISOString();
   return d instanceof Date ? d.toISOString() : d;
+}
+
+function isStaffUser(user: User): boolean {
+  return user.role !== UserRole.ATHLETE;
+}
+
+function formatStaffDisplayName(user: User): string {
+  return `${user.name} ${user.lastName}`.trim();
 }
 
 @Injectable()
@@ -256,36 +266,37 @@ export class TrainingPlannerService {
     return this.enrichSessionWithExerciseMeta(serialized);
   }
 
-  async saveSession(data: {
-    id: string;
-    athleteId: string;
-    macroPlanId?: string | null;
-    macroWeekId: string;
-    weekStartDate: string;
-    weekLabel: string;
-    sessionOrdinal: number;
-    scheduledDate: string;
-    phase: string;
-    weekType: string;
-    pattern: string;
-    templateId: string;
-    templateDayId: string;
-    enduranceFormat?: string | null;
-    enduranceConfig?: unknown | null;
-    progressionConfig?: unknown;
-    warnings?: string[];
-    blocks?: unknown[];
-    feedbackStatus?: string;
-    feedback?: unknown;
-    review?: unknown;
-    athleteCompletionStatus?: string;
-    notes?: string | null;
-  }) {
-    let entity = await this.sessionRepo.findOne({ where: { id: data.id } });
-
-    if (!entity) {
-      entity = this.sessionRepo.create({ id: data.id });
-    }
+  async saveSession(
+    data: {
+      id: string;
+      athleteId: string;
+      macroPlanId?: string | null;
+      macroWeekId: string;
+      weekStartDate: string;
+      weekLabel: string;
+      sessionOrdinal: number;
+      scheduledDate: string;
+      phase: string;
+      weekType: string;
+      pattern: string;
+      templateId: string;
+      templateDayId: string;
+      enduranceFormat?: string | null;
+      enduranceConfig?: unknown | null;
+      progressionConfig?: unknown;
+      warnings?: string[];
+      blocks?: unknown[];
+      feedbackStatus?: string;
+      feedback?: unknown;
+      review?: unknown;
+      athleteCompletionStatus?: string;
+      notes?: string | null;
+    },
+    actor?: User,
+  ) {
+    const existing = await this.sessionRepo.findOne({ where: { id: data.id } });
+    const isNew = !existing;
+    let entity = existing ?? this.sessionRepo.create({ id: data.id });
 
     Object.assign(entity, {
       athleteId: data.athleteId,
@@ -315,6 +326,16 @@ export class TrainingPlannerService {
       athleteCompletionStatus: data.athleteCompletionStatus ?? 'pending',
       notes: data.notes ?? null,
     });
+
+    if (actor && isStaffUser(actor)) {
+      const displayName = formatStaffDisplayName(actor);
+      if (isNew) {
+        entity.createdByUserId = actor.id;
+        entity.createdByName = displayName;
+      }
+      entity.lastSavedByUserId = actor.id;
+      entity.lastSavedByName = displayName;
+    }
 
     const saved = await this.sessionRepo.save(entity);
     return this.serializeSession(saved);
@@ -354,6 +375,10 @@ export class TrainingPlannerService {
       review: e.review ?? null,
       athleteCompletionStatus: e.athleteCompletionStatus ?? 'pending',
       notes: e.notes ?? null,
+      createdByUserId: e.createdByUserId ?? null,
+      createdByName: e.createdByName ?? null,
+      lastSavedByUserId: e.lastSavedByUserId ?? null,
+      lastSavedByName: e.lastSavedByName ?? null,
       createdAt: toIso(e.createdAt),
       updatedAt: toIso(e.updatedAt),
     };

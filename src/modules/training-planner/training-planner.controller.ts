@@ -10,6 +10,8 @@ import {
   UseGuards,
 } from '@nestjs/common';
 import { AuthGuard } from '@nestjs/passport';
+import { GetUser } from '../auth/get-user.decorator';
+import { User } from 'src/entities/user.entity';
 import { TrainingPlannerService } from './training-planner.service';
 
 @Controller('training-planner')
@@ -103,14 +105,14 @@ export class TrainingPlannerController {
 
   /** POST /training-planner/sessions — create or upsert */
   @Post('sessions')
-  saveSession(@Body() body: any) {
-    return this.service.saveSession(body);
+  saveSession(@Body() body: any, @GetUser() user: User) {
+    return this.service.saveSession(body, user);
   }
 
   /** PUT /training-planner/sessions/:id — explicit update */
   @Put('sessions/:id')
-  updateSession(@Param('id') id: string, @Body() body: any) {
-    return this.service.saveSession({ ...body, id });
+  updateSession(@Param('id') id: string, @Body() body: any, @GetUser() user: User) {
+    return this.service.saveSession({ ...body, id }, user);
   }
 
   /** DELETE /training-planner/sessions/:id?athleteId= */
@@ -124,13 +126,13 @@ export class TrainingPlannerController {
 
   /** POST /training-planner/sessions/:id/feedback */
   @Post('sessions/:id/feedback')
-  submitFeedback(@Param('id') sessionId: string, @Body() body: any) {
-    return this.service.saveSession({ ...body, id: sessionId });
+  submitFeedback(@Param('id') sessionId: string, @Body() body: any, @GetUser() user: User) {
+    return this.service.saveSession({ ...body, id: sessionId }, user);
   }
 
   /** POST /training-planner/sessions/:id/review */
   @Post('sessions/:id/review')
-  reviewFeedback(@Param('id') sessionId: string, @Body() body: any) {
-    return this.service.saveSession({ ...body, id: sessionId });
+  reviewFeedback(@Param('id') sessionId: string, @Body() body: any, @GetUser() user: User) {
+    return this.service.saveSession({ ...body, id: sessionId }, user);
   }
 }
