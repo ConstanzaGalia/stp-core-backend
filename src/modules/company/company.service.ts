@@ -29,6 +29,7 @@ import { EncryptService } from 'src/services/bcrypt.service';
 import { getStpOperatingCompanyId } from 'src/common/constants/stp-operating-company';
 import { assertStpAdmin } from 'src/common/helpers/company-access.helper';
 import { UpdateCompanySubscriptionDto } from './dto/update-company-subscription.dto';
+import { UpdateCompanyModulesDto } from './dto/update-company-modules.dto';
 
 const STAFF_ROLES = [
   UserRole.TRAINER,
@@ -188,6 +189,7 @@ export class CompanyService {
         name: company.name,
         subscriptionActive: company.subscriptionActive,
         accountType: company.accountType,
+        enabledModules: company.enabledModules ?? null,
         createdAt: company.created_at,
         directors: directors.map(d => ({
           id: d.id,
@@ -218,6 +220,23 @@ export class CompanyService {
     }
 
     company.subscriptionActive = dto.subscriptionActive;
+    return this.companyRepository.save(company);
+  }
+
+  public async setCompanyEnabledModules(
+    companyId: string,
+    dto: UpdateCompanyModulesDto,
+    admin: User,
+  ): Promise<Company> {
+    assertStpAdmin(admin);
+
+    const company = await this.companyRepository.findOne({ where: { id: companyId } });
+    if (!company) {
+      throw new NotFoundException('Company not found');
+    }
+
+    company.enabledModules =
+      dto.enabledModules.length > 0 ? [...dto.enabledModules] : null;
     return this.companyRepository.save(company);
   }
 

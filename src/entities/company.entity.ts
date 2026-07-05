@@ -59,6 +59,11 @@ export class Company {
   })
   accountType: CompanyAccountType;
 
+  /** Módulos de acceso directo habilitados. NULL = todos habilitados. */
+  @ApiProperty({ required: false, type: [String] })
+  @Column({ type: 'jsonb', nullable: true, name: 'enabled_modules' })
+  enabledModules?: string[] | null;
+
   @ManyToMany(() => User, user => user.company)
   @JoinTable()
   users: User[];
