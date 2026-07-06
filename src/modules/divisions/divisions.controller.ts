@@ -6,10 +6,12 @@ import {
   Param,
   Post,
   Put,
+  Query,
   UseGuards,
 } from '@nestjs/common';
 import { AuthGuard } from '@nestjs/passport';
 import { DivisionsService } from './divisions.service';
+import { DivisionAnalyticsService } from './division-analytics.service';
 import { GetUser } from '../auth/get-user.decorator';
 import { User } from '../../entities/user.entity';
 import { ParseSanitizedUUIDPipe } from 'src/common/pipes/parse-sanitized-uuid.pipe';
@@ -17,7 +19,10 @@ import { ParseSanitizedUUIDPipe } from 'src/common/pipes/parse-sanitized-uuid.pi
 @Controller('divisions')
 @UseGuards(AuthGuard('jwt'))
 export class DivisionsController {
-  constructor(private readonly divisionsService: DivisionsService) {}
+  constructor(
+    private readonly divisionsService: DivisionsService,
+    private readonly divisionAnalyticsService: DivisionAnalyticsService,
+  ) {}
 
   @Get('company/:companyId')
   listByCompany(
@@ -34,6 +39,36 @@ export class DivisionsController {
     @Body() dto: { name: string; description?: string },
   ) {
     return this.divisionsService.create(actor, companyId, dto);
+  }
+
+  @Get(':id/roster')
+  getRoster(
+    @GetUser() actor: User,
+    @Param('id', ParseSanitizedUUIDPipe) id: string,
+    @Query('positionId') positionId?: string,
+  ) {
+    return this.divisionAnalyticsService.getRoster(actor, id, positionId ?? null);
+  }
+
+  @Get(':id/analytics')
+  getAnalytics(
+    @GetUser() actor: User,
+    @Param('id', ParseSanitizedUUIDPipe) id: string,
+    @Query('groupBy') groupBy?: 'division' | 'position',
+    @Query('positionId') positionId?: string,
+  ) {
+    return this.divisionAnalyticsService.getAnalytics(actor, id, {
+      groupBy: groupBy ?? 'division',
+      positionId: positionId ?? null,
+    });
+  }
+
+  @Get(':id')
+  getOne(
+    @GetUser() actor: User,
+    @Param('id', ParseSanitizedUUIDPipe) id: string,
+  ) {
+    return this.divisionAnalyticsService.assertCanAccessDivision(actor, id);
   }
 
   @Put(':id')
