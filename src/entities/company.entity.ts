@@ -116,6 +116,9 @@ export class Company {
   @OneToMany('Division', (d: any) => d.company)
   divisions: any[];
 
+  @OneToMany('SportPosition', (p: any) => p.company)
+  sportPositions: any[];
+
   @CreateDateColumn({ type: "timestamp", default: () => "CURRENT_TIMESTAMP(6)" })
   public created_at: Date;
 

@@ -5,12 +5,13 @@ import {
   BadRequestException,
 } from '@nestjs/common';
 import { InjectRepository } from '@nestjs/typeorm';
-import { Repository } from 'typeorm';
+import { In, Repository } from 'typeorm';
 import { Division } from '../../entities/division.entity';
 import { Company } from '../../entities/company.entity';
 import { User } from '../../entities/user.entity';
 import { AthleteInvitation, InvitationStatus } from '../../entities/athlete-invitation.entity';
 import { UserRole, CompanyAccountType } from '../../common/enums/enums';
+import { resolveCoachDivisionScope } from '../../common/helpers/division-scope.helper';
 
 @Injectable()
 export class DivisionsService {
@@ -52,12 +53,61 @@ export class DivisionsService {
     return company;
   }
 
-  async listByCompany(companyId: string): Promise<Division[]> {
+  async listByCompany(companyId: string, actor?: User): Promise<Division[]> {
+    await this.assertCanView(actor, companyId);
+
+    const scope = await resolveCoachDivisionScope(
+      this.companyRepository,
+      this.divisionRepository,
+      actor,
+      companyId,
+    );
+
+    if (scope.scoped) {
+      if (scope.divisionIds.length === 0) return [];
+      return this.divisionRepository.find({
+        where: { companyId, id: In(scope.divisionIds) },
+        relations: ['coaches'],
+        order: { name: 'ASC' },
+      });
+    }
+
     return this.divisionRepository.find({
       where: { companyId },
       relations: ['coaches'],
       order: { name: 'ASC' },
     });
+  }
+
+  private async assertCanView(actor: User | undefined, companyId: string): Promise<Company> {
+    if (!actor) {
+      throw new ForbiddenException('No autenticado');
+    }
+
+    if (actor.role === UserRole.STP_ADMIN) {
+      const company = await this.companyRepository.findOne({ where: { id: companyId } });
+      if (!company) throw new NotFoundException('Centro no encontrado');
+      if (company.accountType !== CompanyAccountType.SPORTS_CLUB) {
+        throw new BadRequestException(
+          'Las divisiones solo están disponibles para clubes deportivos',
+        );
+      }
+      return company;
+    }
+
+    const company = await this.companyRepository
+      .createQueryBuilder('c')
+      .innerJoin('c.users', 'u', 'u.id = :uid', { uid: actor.id })
+      .where('c.id = :cid', { cid: companyId })
+      .getOne();
+
+    if (!company) throw new ForbiddenException('No perteneces a este centro');
+    if (company.accountType !== CompanyAccountType.SPORTS_CLUB) {
+      throw new BadRequestException(
+        'Las divisiones solo están disponibles para clubes deportivos',
+      );
+    }
+    return company;
   }
 
   async create(

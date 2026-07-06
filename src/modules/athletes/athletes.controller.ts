@@ -232,7 +232,7 @@ export class AthletesController {
     @GetUser() user: User,
   ) {
     await this.ensureUserBelongsToCompany(user, companyId);
-    return await this.athletesService.getBirthdaysToday(companyId);
+    return await this.athletesService.getBirthdaysToday(companyId, user);
   }
 
   @Get('company/:companyId/check-athlete/:athleteId')
@@ -262,8 +262,13 @@ export class AthletesController {
   @UseGuards(AuthGuard('jwt'))
   async removeAthlete(
     @Param('companyId') companyId: string,
-    @Param('athleteId') athleteId: string
+    @Param('athleteId') athleteId: string,
+    @GetUser() user: User,
   ) {
+    if (user.role !== UserRole.DIRECTOR && user.role !== UserRole.STP_ADMIN) {
+      throw new ForbiddenException('Solo el director puede eliminar atletas del centro');
+    }
+    await this.ensureUserBelongsToCompany(user, companyId);
     return await this.athletesService.removeAthlete(companyId, athleteId);
   }
 

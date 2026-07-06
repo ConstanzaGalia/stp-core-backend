@@ -10,6 +10,7 @@ import {
 import { User } from './user.entity';
 import { Company } from './company.entity';
 import { Division } from './division.entity';
+import { SportPosition } from './sport-position.entity';
 
 export enum InvitationStatus {
   PENDING = 'pending',
@@ -65,6 +66,14 @@ export class AthleteInvitation {
 
   @Column({ name: 'division_id', type: 'uuid', nullable: true })
   divisionId: string | null;
+
+  /** Posición deportiva (solo para clubs deportivos). Nullable. */
+  @ManyToOne(() => SportPosition, { nullable: true, onDelete: 'SET NULL', eager: false })
+  @JoinColumn({ name: 'position_id' })
+  position: SportPosition | null;
+
+  @Column({ name: 'position_id', type: 'uuid', nullable: true })
+  positionId: string | null;
 
   @CreateDateColumn()
   createdAt: Date;

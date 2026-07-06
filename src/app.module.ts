@@ -20,6 +20,7 @@ import { HealthModule } from './modules/health/health.module';
 import { TrainingPlannerModule } from './modules/training-planner/training-planner.module';
 import { StaffSchedulingModule } from './modules/staff-scheduling/staff-scheduling.module';
 import { DivisionsModule } from './modules/divisions/divisions.module';
+import { SportPositionsModule } from './modules/sport-positions/sport-positions.module';
 import { TYPEORM_ENTITIES } from './typeorm-entities';
 
 /** Supabase Session pooler (puerto 5432): límite bajo → MaxClientsInSessionMode si el pool es grande. */
@@ -111,6 +112,7 @@ function resolvePostgresPoolMax(config: ConfigService): number {
     TrainingPlannerModule,
     StaffSchedulingModule,
     DivisionsModule,
+    SportPositionsModule,
   ],
   controllers: [],
   providers: [Pagination],

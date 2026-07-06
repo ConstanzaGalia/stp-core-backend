@@ -5,6 +5,7 @@
  */
 import { AthleteInvitation } from './entities/athlete-invitation.entity';
 import { Division } from './entities/division.entity';
+import { SportPosition } from './entities/sport-position.entity';
 import { AthleteSchedule } from './entities/athlete-schedule.entity';
 import { AvailableClass } from './entities/available-class.entity';
 import { Category } from './entities/category.entity';
@@ -56,6 +57,7 @@ export const TYPEORM_ENTITIES = [
   AthleteInvitation,
   AthleteSchedule,
   Division,
+  SportPosition,
   AvailableClass,
   Category,
   ClassUsage,

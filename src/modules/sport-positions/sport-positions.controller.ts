@@ -9,22 +9,22 @@ import {
   UseGuards,
 } from '@nestjs/common';
 import { AuthGuard } from '@nestjs/passport';
-import { DivisionsService } from './divisions.service';
+import { SportPositionsService } from './sport-positions.service';
 import { GetUser } from '../auth/get-user.decorator';
 import { User } from '../../entities/user.entity';
 import { ParseSanitizedUUIDPipe } from 'src/common/pipes/parse-sanitized-uuid.pipe';
 
-@Controller('divisions')
+@Controller('sport-positions')
 @UseGuards(AuthGuard('jwt'))
-export class DivisionsController {
-  constructor(private readonly divisionsService: DivisionsService) {}
+export class SportPositionsController {
+  constructor(private readonly sportPositionsService: SportPositionsService) {}
 
   @Get('company/:companyId')
   listByCompany(
     @GetUser() actor: User,
     @Param('companyId', ParseSanitizedUUIDPipe) companyId: string,
   ) {
-    return this.divisionsService.listByCompany(companyId, actor);
+    return this.sportPositionsService.listByCompany(companyId, actor);
   }
 
   @Post('company/:companyId')
@@ -33,7 +33,7 @@ export class DivisionsController {
     @Param('companyId', ParseSanitizedUUIDPipe) companyId: string,
     @Body() dto: { name: string; description?: string },
   ) {
-    return this.divisionsService.create(actor, companyId, dto);
+    return this.sportPositionsService.create(actor, companyId, dto);
   }
 
   @Put(':id')
@@ -42,7 +42,7 @@ export class DivisionsController {
     @Param('id', ParseSanitizedUUIDPipe) id: string,
     @Body() dto: { name?: string; description?: string },
   ) {
-    return this.divisionsService.update(actor, id, dto);
+    return this.sportPositionsService.update(actor, id, dto);
   }
 
   @Delete(':id')
@@ -50,25 +50,7 @@ export class DivisionsController {
     @GetUser() actor: User,
     @Param('id', ParseSanitizedUUIDPipe) id: string,
   ) {
-    return this.divisionsService.remove(actor, id);
-  }
-
-  @Post(':id/coaches')
-  addCoach(
-    @GetUser() actor: User,
-    @Param('id', ParseSanitizedUUIDPipe) id: string,
-    @Body() dto: { coachId: string },
-  ) {
-    return this.divisionsService.addCoach(actor, id, dto.coachId);
-  }
-
-  @Delete(':id/coaches/:coachId')
-  removeCoach(
-    @GetUser() actor: User,
-    @Param('id', ParseSanitizedUUIDPipe) id: string,
-    @Param('coachId', ParseSanitizedUUIDPipe) coachId: string,
-  ) {
-    return this.divisionsService.removeCoach(actor, id, coachId);
+    return this.sportPositionsService.remove(actor, id);
   }
 
   @Put(':id/athletes/:athleteUserId')
@@ -77,15 +59,15 @@ export class DivisionsController {
     @Param('id', ParseSanitizedUUIDPipe) id: string,
     @Param('athleteUserId', ParseSanitizedUUIDPipe) athleteUserId: string,
   ) {
-    return this.divisionsService.assignAthlete(actor, id, athleteUserId);
+    return this.sportPositionsService.assignAthlete(actor, id, athleteUserId);
   }
 
   @Delete(':id/athletes/:athleteUserId')
-  removeAthleteFromDivision(
+  removeAthleteFromPosition(
     @GetUser() actor: User,
     @Param('id', ParseSanitizedUUIDPipe) id: string,
     @Param('athleteUserId', ParseSanitizedUUIDPipe) athleteUserId: string,
   ) {
-    return this.divisionsService.removeAthleteFromDivision(actor, id, athleteUserId);
+    return this.sportPositionsService.removeAthleteFromPosition(actor, id, athleteUserId);
   }
 }

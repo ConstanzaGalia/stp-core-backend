@@ -47,23 +47,31 @@ export class AthleteEvaluationService {
     return user;
   }
 
+  private async assertStaffSharesCenterWithAthlete(
+    actor: User,
+    athleteUserId: string,
+  ): Promise<void> {
+    const staffCompanies = await this.companyService.findCompaniesByUser(actor.id);
+    const staffIds = new Set(staffCompanies.map((c) => c.id));
+    const subs = await this.athletesService.getMySubscribedCenters(athleteUserId);
+    const athleteCompanyIds = subs.map((inv) => inv.company?.id).filter(Boolean) as string[];
+    const sharedCompanyIds = athleteCompanyIds.filter((id) => staffIds.has(id));
+    if (sharedCompanyIds.length === 0) {
+      throw new ForbiddenException('No tienes acceso a este atleta en tu centro');
+    }
+    await this.athletesService.assertCoachCanAccessAthlete(actor, athleteUserId, sharedCompanyIds);
+  }
+
   /** Lectura de evaluaciones / perfil STP: el propio atleta o staff con centro compartido. */
   private async assertCanReadAthlete(actor: User, athleteUserId: string): Promise<void> {
-    const target = await this.loadAthleteOrThrow(athleteUserId);
+    await this.loadAthleteOrThrow(athleteUserId);
     if (actor.role === UserRole.ATHLETE) {
       if (actor.id !== athleteUserId) throw new ForbiddenException('No puedes ver datos de otro atleta');
       return;
     }
     if (!this.isStaff(actor)) throw new ForbiddenException('Sin permiso');
     if (actor.role === UserRole.STP_ADMIN) return;
-    const staffCompanies = await this.companyService.findCompaniesByUser(actor.id);
-    const staffIds = new Set(staffCompanies.map((c) => c.id));
-    const subs = await this.athletesService.getMySubscribedCenters(athleteUserId);
-    const athleteCompanyIds = subs.map((inv) => inv.company?.id).filter(Boolean) as string[];
-    const shares = athleteCompanyIds.some((id) => staffIds.has(id));
-    if (!shares) {
-      throw new ForbiddenException('No tienes acceso a este atleta en tu centro');
-    }
+    await this.assertStaffSharesCenterWithAthlete(actor, athleteUserId);
   }
 
   /** Crear evaluación STP legacy: solo staff con centro compartido (o STP_ADMIN). */
@@ -74,14 +82,7 @@ export class AthleteEvaluationService {
     }
     if (!this.isStaff(actor)) throw new ForbiddenException('Sin permiso');
     if (actor.role === UserRole.STP_ADMIN) return target;
-    const staffCompanies = await this.companyService.findCompaniesByUser(actor.id);
-    const staffIds = new Set(staffCompanies.map((c) => c.id));
-    const subs = await this.athletesService.getMySubscribedCenters(athleteUserId);
-    const athleteCompanyIds = subs.map((inv) => inv.company?.id).filter(Boolean) as string[];
-    const shares = athleteCompanyIds.some((id) => staffIds.has(id));
-    if (!shares) {
-      throw new ForbiddenException('No tienes acceso a este atleta en tu centro');
-    }
+    await this.assertStaffSharesCenterWithAthlete(actor, athleteUserId);
     return target;
   }
 
@@ -94,14 +95,7 @@ export class AthleteEvaluationService {
     }
     if (!this.isStaff(actor)) throw new ForbiddenException('Sin permiso');
     if (actor.role === UserRole.STP_ADMIN) return target;
-    const staffCompanies = await this.companyService.findCompaniesByUser(actor.id);
-    const staffIds = new Set(staffCompanies.map((c) => c.id));
-    const subs = await this.athletesService.getMySubscribedCenters(athleteUserId);
-    const athleteCompanyIds = subs.map((inv) => inv.company?.id).filter(Boolean) as string[];
-    const shares = athleteCompanyIds.some((id) => staffIds.has(id));
-    if (!shares) {
-      throw new ForbiddenException('No tienes acceso a este atleta en tu centro');
-    }
+    await this.assertStaffSharesCenterWithAthlete(actor, athleteUserId);
     return target;
   }
 

@@ -120,7 +120,7 @@ export class PhysicalEvaluationService {
     }>
   > {
     await this.assertStaffCanAccessCompany(actor, companyId);
-    const invitations = await this.athletesService.getCompanyAthletesIncludingPortal(companyId);
+    const invitations = await this.athletesService.getCompanyAthletesIncludingPortal(companyId, actor);
     const userIds = invitations.map((i) => i.user?.id).filter(Boolean) as string[];
     if (!userIds.length) {
       return [];
@@ -214,10 +214,12 @@ export class PhysicalEvaluationService {
 
     const staffIds = new Set(staffCompanies.map((c) => c.id));
     const athleteCompanyIds = subs.map((inv) => inv.company?.id).filter(Boolean) as string[];
-    const shares = athleteCompanyIds.some((id) => staffIds.has(id));
+    const sharedCompanyIds = athleteCompanyIds.filter((id) => staffIds.has(id));
+    const shares = sharedCompanyIds.length > 0;
     if (!shares) {
       throw new ForbiddenException('No tienes acceso a evaluaciones de este atleta en tu centro');
     }
+    await this.athletesService.assertCoachCanAccessAthlete(actor, athleteUserId, sharedCompanyIds);
     return target;
   }
 
