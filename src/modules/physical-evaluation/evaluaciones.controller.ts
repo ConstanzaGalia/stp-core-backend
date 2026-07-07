@@ -17,6 +17,8 @@ import { EvaluacionesFilesService } from './evaluaciones-files.service';
 import { AiAnalysisService } from './ai-analysis.service';
 import { CreateEvaluacionDto } from './dto/create-evaluacion.dto';
 import { GenerateAiAnalysisDto } from './dto/generate-ai-analysis.dto';
+import { PhotocellImportDto } from './dto/photocell-import.dto';
+import { PhotocellImportService } from './photocell-import.service';
 import {
   DEFAULT_EVALUATIONS_MAX_FILE_MB,
   EVALUATIONS_MAX_FILES_PER_REQUEST,
@@ -48,11 +50,23 @@ export class EvaluacionesController {
     private readonly physicalEvaluations: PhysicalEvaluationService,
     private readonly evaluacionesFiles: EvaluacionesFilesService,
     private readonly aiAnalysis: AiAnalysisService,
+    private readonly photocellImport: PhotocellImportService,
   ) {}
 
   @Post()
   create(@GetUser() actor: User, @Body() dto: CreateEvaluacionDto) {
     return this.physicalEvaluations.createEmptyEvaluation(actor, dto.athleteId, dto.evaluationDate);
+  }
+
+  @Post('photocell/preview')
+  previewPhotocell(@Body() dto: PhotocellImportDto) {
+    return this.photocellImport.buildPreview(dto);
+  }
+
+  @Post('photocell')
+  async createPhotocell(@GetUser() actor: User, @Body() dto: PhotocellImportDto) {
+    const preview = this.photocellImport.buildPreview(dto);
+    return this.physicalEvaluations.createPhotocellEvaluation(actor, preview);
   }
 
   @Post(':id/ai-analysis')

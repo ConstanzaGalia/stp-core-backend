@@ -20,6 +20,7 @@ import { CapacityScoringService } from './analysis/capacity-scoring.service';
 import { AnalysisGeneratorService } from './analysis/analysis-generator.service';
 import { TrainingDecisionService } from './analysis/training-decision.service';
 import { AiAnalysisService } from './ai-analysis.service';
+import { PhotocellImportService } from './photocell-import.service';
 
 @Module({
   imports: [
@@ -41,6 +42,7 @@ import { AiAnalysisService } from './ai-analysis.service';
     AnalysisGeneratorService,
     TrainingDecisionService,
     AiAnalysisService,
+    PhotocellImportService,
   ],
   exports: [PhysicalEvaluationService],
 })

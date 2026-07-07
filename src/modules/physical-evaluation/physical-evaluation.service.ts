@@ -16,6 +16,7 @@ import { AthletesService } from '../athletes/athletes.service';
 import { PhysicalEvaluationAnalysisService } from './physical-evaluation-analysis.service';
 import { CreatePhysicalEvaluationDto } from './dto/create-physical-evaluation.dto';
 import type { PhysicalTestInput } from './physical-evaluation.types';
+import type { PhotocellPreviewResponse } from './photocell-import.service';
 
 const STAFF_ROLES: UserRole[] = [
   UserRole.STP_ADMIN,
@@ -369,6 +370,55 @@ export class PhysicalEvaluationService {
     const saved = await this.evaluationRepo.save(evaluation);
 
     return this.findOneById(actor, athleteUserId, saved.id);
+  }
+
+  async createPhotocellEvaluation(
+    actor: User,
+    preview: PhotocellPreviewResponse,
+  ): Promise<PhysicalEvaluation> {
+    const target = await this.assertCanAccessAthlete(actor, preview.athleteId, true);
+    if (!this.isStaff(actor)) {
+      throw new ForbiddenException('Solo el staff puede registrar evaluaciones');
+    }
+
+    const testMetrics = {
+      ...preview.metrics,
+      _preview: preview.preview,
+      _source: {
+        sourceType: preview.sourceType,
+        sourceName: preview.sourceName,
+      },
+    };
+    this.assertMetricsPayloadSize([{ metrics: testMetrics }]);
+
+    const evaluationDate = parseEvaluationDateOnly(preview.evaluationDate);
+
+    const test = new PhysicalEvaluationTest();
+    test.testName = preview.protocolLabel;
+    test.testType = preview.testType;
+    test.metrics = testMetrics;
+    test.repetitions = preview.repetitions ?? [];
+    test.aggregates = (preview.aggregates ?? {}) as Record<
+      string,
+      { best: number | null; mean: number | null; worst: number | null } | number | null
+    >;
+    test.warnings = preview.warnings ?? [];
+
+    const evaluation = this.evaluationRepo.create({
+      user: target,
+      evaluationDate,
+      summaryScore: null,
+      summaryAnalysis: preview.summaryAnalysis,
+      structuredAnalysis: null,
+      processingStatus: 'ready',
+      warnings: preview.warnings ?? [],
+      completeness: preview.completeness,
+      tests: [test],
+      files: [],
+    });
+
+    const saved = await this.evaluationRepo.save(evaluation);
+    return this.findOneById(actor, target.id, saved.id);
   }
 
   async listForAthlete(
