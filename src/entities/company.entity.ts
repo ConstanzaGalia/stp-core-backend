@@ -40,6 +40,10 @@ export class Company {
   @Column({ length: 50, nullable: true })
   secondary_color?: string | null;
 
+  @ApiProperty({ required: false })
+  @Column({ length: 50, nullable: true, unique: true })
+  slug?: string | null;
+
   @ApiProperty()
   @Column({type: 'boolean', default: false, name: 'is_delete'})
   isDelete?: boolean;

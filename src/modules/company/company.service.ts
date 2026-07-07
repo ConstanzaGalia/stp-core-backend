@@ -536,6 +536,35 @@ export class CompanyService {
     };
   }
 
+  public async getCompanyPublicBySlug(slug: string): Promise<any> {
+    const normalizedSlug = slug?.trim().toLowerCase();
+    if (!normalizedSlug) {
+      throw new BadRequestException('Slug is required');
+    }
+
+    const company = await this.companyRepository.findOne({
+      where: { slug: normalizedSlug },
+    });
+
+    if (!company) {
+      throw new NotFoundException('Company not found');
+    }
+
+    if (company.isDelete) {
+      throw new BadRequestException('Company is not active');
+    }
+
+    return {
+      id: company.id,
+      name: company.name,
+      slug: company.slug,
+      image: company.image,
+      primaryColor: company.primary_color,
+      secondaryColor: company.secondary_color,
+      subscriptionActive: company.subscriptionActive,
+    };
+  }
+
   // Método para obtener todo el personal del centro (entrenadores, directores, secretarias)
   public async getAllCompanyTrainers(companyId: string): Promise<TrainerResponseDto[]> {
     // Verificar que la empresa existe

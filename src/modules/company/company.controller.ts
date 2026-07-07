@@ -191,6 +191,11 @@ export class CompanyController {
   }
 
   // Endpoints públicos para que entrenadores se unan a centros
+  @Get('public/by-slug/:slug')
+  public async getCompanyPublicBySlug(@Param('slug') slug: string) {
+    return await this.companyService.getCompanyPublicBySlug(slug);
+  }
+
   @Get('public/:companyId')
   public async getCompanyPublicInfo(
     @Param('companyId', ParseSanitizedUUIDPipe) companyId: string,
