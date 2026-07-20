@@ -233,6 +233,7 @@ export class ExerciseService {
     offset: number,
     limit: number,
     path: string,
+    search?: string,
   ): Promise<PaginatedListDto<ExerciseWithAccess>> {
     await this.assertCompanyAccess(user, companyId);
 
@@ -244,6 +245,15 @@ export class ExerciseService {
       .leftJoinAndSelect('exercise.tags', 'tag');
 
     this.applyCompanyScope(qb, companyId);
+
+    const searchTerm = search?.trim();
+    if (searchTerm) {
+      qb.andWhere(
+        '(LOWER(exercise.name) LIKE LOWER(:search) OR LOWER(COALESCE(exercise.description, \'\')) LIKE LOWER(:search))',
+        { search: `%${searchTerm}%` },
+      );
+    }
+
     qb.orderBy('exercise.name', 'ASC');
 
     const [exercises, count] = await qb

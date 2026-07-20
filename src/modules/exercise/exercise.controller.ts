@@ -89,6 +89,7 @@ export class ExerciseController {
       query.offset || 0,
       query.limit || 15,
       request.url,
+      query.search,
     );
   }
 
