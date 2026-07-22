@@ -606,19 +606,18 @@ export class TrainingPlannerService {
 
     const allowCommentsOnlyFinal =
       input.mode === 'final' && sessionComments.length > 0;
+    const allowEmptyBlockClear = input.mode === 'block';
 
-    if (exercises.length === 0 && !allowCommentsOnlyFinal) {
+    if (exercises.length === 0 && !allowCommentsOnlyFinal && !allowEmptyBlockClear) {
       throw new BadRequestException(
         'No se puede guardar feedback vacío. Completá reps, carga, RPE, dolor, comentario de ejercicio o un comentario general.',
       );
     }
 
-    if (input.mode === 'draft' || input.mode === 'block') {
-      if (exercises.length === 0) {
-        throw new BadRequestException(
-          'No se puede guardar feedback vacío. Completá al menos un dato de algún ejercicio.',
-        );
-      }
+    if (input.mode === 'draft' && exercises.length === 0) {
+      throw new BadRequestException(
+        'No se puede guardar feedback vacío. Completá al menos un dato de algún ejercicio.',
+      );
     }
 
     type BlockExercise = {
@@ -646,62 +645,54 @@ export class TrainingPlannerService {
       if (!block) {
         throw new BadRequestException(`Circuito ${input.blockId} no encontrado en la sesión.`);
       }
-      const blockExerciseIds = new Set(
-        (Array.isArray(block.exercises) ? block.exercises : []).map((ex) => ex.id),
-      );
-      const inBlock = exercises.filter((fb) => blockExerciseIds.has(fb.sessionExerciseId));
-      if (inBlock.length === 0) {
-        throw new BadRequestException(
-          'Completá al menos un dato de algún ejercicio del circuito antes de guardarlo.',
-        );
-      }
+      // exercises vacío = limpiar todo el feedback de ese circuito (permitido).
     }
 
-    const updatedBlocks: SessionBlock[] = blocks.map((block) => ({
-      ...block,
-      exercises: (block.exercises ?? []).map((exercise) => {
-        const fb = feedbackMap.get(exercise.id);
-        if (!fb) return exercise;
-        const actualReps = fb.actualReps ?? null;
-        const actualLoad = fb.actualLoad ?? null;
-        const rpe = fb.rpe ?? null;
-        const pain = fb.pain === true;
-        return {
-          ...exercise,
-          actualFeedback: {
-            actualReps,
-            actualLoad,
-            rpe,
-            pain,
-            comments: fb.comments,
-            decision: computeDecisionFromFeedback({
-              prescribedReps: exercise.prescribedReps,
-              actualReps,
-              rpe,
-              pain,
-            }),
-          },
-        };
-      }),
-    }));
+    const targetBlockId = input.mode === 'block' ? input.blockId : null;
+    // final atleta: el formulario es la fuente de verdad (reemplaza todo).
+    // block: reemplaza solo el circuito guardado (los vacíos se limpian).
+    // draft: merge aditivo (compatibilidad).
+    const replaceAllAthleteFinal = input.mode === 'final' && source === 'athlete';
 
-    // Final atleta: basta con algún ejercicio con datos (ya en payload o persistido) o comentario general.
-    if (input.mode === 'final' && source === 'athlete') {
-      const hasAnyExerciseFeedback = updatedBlocks.some((block) =>
-        (block.exercises ?? []).some((exercise) => {
-          const af = exercise.actualFeedback as
-            | {
-                actualReps?: number | null;
-                actualLoad?: number | null;
-                rpe?: number | null;
-                pain?: boolean;
-                comments?: string;
-              }
-            | null
-            | undefined;
-          return !!af && exerciseFeedbackHasData(af);
+    const updatedBlocks: SessionBlock[] = blocks.map((block) => {
+      const isTargetBlock = targetBlockId != null && block.id === targetBlockId;
+      return {
+        ...block,
+        exercises: (block.exercises ?? []).map((exercise) => {
+          const fb = feedbackMap.get(exercise.id);
+          if (fb) {
+            const actualReps = fb.actualReps ?? null;
+            const actualLoad = fb.actualLoad ?? null;
+            const rpe = fb.rpe ?? null;
+            const pain = fb.pain === true;
+            return {
+              ...exercise,
+              actualFeedback: {
+                actualReps,
+                actualLoad,
+                rpe,
+                pain,
+                comments: fb.comments,
+                decision: computeDecisionFromFeedback({
+                  prescribedReps: exercise.prescribedReps,
+                  actualReps,
+                  rpe,
+                  pain,
+                }),
+              },
+            };
+          }
+          if (replaceAllAthleteFinal || isTargetBlock) {
+            return { ...exercise, actualFeedback: null };
+          }
+          return exercise;
         }),
-      );
+      };
+    });
+
+    // Final atleta: basta con algún ejercicio con datos o comentario general.
+    if (input.mode === 'final' && source === 'athlete') {
+      const hasAnyExerciseFeedback = exercises.length > 0;
       if (!hasAnyExerciseFeedback && !sessionComments) {
         throw new BadRequestException(
           'Completá al menos un ejercicio o un comentario general antes de enviar la sesión.',
@@ -717,10 +708,21 @@ export class TrainingPlannerService {
       ? (existingFeedback.exercises as Array<Record<string, unknown>>)
       : [];
     const mergedExercisesById = new Map<string, Record<string, unknown>>();
-    for (const ex of existingExercises) {
-      const id = ex.sessionExerciseId;
-      if (typeof id === 'string') mergedExercisesById.set(id, ex);
+
+    if (!replaceAllAthleteFinal) {
+      for (const ex of existingExercises) {
+        const id = ex.sessionExerciseId;
+        if (typeof id === 'string') mergedExercisesById.set(id, ex);
+      }
     }
+
+    if (input.mode === 'block' && targetBlockId) {
+      const targetBlock = blocks.find((b) => b.id === targetBlockId);
+      for (const ex of targetBlock?.exercises ?? []) {
+        if (typeof ex.id === 'string') mergedExercisesById.delete(ex.id);
+      }
+    }
+
     for (const fb of exercises) {
       mergedExercisesById.set(fb.sessionExerciseId, {
         sessionExerciseId: fb.sessionExerciseId,
