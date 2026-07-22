@@ -1,5 +1,10 @@
-import { Injectable, NotFoundException } from '@nestjs/common';
+import {
+  BadRequestException,
+  Injectable,
+  NotFoundException,
+} from '@nestjs/common';
 import { InjectRepository } from '@nestjs/typeorm';
+import { randomUUID } from 'crypto';
 import { In, Repository } from 'typeorm';
 import { UserRole } from 'src/common/enums/enums';
 import { STPTrainingProfile } from 'src/entities/stp-training-profile.entity';
@@ -15,6 +20,27 @@ interface SessionExerciseMeta {
   unilateral: boolean;
 }
 
+interface FeedbackExercisePayload {
+  sessionExerciseId: string;
+  actualReps?: number | null;
+  actualLoad?: number | null;
+  rpe?: number | null;
+  pain?: boolean;
+  comments?: string;
+}
+
+type FeedbackMergeMode = 'draft' | 'block' | 'final';
+
+interface MergeFeedbackInput {
+  athleteId: string;
+  mode: FeedbackMergeMode;
+  source?: 'athlete' | 'trainer';
+  submittedBy?: string;
+  blockId?: string;
+  comments?: string;
+  exercises: FeedbackExercisePayload[];
+}
+
 function toIso(d: Date | string | null | undefined): string {
   if (!d) return new Date().toISOString();
   return d instanceof Date ? d.toISOString() : d;
@@ -26,6 +52,85 @@ function isStaffUser(user: User): boolean {
 
 function formatStaffDisplayName(user: User): string {
   return `${user.name} ${user.lastName}`.trim();
+}
+
+function exerciseFeedbackHasData(fb: {
+  actualReps?: number | null;
+  actualLoad?: number | null;
+  rpe?: number | null;
+  pain?: boolean;
+  comments?: string | null;
+}): boolean {
+  return (
+    fb.actualReps != null ||
+    fb.actualLoad != null ||
+    fb.rpe != null ||
+    fb.pain === true ||
+    (typeof fb.comments === 'string' && fb.comments.trim() !== '')
+  );
+}
+
+function parsePrescribedRepsAsInt(prescribed: unknown): number | null {
+  if (prescribed == null) return null;
+  const match = String(prescribed).match(/\d+/);
+  if (!match) return null;
+  const n = Number(match[0]);
+  return Number.isFinite(n) ? n : null;
+}
+
+function computeDecisionFromFeedback(params: {
+  prescribedReps: unknown;
+  actualReps: number | null;
+  rpe: number | null;
+  pain: boolean;
+}): 'advance' | 'hold' | 'regress' | 'review' {
+  const { prescribedReps, actualReps, rpe, pain } = params;
+  if (pain) return 'regress';
+  const prescribedInt = parsePrescribedRepsAsInt(prescribedReps);
+  if (prescribedInt == null) return 'review';
+  if (actualReps == null) return 'review';
+  if (actualReps < prescribedInt) return 'regress';
+  if (rpe == null) return 'review';
+  if (rpe <= 8) return 'advance';
+  if (rpe <= 9) return 'hold';
+  return 'regress';
+}
+
+function roundLoad(value: number): number {
+  return Math.round(value * 10) / 10;
+}
+
+function getSessionRpeSummary(
+  blocks: Array<{
+    id: string;
+    exercises?: Array<{ id: string; actualFeedback?: { rpe?: number | null } | null }>;
+  }>,
+) {
+  const blockRpe: Record<string, number | null> = {};
+  let total = 0;
+  let count = 0;
+
+  for (const block of blocks) {
+    let blockTotal = 0;
+    let blockCount = 0;
+    for (const exercise of block.exercises ?? []) {
+      const rpe = exercise.actualFeedback?.rpe ?? null;
+      if (rpe != null) {
+        blockTotal += rpe;
+        blockCount += 1;
+      }
+    }
+    blockRpe[block.id] = blockCount > 0 ? roundLoad(blockTotal / blockCount) : null;
+    if (blockCount > 0) {
+      total += blockTotal;
+      count += blockCount;
+    }
+  }
+
+  return {
+    blockRpe,
+    sessionRpe: count > 0 ? roundLoad(total / count) : null,
+  };
 }
 
 @Injectable()
@@ -464,5 +569,221 @@ export class TrainingPlannerService {
       ...session,
       blocks: this.enrichBlocksWithExerciseMeta(blocks, metaById),
     };
+  }
+
+  /**
+   * Merge seguro de feedback por ejercicio/circuito/sesión.
+   * No usa los defaults destructivos de saveSession.
+   */
+  async mergeSessionFeedback(sessionId: string, input: MergeFeedbackInput) {
+    const entity = await this.sessionRepo.findOne({
+      where: { id: sessionId, athleteId: input.athleteId },
+    });
+    if (!entity) {
+      throw new NotFoundException(`Sesión ${sessionId} no encontrada`);
+    }
+
+    const status = entity.feedbackStatus ?? 'none';
+    if (status === 'pending_review' || status === 'approved') {
+      throw new BadRequestException(
+        'Esta sesión ya tiene feedback enviado o aprobado y no se puede modificar.',
+      );
+    }
+
+    const source = input.source ?? 'athlete';
+    const sessionComments =
+      typeof input.comments === 'string' ? input.comments.trim() : '';
+    const rawExercises = Array.isArray(input.exercises) ? input.exercises : [];
+
+    for (const fb of rawExercises) {
+      if (!fb?.sessionExerciseId) {
+        throw new BadRequestException('Cada ejercicio necesita sessionExerciseId.');
+      }
+    }
+
+    // Atleta draft/block y entrenador final: solo ítems con datos. Final atleta también filtra vacíos.
+    const exercises = rawExercises.filter((fb) => exerciseFeedbackHasData(fb));
+
+    const allowCommentsOnlyFinal =
+      input.mode === 'final' && sessionComments.length > 0;
+
+    if (exercises.length === 0 && !allowCommentsOnlyFinal) {
+      throw new BadRequestException(
+        'No se puede guardar feedback vacío. Completá reps, carga, RPE, dolor, comentario de ejercicio o un comentario general.',
+      );
+    }
+
+    if (input.mode === 'draft' || input.mode === 'block') {
+      if (exercises.length === 0) {
+        throw new BadRequestException(
+          'No se puede guardar feedback vacío. Completá al menos un dato de algún ejercicio.',
+        );
+      }
+    }
+
+    type BlockExercise = {
+      id: string;
+      prescribedReps?: unknown;
+      actualFeedback?: Record<string, unknown> | null;
+      [key: string]: unknown;
+    };
+    type SessionBlock = {
+      id: string;
+      exercises?: BlockExercise[];
+      [key: string]: unknown;
+    };
+
+    const blocks = (Array.isArray(entity.blocks) ? entity.blocks : []) as SessionBlock[];
+    const feedbackMap = new Map(
+      exercises.map((e) => [e.sessionExerciseId, e] as const),
+    );
+
+    if (input.mode === 'block') {
+      if (!input.blockId?.trim()) {
+        throw new BadRequestException('blockId es requerido para guardar un circuito.');
+      }
+      const block = blocks.find((b) => b.id === input.blockId);
+      if (!block) {
+        throw new BadRequestException(`Circuito ${input.blockId} no encontrado en la sesión.`);
+      }
+      const blockExerciseIds = new Set(
+        (Array.isArray(block.exercises) ? block.exercises : []).map((ex) => ex.id),
+      );
+      const inBlock = exercises.filter((fb) => blockExerciseIds.has(fb.sessionExerciseId));
+      if (inBlock.length === 0) {
+        throw new BadRequestException(
+          'Completá al menos un dato de algún ejercicio del circuito antes de guardarlo.',
+        );
+      }
+    }
+
+    const updatedBlocks: SessionBlock[] = blocks.map((block) => ({
+      ...block,
+      exercises: (block.exercises ?? []).map((exercise) => {
+        const fb = feedbackMap.get(exercise.id);
+        if (!fb) return exercise;
+        const actualReps = fb.actualReps ?? null;
+        const actualLoad = fb.actualLoad ?? null;
+        const rpe = fb.rpe ?? null;
+        const pain = fb.pain === true;
+        return {
+          ...exercise,
+          actualFeedback: {
+            actualReps,
+            actualLoad,
+            rpe,
+            pain,
+            comments: fb.comments,
+            decision: computeDecisionFromFeedback({
+              prescribedReps: exercise.prescribedReps,
+              actualReps,
+              rpe,
+              pain,
+            }),
+          },
+        };
+      }),
+    }));
+
+    // Final atleta: basta con algún ejercicio con datos (ya en payload o persistido) o comentario general.
+    if (input.mode === 'final' && source === 'athlete') {
+      const hasAnyExerciseFeedback = updatedBlocks.some((block) =>
+        (block.exercises ?? []).some((exercise) => {
+          const af = exercise.actualFeedback as
+            | {
+                actualReps?: number | null;
+                actualLoad?: number | null;
+                rpe?: number | null;
+                pain?: boolean;
+                comments?: string;
+              }
+            | null
+            | undefined;
+          return !!af && exerciseFeedbackHasData(af);
+        }),
+      );
+      if (!hasAnyExerciseFeedback && !sessionComments) {
+        throw new BadRequestException(
+          'Completá al menos un ejercicio o un comentario general antes de enviar la sesión.',
+        );
+      }
+    }
+
+    const existingFeedback =
+      entity.feedback && typeof entity.feedback === 'object'
+        ? (entity.feedback as Record<string, unknown>)
+        : {};
+    const existingExercises = Array.isArray(existingFeedback.exercises)
+      ? (existingFeedback.exercises as Array<Record<string, unknown>>)
+      : [];
+    const mergedExercisesById = new Map<string, Record<string, unknown>>();
+    for (const ex of existingExercises) {
+      const id = ex.sessionExerciseId;
+      if (typeof id === 'string') mergedExercisesById.set(id, ex);
+    }
+    for (const fb of exercises) {
+      mergedExercisesById.set(fb.sessionExerciseId, {
+        sessionExerciseId: fb.sessionExerciseId,
+        actualReps: fb.actualReps ?? null,
+        actualLoad: fb.actualLoad ?? null,
+        rpe: fb.rpe ?? null,
+        pain: fb.pain === true,
+        comments: fb.comments,
+      });
+    }
+    const mergedExercises = Array.from(mergedExercisesById.values());
+
+    const summary = getSessionRpeSummary(updatedBlocks);
+    const sessionPain = updatedBlocks.some((block) =>
+      (block.exercises ?? []).some(
+        (ex) => (ex.actualFeedback as { pain?: boolean } | null)?.pain === true,
+      ),
+    );
+
+    const submittedBy = input.submittedBy ?? 'Atleta';
+    const nextStatus =
+      input.mode === 'final'
+        ? source === 'trainer'
+          ? 'approved'
+          : 'pending_review'
+        : status === 'rejected'
+          ? 'rejected'
+          : 'none';
+
+    const feedback = {
+      id:
+        typeof existingFeedback.id === 'string' && existingFeedback.id
+          ? existingFeedback.id
+          : `session-feedback-${randomUUID()}`,
+      source,
+      submittedBy,
+      submittedAt: new Date().toISOString(),
+      comments:
+        input.comments !== undefined
+          ? input.comments
+          : (existingFeedback.comments as string | undefined),
+      exercises: mergedExercises,
+      blockRpe: summary.blockRpe,
+      sessionRpe: summary.sessionRpe,
+      sessionPain,
+    };
+
+    entity.blocks = updatedBlocks;
+    entity.feedback = feedback;
+    entity.feedbackStatus = nextStatus;
+
+    if (input.mode === 'final' && source === 'trainer') {
+      entity.review = {
+        id: `trainer-review-${randomUUID()}`,
+        reviewerName: submittedBy,
+        reviewedAt: new Date().toISOString(),
+        decision: 'approved',
+        notes: 'Feedback cargado por el entrenador.',
+      };
+    }
+
+    const saved = await this.sessionRepo.save(entity);
+    const serialized = this.serializeSession(saved);
+    return this.enrichSessionWithExerciseMeta(serialized);
   }
 }

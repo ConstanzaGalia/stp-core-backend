@@ -3,6 +3,7 @@ import {
   Get,
   Post,
   Put,
+  Patch,
   Delete,
   Body,
   Param,
@@ -124,10 +125,35 @@ export class TrainingPlannerController {
     return this.service.deleteSession(athleteId, id);
   }
 
-  /** POST /training-planner/sessions/:id/feedback */
+  /** PATCH /training-planner/sessions/:id/feedback/draft — borrador parcial */
+  @Patch('sessions/:id/feedback/draft')
+  saveFeedbackDraft(@Param('id') sessionId: string, @Body() body: any) {
+    return this.service.mergeSessionFeedback(sessionId, {
+      ...body,
+      mode: 'draft',
+    });
+  }
+
+  /** POST /training-planner/sessions/:id/feedback/block — envío por circuito */
+  @Post('sessions/:id/feedback/block')
+  submitBlockFeedback(@Param('id') sessionId: string, @Body() body: any) {
+    return this.service.mergeSessionFeedback(sessionId, {
+      ...body,
+      mode: 'block',
+    });
+  }
+
+  /** POST /training-planner/sessions/:id/feedback — envío final de sesión */
   @Post('sessions/:id/feedback')
-  submitFeedback(@Param('id') sessionId: string, @Body() body: any, @GetUser() user: User) {
-    return this.service.saveSession({ ...body, id: sessionId }, user);
+  submitFeedback(@Param('id') sessionId: string, @Body() body: any) {
+    // Compat: si el body trae blocks/feedbackStatus (payload viejo de sesión completa), usar saveSession
+    if (body?.blocks != null || body?.feedbackStatus != null) {
+      return this.service.saveSession({ ...body, id: sessionId });
+    }
+    return this.service.mergeSessionFeedback(sessionId, {
+      ...body,
+      mode: 'final',
+    });
   }
 
   /** POST /training-planner/sessions/:id/review */
