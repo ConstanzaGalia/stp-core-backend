@@ -1370,16 +1370,47 @@ export class PaymentsService {
   // ===== GESTIÓN DE ALUMNOS Y PAGOS =====
   /**
    * Obtiene las cuotas vencidas del centro.
-   * Para cada alumno toma su último pago (no matrícula) por dueDate.
-   * Si dueDate <= hoy y NO tiene suspensión activa que cubra desde esa fecha, está vencido.
+   * Por alumno toma el pago adeudado más reciente por dueDate (pending/overdue,
+   * o paid con pendingBalance > 0). Si dueDate < hoy y no hay suspensión que
+   * cubra esa fecha, figura como vencido. Los pagos completados sin saldo no entran.
    */
   async getOverduePayments(companyId: string): Promise<any[]> {
-    const toUTCMidnight = (date: Date | string): Date => {
-      const d = new Date(date);
-      return new Date(Date.UTC(d.getFullYear(), d.getMonth(), d.getDate()));
+    const toDateOnlyUTC = (date: Date | string): Date => {
+      if (typeof date === 'string') {
+        const match = /^(\d{4})-(\d{2})-(\d{2})/.exec(date.trim());
+        if (match) {
+          return new Date(
+            Date.UTC(
+              Number(match[1]),
+              Number(match[2]) - 1,
+              Number(match[3]),
+            ),
+          );
+        }
+      }
+      const d = date instanceof Date ? date : new Date(date);
+      return new Date(
+        Date.UTC(d.getUTCFullYear(), d.getUTCMonth(), d.getUTCDate()),
+      );
     };
 
-    const todayUTC = toUTCMidnight(new Date());
+    const hasOutstandingBalance = (payment: Payment): boolean => {
+      if (
+        payment.status === PaymentStatus.PENDING ||
+        payment.status === PaymentStatus.OVERDUE
+      ) {
+        return true;
+      }
+      if (payment.status === PaymentStatus.PAID) {
+        return Number(payment.pendingBalance ?? 0) > 0;
+      }
+      return false;
+    };
+
+    const now = new Date();
+    const todayUTC = new Date(
+      Date.UTC(now.getFullYear(), now.getMonth(), now.getDate()),
+    );
 
     const allPayments = await this.paymentRepository.find({
       where: {
@@ -1392,13 +1423,15 @@ export class PaymentsService {
     const latestByUser = new Map<string, Payment>();
     for (const payment of allPayments) {
       if (!payment.user || !payment.dueDate) continue;
+      if (!hasOutstandingBalance(payment)) continue;
+
       const userId = payment.user.id;
       const existing = latestByUser.get(userId);
-      const paymentDue = toUTCMidnight(payment.dueDate);
+      const paymentDue = toDateOnlyUTC(payment.dueDate);
       if (!existing) {
         latestByUser.set(userId, payment);
       } else {
-        const existingDue = toUTCMidnight(existing.dueDate);
+        const existingDue = toDateOnlyUTC(existing.dueDate);
         if (paymentDue > existingDue) {
           latestByUser.set(userId, payment);
         }
@@ -1424,12 +1457,12 @@ export class PaymentsService {
     const results: any[] = [];
 
     for (const [userId, payment] of latestByUser) {
-      const dueDate = toUTCMidnight(payment.dueDate);
+      const dueDate = toDateOnlyUTC(payment.dueDate);
       if (dueDate >= todayUTC) continue;
 
       const userSuspensions = suspensionsByUserId.get(userId) || [];
       const hasCoveringSuspension = userSuspensions.some(s => {
-        const sEnd = toUTCMidnight(s.endDate);
+        const sEnd = toDateOnlyUTC(s.endDate);
         return sEnd >= dueDate;
       });
 
@@ -1442,6 +1475,7 @@ export class PaymentsService {
         lateFee: payment.lateFee,
         dueDate: payment.dueDate,
         status: payment.status,
+        pendingBalance: payment.pendingBalance,
         instalmentNumber: payment.instalmentNumber,
         studentId: userId,
         studentName: `${payment.user.name || ''} ${payment.user.lastName || ''}`.trim(),

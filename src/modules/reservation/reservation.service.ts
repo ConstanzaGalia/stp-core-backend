@@ -17,6 +17,10 @@ import { ClassUsage, ClassUsageType } from '../../entities/class-usage.entity';
 import { Payment, PaymentStatus } from '../../entities/payment.entity';
 import { WaitlistReservation, WaitlistStatus } from '../../entities/waitlist-reservation.entity';
 import { AvailableClass, AvailableClassReason, AvailableClassStatus } from '../../entities/available-class.entity';
+import {
+  endOfDateOnlyLocal,
+  startOfDateOnlyLocal,
+} from 'src/common/utils/date-only.util';
 
 export interface RecurringGenerationSummary {
   createdReservations: number;
@@ -3107,10 +3111,11 @@ export class ReservationsService {
     endDate: string,
     minAvailableSpots: number = 1
   ) {
-    const start = new Date(startDate);
-    start.setHours(0, 0, 0, 0);
-    const end = new Date(endDate);
-    end.setHours(23, 59, 59, 999);
+    const start = startOfDateOnlyLocal(startDate);
+    const end = endOfDateOnlyLocal(endDate);
+    if (!start || !end) {
+      throw new BadRequestException('startDate y endDate son requeridos (YYYY-MM-DD)');
+    }
 
     const timeSlots = await this.timeSlotRepository.find({
       where: {

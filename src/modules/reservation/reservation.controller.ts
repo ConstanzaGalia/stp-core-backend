@@ -14,6 +14,10 @@ import { GetUser } from '../auth/get-user.decorator';
 import { User } from 'src/entities/user.entity';
 import { AthleteSchedule } from 'src/entities/athlete-schedule.entity';
 import { UserRole } from 'src/common/enums/enums';
+import {
+  endOfDateOnlyLocal,
+  startOfDateOnlyLocal,
+} from 'src/common/utils/date-only.util';
 
 
 @Controller('reservations')
@@ -100,9 +104,9 @@ export class ReservationsController {
     @Query('startDate') startDate?: string,
     @Query('endDate') endDate?: string,
   ) {
-    const start = startDate ? new Date(startDate) : undefined;
-    const end = endDate ? new Date(endDate) : undefined;
-    
+    const start = startOfDateOnlyLocal(startDate);
+    const end = endOfDateOnlyLocal(endDate);
+
     return this.reservationsService.getAvailableTimeSlots(companyId, start, end);
   }
 
@@ -451,8 +455,8 @@ export class ReservationsController {
       throw new ForbiddenException('No tienes permiso para ver este horario fijo');
     }
 
-    const start = startDate ? new Date(startDate) : undefined;
-    const end = endDate ? new Date(endDate) : undefined;
+    const start = startOfDateOnlyLocal(startDate);
+    const end = endOfDateOnlyLocal(endDate);
 
     return this.reservationsService.getRecurringReservationStatus(id, start, end);
   }
