@@ -20,6 +20,7 @@ import { ActivateUserDTO } from './dto/activate-user.dto';
 import { RequestResetPasswordDto } from './dto/request-reset-password.dto';
 import { ResetPasswordDto } from './dto/reset-password.dto';
 import { ChangePasswordDto } from './dto/change-password.dto';
+import { ChangeEmailDto } from './dto/change-email.dto';
 import { User } from 'src/entities/user.entity';
 import { UserRegiter } from './dto/user-response.dto';
 import { LoginResponseDto } from './dto/login-response.dto';
@@ -253,6 +254,46 @@ export class AuthService {
     } else {
       throw new BadRequestException('The password does not mach');
     }
+  }
+
+  async changeEmail(
+    changeEmailDto: ChangeEmailDto,
+    user: User,
+  ): Promise<{ user: User; token: string }> {
+    const newEmail = changeEmailDto.newEmail.trim().toLowerCase();
+    const currentEmail = user.email.trim().toLowerCase();
+
+    if (newEmail === currentEmail) {
+      throw new BadRequestException('El nuevo email es igual al actual');
+    }
+
+    const passwordOk = await this.encryptService.compareData(
+      changeEmailDto.password,
+      user.password,
+    );
+    if (!passwordOk) {
+      throw new BadRequestException('La contraseña es incorrecta');
+    }
+
+    const existing = await this.userRepository.findOne({ where: { email: newEmail } });
+    if (existing && existing.id !== user.id) {
+      throw new ConflictException('Ese email ya está registrado');
+    }
+
+    const userUpdate = await this.userRepository.findOne({ where: { id: user.id } });
+    if (!userUpdate) {
+      throw new NotFoundException('User not found');
+    }
+
+    userUpdate.email = newEmail;
+    const updatedUser = await this.userRepository.save(userUpdate);
+
+    Logger.log(`User email updated: ${user.id} -> ${newEmail}`);
+
+    return {
+      user: updatedUser,
+      token: this.signTokenForUser(updatedUser),
+    };
   }
 
   private generateOTP(): string {
@@ -560,6 +601,7 @@ export class AuthService {
   async updateUserProfile(
     userId: string,
     updateUserProfileDto: UpdateUserProfileDto,
+    options?: { allowSelfEmailChange?: boolean },
   ): Promise<any> {
     const user = await this.userRepository.findOne({
       where: { id: userId },
@@ -575,6 +617,23 @@ export class AuthService {
     }
     if (updateUserProfileDto.lastName !== undefined) {
       user.lastName = updateUserProfileDto.lastName;
+    }
+    if (updateUserProfileDto.email !== undefined) {
+      if (options?.allowSelfEmailChange === false) {
+        throw new BadRequestException(
+          'Usá el endpoint de cambio de email para actualizar tu propio email',
+        );
+      }
+      const newEmail = updateUserProfileDto.email.trim().toLowerCase();
+      if (newEmail !== user.email.trim().toLowerCase()) {
+        const existing = await this.userRepository.findOne({
+          where: { email: newEmail },
+        });
+        if (existing && existing.id !== user.id) {
+          throw new ConflictException('Ese email ya está registrado');
+        }
+        user.email = newEmail;
+      }
     }
     if (updateUserProfileDto.phoneNumber !== undefined) {
       // Convertir a number solo si es un número válido

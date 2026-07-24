@@ -21,6 +21,7 @@ import { ActivateUserDTO } from './dto/activate-user.dto';
 import { RequestResetPasswordDto } from './dto/request-reset-password.dto';
 import { ResetPasswordDto } from './dto/reset-password.dto';
 import { ChangePasswordDto } from './dto/change-password.dto';
+import { ChangeEmailDto } from './dto/change-email.dto';
 import { ResendVerificationDto } from './dto/resend-verification.dto';
 import { GetUser } from './get-user.decorator';
 import { AuthGuard } from '@nestjs/passport';
@@ -272,6 +273,28 @@ export class AuthController {
     });
   }
 
+  @Patch('/change-email')
+  @UseGuards(AuthGuard('jwt'))
+  async changeEmail(
+    @Res() res,
+    @Body() changeEmailDto: ChangeEmailDto,
+    @GetUser() user: User,
+  ): Promise<void> {
+    const result = await this.authService.changeEmail(changeEmailDto, user);
+    return res.status(HttpStatus.OK).json({
+      message: 'Email actualizado correctamente',
+      token: result.token,
+      user: {
+        id: result.user.id,
+        email: result.user.email,
+        name: result.user.name,
+        lastName: result.user.lastName,
+        role: result.user.role,
+        isActive: result.user.isActive,
+      },
+    });
+  }
+
   // Endpoints para actualizar roles
   @Patch('/users/:userId/role')
   @UseGuards(AuthGuard('jwt'))
@@ -374,10 +397,16 @@ export class AuthController {
   async updateUserProfile(
     @Param('userId') userId: string,
     @Body() updateUserProfileDto: UpdateUserProfileDto,
+    @GetUser() actor: User,
   ) {
+    const isSelf = actor.id === userId;
     const updatedProfile = await this.authService.updateUserProfile(
       userId,
       updateUserProfileDto,
+      {
+        // El propio usuario debe usar /auth/change-email (con contraseña)
+        allowSelfEmailChange: !isSelf,
+      },
     );
     return {
       message: 'User profile updated successfully',

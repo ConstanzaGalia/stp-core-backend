@@ -1,4 +1,4 @@
-import { IsString, IsOptional, IsNumber, IsDateString } from 'class-validator';
+import { IsString, IsOptional, IsDateString, IsEmail } from 'class-validator';
 
 export class UpdateUserProfileDto {
   @IsString()
@@ -8,6 +8,10 @@ export class UpdateUserProfileDto {
   @IsString()
   @IsOptional()
   lastName?: string;
+
+  @IsEmail({}, { message: 'Email inválido' })
+  @IsOptional()
+  email?: string;
 
   @IsString()
   @IsOptional()
@@ -29,4 +33,3 @@ export class UpdateUserProfileDto {
   @IsOptional()
   dateOfBirth?: string; // Fecha de nacimiento (YYYY-MM-DD)
 }
-
