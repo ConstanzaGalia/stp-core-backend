@@ -1412,16 +1412,17 @@ export class PaymentsService {
       return false;
     };
 
-    /** Próximo vencimiento esperado tras un pago completado (sin saldo). */
+    /**
+     * Próximo vencimiento tras un pago completado.
+     * Siempre desde la fecha de pago (+1 mes), no desde el dueDate de esa cuota:
+     * si pagó antes del vencimiento (ej. pagó el 10 con vencimiento 11), el dueDate
+     * de ese registro NO es el próximo ciclo.
+     */
     const inferNextDueFromPaid = (payment: Payment): Date => {
-      const due = toDateOnlyUTC(payment.dueDate);
       if (payment.paidDate) {
-        const paidAt = toDateOnlyUTC(payment.paidDate);
-        // completePayment suele dejar dueDate = paidDate + 1 mes (próximo vencimiento).
-        if (due > paidAt) return due;
-        return addOneMonthUTC(paidAt);
+        return addOneMonthUTC(toDateOnlyUTC(payment.paidDate));
       }
-      return addOneMonthUTC(due);
+      return addOneMonthUTC(toDateOnlyUTC(payment.dueDate));
     };
 
     const now = new Date();
