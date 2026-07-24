@@ -1367,12 +1367,11 @@ export class PaymentsService {
     }
   }
 
-  // ===== GESTIÓN DE ALUMNOS Y PAGOS =====
   /**
    * Obtiene las cuotas vencidas del centro.
-   * Por alumno toma el pago adeudado más reciente por dueDate (pending/overdue,
-   * o paid con pendingBalance > 0). Si dueDate < hoy y no hay suspensión que
-   * cubra esa fecha, figura como vencido. Los pagos completados sin saldo no entran.
+   * 1) Pagos con deuda (pending/overdue, o paid con pendingBalance > 0) cuya dueDate ya pasó.
+   * 2) Suscriptores activos sin cuota pendiente: si el próximo vencimiento (inferido del
+   *    último pago completado o del período de la suscripción) ya pasó, también figuran.
    */
   async getOverduePayments(companyId: string): Promise<any[]> {
     const toDateOnlyUTC = (date: Date | string): Date => {
@@ -1394,6 +1393,12 @@ export class PaymentsService {
       );
     };
 
+    const addOneMonthUTC = (date: Date): Date => {
+      return new Date(
+        Date.UTC(date.getUTCFullYear(), date.getUTCMonth() + 1, date.getUTCDate()),
+      );
+    };
+
     const hasOutstandingBalance = (payment: Payment): boolean => {
       if (
         payment.status === PaymentStatus.PENDING ||
@@ -1407,44 +1412,89 @@ export class PaymentsService {
       return false;
     };
 
+    /** Próximo vencimiento esperado tras un pago completado (sin saldo). */
+    const inferNextDueFromPaid = (payment: Payment): Date => {
+      const due = toDateOnlyUTC(payment.dueDate);
+      if (payment.paidDate) {
+        const paidAt = toDateOnlyUTC(payment.paidDate);
+        // completePayment suele dejar dueDate = paidDate + 1 mes (próximo vencimiento).
+        if (due > paidAt) return due;
+        return addOneMonthUTC(paidAt);
+      }
+      return addOneMonthUTC(due);
+    };
+
     const now = new Date();
     const todayUTC = new Date(
       Date.UTC(now.getFullYear(), now.getMonth(), now.getDate()),
     );
 
-    const allPayments = await this.paymentRepository.find({
-      where: {
-        companyId,
-        concept: Not(PaymentConcept.MATRICULA),
-      },
-      relations: ['user', 'paymentPlan', 'subscription'],
-    });
+    const [allPayments, activeSubscriptions] = await Promise.all([
+      this.paymentRepository.find({
+        where: {
+          companyId,
+          concept: Not(PaymentConcept.MATRICULA),
+        },
+        relations: ['user', 'paymentPlan', 'subscription'],
+      }),
+      this.subscriptionRepository.find({
+        where: {
+          company: { id: companyId },
+          status: SubscriptionStatus.ACTIVE,
+        },
+        relations: ['user', 'paymentPlan'],
+      }),
+    ]);
 
-    const latestByUser = new Map<string, Payment>();
+    const latestOutstandingByUser = new Map<string, Payment>();
+    const latestPaidByUser = new Map<string, Payment>();
+
     for (const payment of allPayments) {
       if (!payment.user || !payment.dueDate) continue;
-      if (!hasOutstandingBalance(payment)) continue;
-
       const userId = payment.user.id;
-      const existing = latestByUser.get(userId);
-      const paymentDue = toDateOnlyUTC(payment.dueDate);
-      if (!existing) {
-        latestByUser.set(userId, payment);
-      } else {
-        const existingDue = toDateOnlyUTC(existing.dueDate);
-        if (paymentDue > existingDue) {
-          latestByUser.set(userId, payment);
+
+      if (hasOutstandingBalance(payment)) {
+        const existing = latestOutstandingByUser.get(userId);
+        const paymentDue = toDateOnlyUTC(payment.dueDate);
+        if (!existing || paymentDue > toDateOnlyUTC(existing.dueDate)) {
+          latestOutstandingByUser.set(userId, payment);
+        }
+        continue;
+      }
+
+      if (payment.status === PaymentStatus.PAID) {
+        const existing = latestPaidByUser.get(userId);
+        if (!existing) {
+          latestPaidByUser.set(userId, payment);
+          continue;
+        }
+        const existingRef = existing.paidDate
+          ? toDateOnlyUTC(existing.paidDate)
+          : toDateOnlyUTC(existing.dueDate);
+        const paymentRef = payment.paidDate
+          ? toDateOnlyUTC(payment.paidDate)
+          : toDateOnlyUTC(payment.dueDate);
+        if (paymentRef >= existingRef) {
+          latestPaidByUser.set(userId, payment);
         }
       }
     }
 
-    const userIds = Array.from(latestByUser.keys());
+    const candidateUserIds = new Set<string>([
+      ...latestOutstandingByUser.keys(),
+      ...activeSubscriptions.map((s) => s.user?.id).filter(Boolean) as string[],
+    ]);
 
-    const allSuspensions = userIds.length > 0
-      ? await this.suspensionRepository.find({
-          where: { companyId, isActive: true, userId: In(userIds) },
-        })
-      : [];
+    const allSuspensions =
+      candidateUserIds.size > 0
+        ? await this.suspensionRepository.find({
+            where: {
+              companyId,
+              isActive: true,
+              userId: In([...candidateUserIds]),
+            },
+          })
+        : [];
 
     const suspensionsByUserId = new Map<string, SubscriptionSuspension[]>();
     for (const s of allSuspensions) {
@@ -1454,20 +1504,21 @@ export class PaymentsService {
       suspensionsByUserId.set(s.userId, list);
     }
 
-    const results: any[] = [];
+    const isCoveredBySuspension = (userId: string, dueDate: Date): boolean => {
+      const userSuspensions = suspensionsByUserId.get(userId) || [];
+      return userSuspensions.some((s) => toDateOnlyUTC(s.endDate) >= dueDate);
+    };
 
-    for (const [userId, payment] of latestByUser) {
+    const results: any[] = [];
+    const usersAlreadyListed = new Set<string>();
+
+    // 1) Cuotas con registro de deuda vencidas
+    for (const [userId, payment] of latestOutstandingByUser) {
       const dueDate = toDateOnlyUTC(payment.dueDate);
       if (dueDate >= todayUTC) continue;
+      if (isCoveredBySuspension(userId, dueDate)) continue;
 
-      const userSuspensions = suspensionsByUserId.get(userId) || [];
-      const hasCoveringSuspension = userSuspensions.some(s => {
-        const sEnd = toDateOnlyUTC(s.endDate);
-        return sEnd >= dueDate;
-      });
-
-      if (hasCoveringSuspension) continue;
-
+      usersAlreadyListed.add(userId);
       results.push({
         id: payment.id,
         amount: payment.amount,
@@ -1481,6 +1532,48 @@ export class PaymentsService {
         studentName: `${payment.user.name || ''} ${payment.user.lastName || ''}`.trim(),
         paymentPlanName: payment.paymentPlan?.name,
         subscriptionId: payment.subscription?.id,
+        missingInstallment: false,
+      });
+    }
+
+    // 2) Activos sin cuota pending: inferir vencimiento desde último pago o período
+    for (const subscription of activeSubscriptions) {
+      const user = subscription.user;
+      if (!user?.id) continue;
+      const userId = user.id;
+      if (usersAlreadyListed.has(userId)) continue;
+      // Si todavía tiene un outstanding futuro (no vencido), no listar como vencido.
+      if (latestOutstandingByUser.has(userId)) continue;
+
+      let nextDue: Date | null = null;
+      const lastPaid = latestPaidByUser.get(userId);
+      if (lastPaid) {
+        nextDue = inferNextDueFromPaid(lastPaid);
+      } else if (subscription.periodEndDate) {
+        nextDue = toDateOnlyUTC(subscription.periodEndDate);
+      } else if (subscription.periodStartDate) {
+        nextDue = addOneMonthUTC(toDateOnlyUTC(subscription.periodStartDate));
+      }
+
+      if (!nextDue || nextDue >= todayUTC) continue;
+      if (isCoveredBySuspension(userId, nextDue)) continue;
+
+      const planAmount = Number(subscription.paymentPlan?.amount ?? lastPaid?.amount ?? 0);
+      usersAlreadyListed.add(userId);
+      results.push({
+        id: `inferred-${subscription.id}`,
+        amount: planAmount,
+        totalAmount: planAmount,
+        lateFee: 0,
+        dueDate: nextDue.toISOString().slice(0, 10),
+        status: PaymentStatus.PENDING,
+        pendingBalance: null,
+        instalmentNumber: null,
+        studentId: userId,
+        studentName: `${user.name || ''} ${user.lastName || ''}`.trim(),
+        paymentPlanName: subscription.paymentPlan?.name,
+        subscriptionId: subscription.id,
+        missingInstallment: true,
       });
     }
 
