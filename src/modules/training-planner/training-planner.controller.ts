@@ -156,6 +156,12 @@ export class TrainingPlannerController {
     });
   }
 
+  /** POST /training-planner/sessions/:id/feedback/withdraw — deshacer envío (solo pending_review) */
+  @Post('sessions/:id/feedback/withdraw')
+  withdrawFeedback(@Param('id') sessionId: string, @Body() body: any) {
+    return this.service.withdrawSessionFeedback(sessionId, body?.athleteId);
+  }
+
   /** POST /training-planner/sessions/:id/review */
   @Post('sessions/:id/review')
   reviewFeedback(@Param('id') sessionId: string, @Body() body: any, @GetUser() user: User) {

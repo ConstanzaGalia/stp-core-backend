@@ -788,4 +788,35 @@ export class TrainingPlannerService {
     const serialized = this.serializeSession(saved);
     return this.enrichSessionWithExerciseMeta(serialized);
   }
+
+  /**
+   * Deshace un envío pendiente: vuelve a `none` y conserva feedback/actualFeedback
+   * para que el atleta pueda corregir y reenviar.
+   */
+  async withdrawSessionFeedback(sessionId: string, athleteId: string) {
+    if (!athleteId?.trim()) {
+      throw new BadRequestException('athleteId es requerido.');
+    }
+
+    const entity = await this.sessionRepo.findOne({
+      where: { id: sessionId, athleteId },
+    });
+    if (!entity) {
+      throw new NotFoundException(`Sesión ${sessionId} no encontrada`);
+    }
+
+    const status = entity.feedbackStatus ?? 'none';
+    if (status !== 'pending_review') {
+      throw new BadRequestException(
+        status === 'approved'
+          ? 'El feedback ya fue aprobado. Pedile a tu entrenador que lo rechace si necesitás corregirlo.'
+          : 'Solo se puede deshacer un feedback pendiente de revisión.',
+      );
+    }
+
+    entity.feedbackStatus = 'none';
+    const saved = await this.sessionRepo.save(entity);
+    const serialized = this.serializeSession(saved);
+    return this.enrichSessionWithExerciseMeta(serialized);
+  }
 }
