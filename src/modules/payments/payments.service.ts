@@ -23,6 +23,27 @@ import { ScheduleConfig } from '../../entities/schedule-config.entity';
 import { ScheduleException } from '../../entities/schedule-exception.entity';
 import { TimeSlotGeneration } from '../../entities/time-slot-generation.entity';
 import { WaitlistReservation } from '../../entities/waitlist-reservation.entity';
+
+export type CanBookClassReason =
+  | 'NO_SUBSCRIPTION'
+  | 'OUTSIDE_PERIOD'
+  | 'WEEKLY_LIMIT'
+  | 'PENDING_PAYMENT';
+
+export interface CanBookClassResult {
+  canBook: boolean;
+  reason?: CanBookClassReason;
+  message?: string;
+}
+
+export const CAN_BOOK_CLASS_MESSAGES: Record<CanBookClassReason, string> = {
+  NO_SUBSCRIPTION: 'No tienes una suscripción activa para reservar clases.',
+  OUTSIDE_PERIOD: 'La fecha del turno está fuera de tu período de plan vigente. Contactá a tu centro.',
+  WEEKLY_LIMIT:
+    'Ya usaste tus clases de esta semana. Para reservar otro día, cancelá o modificá el turno al que no vas a asistir.',
+  PENDING_PAYMENT:
+    'Tenés un pago pendiente. Contactá a tu centro para regularizar tu situación y poder reservar.',
+};
 import { CreatePaymentPlanDto } from './dto/create-payment-plan.dto';
 import { CreateSubscriptionDto } from './dto/create-subscription.dto';
 import { CompletePaymentDto } from './dto/complete-payment.dto';
@@ -491,14 +512,14 @@ export class PaymentsService {
     return paidPeriodAccess.hasActiveSubscription ? subscription : null;
   }
 
-  async canUserBookClass(subscriptionId: string, reservationDate?: Date): Promise<boolean> {
+  async canUserBookClass(subscriptionId: string, reservationDate?: Date): Promise<CanBookClassResult> {
     const subscription = await this.subscriptionRepository.findOne({
       where: { id: subscriptionId },
       relations: ['paymentPlan', 'payments', 'user', 'company'],
     });
 
     if (!subscription) {
-      throw new NotFoundException('Subscription not found');
+      throw new NotFoundException('Suscripción no encontrada');
     }
 
     const companyId = subscription.company?.id ?? subscription.companyId;
@@ -518,7 +539,11 @@ export class PaymentsService {
     );
 
     if (!paidPeriodAccess.hasActiveSubscription) {
-      return false;
+      return {
+        canBook: false,
+        reason: 'NO_SUBSCRIPTION',
+        message: CAN_BOOK_CLASS_MESSAGES.NO_SUBSCRIPTION,
+      };
     }
 
     if (reservationDate) {
@@ -526,40 +551,64 @@ export class PaymentsService {
       const periodStart = paidPeriodAccess.periodStartDate;
       const periodEnd = paidPeriodAccess.periodEndDate;
       if (!reservationDateOnly || !periodStart || !periodEnd) {
-        return false;
+        return {
+          canBook: false,
+          reason: 'OUTSIDE_PERIOD',
+          message: CAN_BOOK_CLASS_MESSAGES.OUTSIDE_PERIOD,
+        };
       }
 
       if (
         reservationDateOnly.getTime() < periodStart.getTime()
         || reservationDateOnly.getTime() > periodEnd.getTime()
       ) {
-        return false;
+        return {
+          canBook: false,
+          reason: 'OUTSIDE_PERIOD',
+          message: CAN_BOOK_CLASS_MESSAGES.OUTSIDE_PERIOD,
+        };
       }
     }
 
-    // Renovar contadores semanales si es necesario
     await this.renewWeeklyCounters(subscription);
 
-    // Recargar la suscripción para obtener los valores actualizados
     const updatedSubscription = await this.subscriptionRepository.findOne({
       where: { id: subscriptionId },
-      relations: ['paymentPlan']
+      relations: ['paymentPlan'],
     });
 
-    // Verificar que tenga clases disponibles esta semana (lógica semanal)
-    if (updatedSubscription.classesRemainingThisWeek <= 0) {
-      return false;
+    if (!updatedSubscription) {
+      return {
+        canBook: false,
+        reason: 'NO_SUBSCRIPTION',
+        message: CAN_BOOK_CLASS_MESSAGES.NO_SUBSCRIPTION,
+      };
     }
 
-    // Verificar que no haya cuotas pendientes
+    if ((updatedSubscription.classesRemainingThisWeek ?? 0) <= 0) {
+      return {
+        canBook: false,
+        reason: 'WEEKLY_LIMIT',
+        message: CAN_BOOK_CLASS_MESSAGES.WEEKLY_LIMIT,
+      };
+    }
+
     const pendingPayment = await this.paymentRepository.findOne({
       where: {
         subscription: { id: subscriptionId },
-        status: PaymentStatus.PENDING
-      }
+        status: PaymentStatus.PENDING,
+      },
     });
 
-    return !pendingPayment; // Solo puede reservar si no tiene cuotas pendientes
+    if (pendingPayment) {
+      return {
+        canBook: false,
+        reason: 'PENDING_PAYMENT',
+        message: CAN_BOOK_CLASS_MESSAGES.PENDING_PAYMENT,
+      };
+    }
+
+    return { canBook: true };
   }
 
   async registerClassUsage(subscriptionId: string, usageData: {
@@ -573,15 +622,17 @@ export class PaymentsService {
     });
 
     if (!subscription) {
-      throw new NotFoundException('Subscription not found');
+      throw new NotFoundException('Suscripción no encontrada');
     }
 
     const usageDate = usageData.usageDate ? new Date(usageData.usageDate) : new Date();
     usageDate.setHours(0, 0, 0, 0);
 
-    // Verificar que pueda usar la clase en la fecha indicada
-    if (!(await this.canUserBookClass(subscriptionId, usageDate))) {
-      throw new BadRequestException('User cannot book class at this time');
+    const bookCheck = await this.canUserBookClass(subscriptionId, usageDate);
+    if (!bookCheck.canBook) {
+      throw new BadRequestException(
+        bookCheck.message ?? 'No puedes reservar clases en este momento',
+      );
     }
 
     // Renovar contadores semanales si es necesario
@@ -624,7 +675,7 @@ export class PaymentsService {
     });
 
     if (!subscription) {
-      throw new NotFoundException('Subscription not found');
+      throw new NotFoundException('Suscripción no encontrada');
     }
 
     const pendingPayment = await this.paymentRepository.findOne({
@@ -633,6 +684,8 @@ export class PaymentsService {
         status: PaymentStatus.PENDING
       }
     });
+
+    const bookCheck = await this.canUserBookClass(subscriptionId);
 
     return {
       subscriptionId: subscription.id,
@@ -644,7 +697,9 @@ export class PaymentsService {
       classesRemainingThisPeriod: subscription.classesRemainingThisPeriod,
       periodStartDate: subscription.periodStartDate,
       periodEndDate: subscription.periodEndDate,
-      canBookClass: await this.canUserBookClass(subscriptionId),
+      canBookClass: bookCheck.canBook,
+      canBookReason: bookCheck.reason,
+      canBookMessage: bookCheck.message,
       hasPendingPayment: !!pendingPayment,
       paymentAmount: pendingPayment?.amount || 0
     };

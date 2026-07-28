@@ -176,7 +176,7 @@ export class ReservationsService {
 
     if (!timeSlot) {
       this.logger.warn(`createReservation -> timeSlot not found: ${timeSlotId}`);
-      throw new BadRequestException('Time slot not found');
+      throw new BadRequestException('El turno no existe o ya no está disponible');
     }
 
     const companyId = timeSlot.company?.id;
@@ -192,10 +192,14 @@ export class ReservationsService {
 
     // 3. Validar que puede reservar (plan pagado para este período, clases disponibles)
     // Pasar la fecha del turno para validar que haya un pago pagado para ese período
-    const canBook = await this.paymentsService.canUserBookClass(activeSubscription.id, timeSlot.date);
-    if (!canBook) {
-      this.logger.warn(`createReservation -> canBookClass=false for subscription=${activeSubscription.id}`);
-      throw new BadRequestException('No puedes reservar clases. Verifica que tengas el pago del mes correspondiente o clases disponibles');
+    const bookCheck = await this.paymentsService.canUserBookClass(activeSubscription.id, timeSlot.date);
+    if (!bookCheck.canBook) {
+      this.logger.warn(
+        `createReservation -> canBookClass=false for subscription=${activeSubscription.id}, reason=${bookCheck.reason}`,
+      );
+      throw new BadRequestException(
+        bookCheck.message ?? 'No puedes reservar clases. Verifica que tengas el pago del mes correspondiente o clases disponibles',
+      );
     }
 
     // 4. Validar que el time slot esté disponible
@@ -280,35 +284,8 @@ export class ReservationsService {
 
       return savedReservation;
     } else {
-      // Si no hay cupo disponible, agregar a lista de espera
-      this.logger.warn(`createReservation -> timeSlot full id=${timeSlot.id}, adding to waitlist`);
-      
-      // Verificar si ya existe una entrada en lista de espera para este usuario y TimeSlot
-      const existingWaitlist = await this.waitlistRepository.findOne({
-        where: {
-          user: { id: userId },
-          timeSlot: { id: timeSlotId },
-          status: WaitlistStatus.PENDING
-        }
-      });
-
-      if (existingWaitlist) {
-        throw new BadRequestException('Ya estás en la lista de espera para este horario');
-      }
-
-      // Crear entrada en lista de espera
-      const waitlistEntry = this.waitlistRepository.create({
-        user: { id: userId } as any,
-        timeSlot: { id: timeSlotId } as any,
-        userId,
-        timeSlotId,
-        status: WaitlistStatus.PENDING
-      });
-
-      await this.waitlistRepository.save(waitlistEntry);
-      this.logger.log(`createReservation -> waitlist entry created for user=${userId}, timeSlot=${timeSlotId}`);
-
-      throw new BadRequestException('No hay cupo disponible en este horario. Has sido agregado a la lista de espera.');
+      this.logger.warn(`createReservation -> timeSlot full id=${timeSlot.id}`);
+      throw new BadRequestException('No hay cupo disponible en este horario. Elegí otro turno.');
     }
   }
 
@@ -319,12 +296,12 @@ export class ReservationsService {
     });
 
     if (!reservation) {
-      throw new BadRequestException('Reservation not found');
+      throw new BadRequestException('Reserva no encontrada');
     }
 
     // Verificar que el usuario sea el propietario de la reserva
     if (reservation.user.id !== userId) {
-      throw new ForbiddenException('You can only cancel your own reservations');
+      throw new ForbiddenException('Solo puedes cancelar tus propias reservas');
     }
 
     // Verificar que la cancelación sea al menos 2 horas antes
@@ -337,7 +314,7 @@ export class ReservationsService {
     const twoHoursBefore = new Date(timeSlotDate.getTime() - 2 * 60 * 60 * 1000);
 
     if (now >= twoHoursBefore) {
-      throw new BadRequestException('Reservations can only be cancelled at least 2 hours before the time slot');
+      throw new BadRequestException('Solo puedes cancelar tu reserva con al menos 2 horas de anticipación');
     }
 
     const timeSlot = reservation.timeSlot;
@@ -2081,7 +2058,9 @@ export class ReservationsService {
     // 4. Cuando generamos desde pago, NO necesitamos validar canBook (ya sabemos que puede reservar)
     // Solo validar si NO estamos generando desde pago
     const isGeneratingFromPayment = !!(customStartDate && customEndDate);
-    const canBookGlobally = isGeneratingFromPayment ? true : await this.paymentsService.canUserBookClass(activeSubscription.id);
+    const canBookGlobally = isGeneratingFromPayment
+      ? true
+      : (await this.paymentsService.canUserBookClass(activeSubscription.id)).canBook;
     
     // OPTIMIZACIÓN: Pre-cargar suscripción para actualizaciones batch
     let subscriptionForBatchUpdate = activeSubscription;
@@ -2138,7 +2117,7 @@ export class ReservationsService {
           } else {
             // Validación completa solo si no estamos generando desde pago
         const canBook = await this.paymentsService.canUserBookClass(activeSubscription.id, slotDate);
-        if (!canBook) {
+        if (!canBook.canBook) {
           this.logger.verbose(`generateRecurringReservations -> canBook=false subscription=${activeSubscription.id} date=${slotDate.toISOString()}`);
           cannotBookDates.push(slotDate.toISOString().split('T')[0]);
           currentDate.setDate(currentDate.getDate() + 1);
@@ -2610,7 +2589,7 @@ export class ReservationsService {
 
         // Verificar si puede reservar
         const canBook = await this.paymentsService.canUserBookClass(activeSubscription.id, slotDate);
-        if (!canBook) {
+        if (!canBook.canBook) {
           currentDate.setDate(currentDate.getDate() + 1);
           daysChecked++;
           continue;

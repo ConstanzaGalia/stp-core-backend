@@ -110,8 +110,8 @@ export class PaymentsController {
 
   @Post('subscriptions/:subscriptionId/can-book-class')
   async canUserBookClass(@Param('subscriptionId') subscriptionId: string) {
-    const canBook = await this.paymentsService.canUserBookClass(subscriptionId);
-    return { canBookClass: canBook };
+    const result = await this.paymentsService.canUserBookClass(subscriptionId);
+    return { canBookClass: result.canBook, ...result };
   }
 
   // ===== PROCESAMIENTO DE PAGOS =====
