@@ -24,6 +24,12 @@ type ParsedRow = {
   raw: Record<string, string | null>;
   testName: string | null;
   athleteName: string | null;
+  sourceDate: string | null;
+  institution: string | null;
+  sport: string | null;
+  age: number | null;
+  stimulus: string | null;
+  sourceNumber: number | null;
   splitIndex: number | null;
   splitMeters: number | null;
   timeSeconds: number | null;
@@ -167,6 +173,12 @@ function detectDistanceFromTestName(name: string | null): number | null {
   if (!m) return null;
   const n = Number(m[1]);
   return Number.isFinite(n) && n > 0 ? n : null;
+}
+
+function hasMaterialDifference(source: number, calculated: number, tolerance = 0.1): boolean {
+  if (!Number.isFinite(source) || !Number.isFinite(calculated)) return false;
+  const denominator = Math.max(Math.abs(calculated), 0.001);
+  return Math.abs(source - calculated) / denominator > tolerance;
 }
 
 @Injectable()
@@ -359,6 +371,12 @@ export class PhotocellImportService {
         raw: record,
         testName: pickValue(record, ['nombretest', 'test', 'nombre_test', 'protocol', 'protocolo', 'prueba']),
         athleteName,
+        sourceDate: pickValue(record, ['fecha', 'date', 'fecha_test', 'test_date']),
+        institution: pickValue(record, ['institucion', 'institution', 'club']),
+        sport: pickValue(record, ['deporte', 'sport']),
+        age: pickNumber(record, ['edad', 'age']),
+        stimulus: pickValue(record, ['estimulo', 'stimulus']),
+        sourceNumber: pickNumber(record, ['num', 'numero', 'number']),
         splitIndex: pickNumber(record, ['parcial', 'split_index', 'split_num', 'split']),
         splitMeters: metros != null && metros > 0 ? metros : detectDistanceFromTestName(
           pickValue(record, ['nombretest', 'test', 'nombre_test', 'protocol', 'protocolo', 'prueba']),
@@ -425,24 +443,46 @@ export class PhotocellImportService {
     rows: ParsedRow[],
     evaluationDate: string,
   ): CanonicalEvaluationPreview[] {
-    const distance = protocol.distanceMeters ?? null;
+    const protocolDistance = protocol.distanceMeters ?? null;
     const attempts = rows
       .map((row, index) => {
         if (row.timeSeconds == null) return null;
         const attemptNumber = row.repetitionIndex ?? row.splitIndex ?? index + 1;
-        let velocity = row.velocityMps;
-        if (velocity == null && distance != null && row.timeSeconds > 0) {
-          velocity = round3(distance / row.timeSeconds);
-        }
-        let acceleration = row.accelerationMps2;
-        if (acceleration == null && velocity != null && row.timeSeconds > 0) {
-          acceleration = round3(velocity / row.timeSeconds);
+        const distance = row.splitMeters ?? protocolDistance;
+        const calculatedVelocity =
+          distance != null && distance > 0 && row.timeSeconds > 0
+            ? round3(distance / row.timeSeconds)
+            : null;
+        const warnings: string[] = [];
+        if (
+          row.velocityMps != null &&
+          calculatedVelocity != null &&
+          hasMaterialDifference(row.velocityMps, calculatedVelocity)
+        ) {
+          warnings.push(
+            `La velocidad informada (${row.velocityMps.toFixed(3)} m/s) no coincide con distancia ÷ tiempo (${calculatedVelocity.toFixed(3)} m/s). Se usó la velocidad recalculada.`,
+          );
         }
         return {
           attemptNumber,
+          distance,
           timeSeconds: round3(row.timeSeconds)!,
-          velocityMps: velocity,
-          accelerationMps2: acceleration,
+          velocityMps: calculatedVelocity ?? row.velocityMps,
+          sourceVelocityMps: row.velocityMps,
+          // La definición de "Aceleración" depende del software. Se conserva
+          // como dato fuente, pero no se inventa a partir de velocidad/tiempo.
+          sourceAccelerationMps2: row.accelerationMps2,
+          sourceContext: {
+            athleteName: row.athleteName,
+            sourceDate: row.sourceDate,
+            institution: row.institution,
+            sport: row.sport,
+            age: row.age,
+            stimulus: row.stimulus,
+            sourceNumber: row.sourceNumber,
+            testName: row.testName,
+          },
+          warnings,
         };
       })
       .filter((entry): entry is NonNullable<typeof entry> => entry != null);
@@ -455,33 +495,51 @@ export class PhotocellImportService {
       const measurements: CanonicalMeasurement[] = [
         {
           partial: 1,
-          distance,
+          distance: attempt.distance,
           time: attempt.timeSeconds,
           velocity: attempt.velocityMps,
-          acceleration: attempt.accelerationMps2,
+          acceleration: attempt.sourceAccelerationMps2,
           power: null,
-          label: `${distance ?? '?'} m`,
+          label: `${attempt.distance ?? '?'} m`,
+          extras: {
+            sourceVelocityMps: attempt.sourceVelocityMps,
+            sourceAccelerationMps2: attempt.sourceAccelerationMps2,
+            velocitySource:
+              attempt.distance != null && attempt.timeSeconds > 0
+                ? 'calculated_distance_over_time'
+                : 'source',
+          },
         },
       ];
       const derivedMetrics: Record<string, number | null> = {
         totalTimeSeconds: attempt.timeSeconds,
         avgVelocityMps: attempt.velocityMps,
         maxVelocityMps: attempt.velocityMps,
-        avgAccelerationMps2: attempt.accelerationMps2,
+        avgAccelerationMps2: attempt.sourceAccelerationMps2,
       };
       const metrics: Record<string, unknown> = {
         sourceType: 'photocell',
         measurementMode: 'start_finish' satisfies PhotocellMeasurementMode,
         protocolCode: protocol.code,
         protocolLabel: protocol.label,
-        totalDistanceMeters: distance,
-        gates: distance != null ? [{ meters: 0 }, { meters: distance }] : [{ meters: 0 }],
+        totalDistanceMeters: attempt.distance,
+        gates:
+          attempt.distance != null
+            ? [{ meters: 0 }, { meters: attempt.distance }]
+            : [{ meters: 0 }],
         attemptCount: 1,
         bestTimeSeconds: attempt.timeSeconds,
         totalTimeSeconds: attempt.timeSeconds,
         avgVelocityMps: attempt.velocityMps,
         maxVelocityMps: attempt.velocityMps,
-        avgAccelerationMps2: attempt.accelerationMps2,
+        avgAccelerationMps2: attempt.sourceAccelerationMps2,
+        sourceVelocityMps: attempt.sourceVelocityMps,
+        sourceAccelerationMps2: attempt.sourceAccelerationMps2,
+        sourceContext: attempt.sourceContext,
+        velocitySource:
+          attempt.distance != null && attempt.timeSeconds > 0
+            ? 'calculated_distance_over_time'
+            : 'source',
       };
       return {
         protocolCode: protocol.code,
@@ -497,10 +555,12 @@ export class PhotocellImportService {
           {
             label: `Intento ${attempt.attemptNumber}`,
             attemptNumber: attempt.attemptNumber,
-            distanceMeters: distance,
+            distanceMeters: attempt.distance,
             timeSeconds: attempt.timeSeconds,
             velocityMps: attempt.velocityMps,
-            accelerationMps2: attempt.accelerationMps2,
+            sourceVelocityMps: attempt.sourceVelocityMps,
+            sourceAccelerationMps2: attempt.sourceAccelerationMps2,
+            sourceContext: attempt.sourceContext,
           },
         ],
         aggregates: {},
@@ -511,8 +571,12 @@ export class PhotocellImportService {
         ]
           .filter(Boolean)
           .join(' '),
-        completeness: this.computeCompleteness([attempt.timeSeconds, attempt.velocityMps, distance]),
-        warnings: [],
+        completeness: this.computeCompleteness([
+          attempt.timeSeconds,
+          attempt.velocityMps,
+          attempt.distance,
+        ]),
+        warnings: attempt.warnings,
       };
     });
   }
@@ -537,8 +601,8 @@ export class PhotocellImportService {
           splitIndex,
           splitMeters,
           timeSeconds: row.timeSeconds,
-          velocityMps: row.velocityMps,
-          accelerationMps2: row.accelerationMps2,
+        sourceVelocityMps: row.velocityMps,
+        sourceAccelerationMps2: row.accelerationMps2,
         };
       })
       .filter((entry) => entry.timeSeconds != null && entry.splitMeters != null && entry.splitMeters > 0);
@@ -564,26 +628,34 @@ export class PhotocellImportService {
       const segmentTime = round3(cumulativeTime - prevTime);
       const prevMeters = index > 0 ? unique[index - 1].splitMeters! : 0;
       const segmentMeters = (entry.splitMeters ?? 0) - prevMeters;
-      let velocity = entry.velocityMps;
-      if (velocity == null && segmentMeters > 0 && segmentTime != null && segmentTime > 0) {
-        velocity = round3(segmentMeters / segmentTime);
-      }
-      let acceleration = entry.accelerationMps2;
-      if (acceleration == null && velocity != null && segmentTime != null && segmentTime > 0) {
-        acceleration = round3(velocity / segmentTime);
+      const velocity =
+        segmentMeters > 0 && segmentTime != null && segmentTime > 0
+          ? round3(segmentMeters / segmentTime)
+          : entry.sourceVelocityMps;
+      if (
+        entry.sourceVelocityMps != null &&
+        velocity != null &&
+        hasMaterialDifference(entry.sourceVelocityMps, velocity)
+      ) {
+        warnings.push(
+          `${entry.splitMeters} m: velocidad informada ${entry.sourceVelocityMps.toFixed(3)} m/s; recalculada ${velocity.toFixed(3)} m/s.`,
+        );
       }
       return {
         partial: entry.splitIndex,
         distance: entry.splitMeters,
         time: round3(cumulativeTime),
         velocity,
-        acceleration,
+        acceleration: entry.sourceAccelerationMps2,
         power: null,
         label: `${entry.splitMeters} m`,
         extras: {
           cumulativeTimeSeconds: round3(cumulativeTime),
           segmentTimeSeconds: segmentTime,
           segmentMeters,
+          sourceVelocityMps: entry.sourceVelocityMps,
+          sourceAccelerationMps2: entry.sourceAccelerationMps2,
+          velocitySource: 'calculated_segment_distance_over_time',
         },
       };
     });
@@ -596,11 +668,7 @@ export class PhotocellImportService {
     const derivedMetrics: Record<string, number | null> = {
       totalTimeSeconds: totalTime,
       avgVelocityMps:
-        velocities.length > 0
-          ? average(velocities)
-          : totalTime && totalDistance
-            ? round3(totalDistance / totalTime)
-            : null,
+        totalTime && totalDistance ? round3(totalDistance / totalTime) : average(velocities),
       maxVelocityMps: velocities.length ? round3(Math.max(...velocities)) : null,
       avgAccelerationMps2: accelerations.length ? average(accelerations) : null,
     };
