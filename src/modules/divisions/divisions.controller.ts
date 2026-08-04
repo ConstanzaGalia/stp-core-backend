@@ -63,6 +63,17 @@ export class DivisionsController {
     });
   }
 
+  @Get(':id/coach-dashboard')
+  getCoachDashboard(
+    @GetUser() actor: User,
+    @Param('id', ParseSanitizedUUIDPipe) id: string,
+    @Query('positionId') positionId?: string,
+  ) {
+    return this.divisionAnalyticsService.getCoachDashboard(actor, id, {
+      positionId: positionId ?? null,
+    });
+  }
+
   @Get(':id')
   getOne(
     @GetUser() actor: User,

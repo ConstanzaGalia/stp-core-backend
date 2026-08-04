@@ -17,6 +17,13 @@ import {
   resolveCoachDivisionScope,
 } from '../../common/helpers/division-scope.helper';
 import { isStpLegacyOnlyPhysicalEvaluation } from '../physical-evaluation/physical-evaluation.service';
+import {
+  hasAnyProjectedMetric,
+  projectCoachDashboardMetrics,
+  type CoachDashboardMetricRow,
+} from './coach-dashboard-metrics.util';
+
+export type { CoachDashboardMetricRow };
 
 const STAFF_VIEW_ROLES: UserRole[] = [
   UserRole.STP_ADMIN,
@@ -63,6 +70,14 @@ export type DivisionAnalyticsResponse = {
   overview: DivisionAnalyticsOverview;
   byPosition: DivisionAnalyticsGroup[];
   athletes: DivisionRosterAthlete[];
+};
+
+export type CoachDashboardResponse = {
+  divisionId: string;
+  divisionName: string;
+  positionId: string | null;
+  athletes: DivisionRosterAthlete[];
+  metricRows: CoachDashboardMetricRow[];
 };
 
 @Injectable()
@@ -166,6 +181,75 @@ export class DivisionAnalyticsService {
       byPosition,
       athletes: filteredAthletes,
     };
+  }
+
+  async getCoachDashboard(
+    actor: User,
+    divisionId: string,
+    options: { positionId?: string | null } = {},
+  ): Promise<CoachDashboardResponse> {
+    const division = await this.assertCanAccessDivision(actor, divisionId);
+    const positionFilter =
+      options.positionId === undefined || options.positionId === ''
+        ? null
+        : options.positionId;
+
+    const allAthletes = await this.buildRoster(division.companyId, divisionId, null);
+    const athletes = positionFilter
+      ? allAthletes.filter((a) =>
+          positionFilter === 'none' ? !a.positionId : a.positionId === positionFilter,
+        )
+      : allAthletes;
+
+    const userIds = athletes.map((a) => a.userId);
+    const metricRows = await this.loadCoachDashboardMetricRows(userIds);
+
+    return {
+      divisionId: division.id,
+      divisionName: division.name,
+      positionId: positionFilter,
+      athletes,
+      metricRows,
+    };
+  }
+
+  private async loadCoachDashboardMetricRows(
+    userIds: string[],
+  ): Promise<CoachDashboardMetricRow[]> {
+    if (userIds.length === 0) return [];
+
+    const evals = await this.physicalEvalRepository.find({
+      where: { user: { id: In(userIds) } },
+      relations: ['tests', 'user'],
+      order: { evaluationDate: 'ASC', createdAt: 'ASC' },
+    });
+
+    const rows: CoachDashboardMetricRow[] = [];
+    for (const ev of evals) {
+      const uid = ev.user?.id;
+      if (!uid) continue;
+      if (isStpLegacyOnlyPhysicalEvaluation(ev)) continue;
+
+      const metrics = projectCoachDashboardMetrics(
+        ev.derivedMetrics as Record<string, unknown> | null,
+        ev.structuredAnalysis as Record<string, unknown> | null,
+      );
+      if (!hasAnyProjectedMetric(metrics)) continue;
+
+      const d =
+        ev.evaluationDate instanceof Date
+          ? ev.evaluationDate
+          : new Date(ev.evaluationDate);
+
+      rows.push({
+        userId: uid,
+        evaluationId: ev.id,
+        evaluationDate: d.toISOString().slice(0, 10),
+        metrics,
+      });
+    }
+
+    return rows;
   }
 
   private async buildRoster(
