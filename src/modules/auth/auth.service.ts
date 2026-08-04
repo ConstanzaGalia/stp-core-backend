@@ -466,6 +466,7 @@ export class AuthService {
       imageProfile: user.imageProfile,
       dateOfBirth: user.dateOfBirth,
       primarySport: user.primarySport ?? null,
+      clubName: user.clubName ?? null,
       evaluationPortalOnly: user.evaluationPortalOnly === true,
       createdAt: user.created_at,
       updatedAt: user.updated_at,

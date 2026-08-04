@@ -22,6 +22,7 @@ import { PhotocellImportService } from './photocell-import.service';
 import {
   DEFAULT_EVALUATIONS_MAX_FILE_MB,
   EVALUATIONS_MAX_FILES_PER_REQUEST,
+  isAllowedEvaluationFilename,
 } from './evaluations-upload.constants';
 
 const uploadLimitsMb = Number(process.env.EVALUATIONS_MAX_FILE_MB || String(DEFAULT_EVALUATIONS_MAX_FILE_MB));
@@ -55,7 +56,12 @@ export class EvaluacionesController {
 
   @Post()
   create(@GetUser() actor: User, @Body() dto: CreateEvaluacionDto) {
-    return this.physicalEvaluations.createEmptyEvaluation(actor, dto.athleteId, dto.evaluationDate);
+    return this.physicalEvaluations.createEmptyEvaluation(
+      actor,
+      dto.athleteId,
+      dto.evaluationDate,
+      dto.criteriaSetId,
+    );
   }
 
   @Post('photocell/preview')
@@ -65,8 +71,8 @@ export class EvaluacionesController {
 
   @Post('photocell')
   async createPhotocell(@GetUser() actor: User, @Body() dto: PhotocellImportDto) {
-    const preview = this.photocellImport.buildPreview(dto);
-    return this.physicalEvaluations.createPhotocellEvaluation(actor, preview);
+    const preview = await this.photocellImport.buildPreview(dto);
+    return this.physicalEvaluations.createPhotocellEvaluations(actor, preview);
   }
 
   @Post(':id/ai-analysis')
@@ -84,9 +90,8 @@ export class EvaluacionesController {
       storage: memoryStorage(),
       limits: { fileSize: uploadMaxBytes },
       fileFilter: (_req, file, cb) => {
-        const name = (file.originalname || '').toLowerCase();
-        if (!name.endsWith('.pdf') && !name.endsWith('.csv')) {
-          cb(new Error('Solo se permiten archivos PDF o CSV'), false);
+        if (!isAllowedEvaluationFilename(file.originalname || '')) {
+          cb(new Error('Solo se permiten archivos PDF, CSV o Excel (XLS/XLSX)'), false);
           return;
         }
         cb(null, true);

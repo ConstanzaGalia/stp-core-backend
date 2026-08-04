@@ -57,7 +57,14 @@ export class TestTypeFromFileService {
     if (fromName) hints.push(`filename→${fromName}`);
 
     let fromContent: string | null = null;
-    if (mimeType === 'text/csv' || originalFilename.toLowerCase().endsWith('.csv')) {
+    if (
+      mimeType === 'text/csv' ||
+      originalFilename.toLowerCase().endsWith('.csv') ||
+      originalFilename.toLowerCase().endsWith('.xlsx') ||
+      originalFilename.toLowerCase().endsWith('.xls') ||
+      mimeType.includes('spreadsheet') ||
+      mimeType === 'application/vnd.ms-excel'
+    ) {
       const firstLine = contentSample.split(/\r?\n/)[0] ?? '';
       fromContent = this.inferFromCsvHeaderLine(firstLine);
       if (fromContent) hints.push(`csv_header→${fromContent}`);

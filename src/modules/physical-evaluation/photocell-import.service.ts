@@ -1,7 +1,7 @@
 import { BadRequestException, Injectable } from '@nestjs/common';
 import { PhotocellImportDto } from './dto/photocell-import.dto';
-
-type PhotocellProtocolCategory = 'speed' | 'agility' | 'resistance';
+import { EvaluationProtocolService } from './evaluation-protocol.service';
+import { EvaluationProtocol } from 'src/entities/evaluation-protocol.entity';
 
 export type PhotocellMeasurementMode =
   | 'start_finish'
@@ -9,17 +9,21 @@ export type PhotocellMeasurementMode =
   | 'repeated_attempts'
   | 'repeated_sprints';
 
+export type PhotocellProtocolCategory = 'speed' | 'agility' | 'resistance';
+
 type ProtocolDef = {
   code: string;
   label: string;
   testType: string;
   category: PhotocellProtocolCategory;
   distanceMeters?: number;
+  gates?: number[];
 };
 
 type ParsedRow = {
   raw: Record<string, string | null>;
   testName: string | null;
+  athleteName: string | null;
   splitIndex: number | null;
   splitMeters: number | null;
   timeSeconds: number | null;
@@ -30,16 +34,37 @@ type ParsedRow = {
   sprintNumber: number | null;
 };
 
-/** Perfiles de gates intermedios (futuro: fotocélula extra). Se usa si hay parciales sin columna Metros. */
-const SPRINT_SPLIT_GATE_PROFILES: Record<string, number[]> = {
-  sprint_50m: [10, 20, 30, 40, 50],
+export type CanonicalMeasurement = {
+  partial: number | null;
+  distance: number | null;
+  time: number | null;
+  velocity: number | null;
+  acceleration: number | null;
+  power: number | null;
+  label?: string;
+  extras?: Record<string, unknown>;
+};
+
+export type CanonicalEvaluationPreview = {
+  protocolCode: string;
+  protocolLabel: string;
+  testType: string;
+  evaluationDate: string;
+  attempt: number | null;
+  measurementMode: PhotocellMeasurementMode;
+  measurements: CanonicalMeasurement[];
+  derivedMetrics: Record<string, number | null>;
+  /** Compat reporte legacy */
+  metrics: Record<string, unknown>;
+  repetitions: Array<Record<string, unknown>>;
+  aggregates: Record<string, unknown>;
+  summaryAnalysis: string;
+  completeness: number;
+  warnings: string[];
 };
 
 export type PhotocellPreviewResponse = {
   sourceType: 'photocell';
-  protocolCode: string;
-  protocolLabel: string;
-  testType: string;
   athleteId: string;
   evaluationDate: string;
   sourceName: string | null;
@@ -48,79 +73,16 @@ export type PhotocellPreviewResponse = {
     rows: Array<Array<string | null>>;
   };
   warnings: string[];
+  evaluations: CanonicalEvaluationPreview[];
+  /** Compat flat (primera evaluación candidata) */
+  protocolCode: string;
+  protocolLabel: string;
+  testType: string;
   metrics: Record<string, unknown>;
   repetitions: Array<Record<string, unknown>>;
   aggregates: Record<string, unknown>;
   summaryAnalysis: string;
   completeness: number;
-};
-
-const PROTOCOLS: Record<string, ProtocolDef> = {
-  sprint_10m: {
-    code: 'sprint_10m',
-    label: 'Sprint 10 m',
-    testType: 'photocell_sprint_10m',
-    category: 'speed',
-    distanceMeters: 10,
-  },
-  sprint_20m: {
-    code: 'sprint_20m',
-    label: 'Sprint 20 m',
-    testType: 'photocell_sprint_20m',
-    category: 'speed',
-    distanceMeters: 20,
-  },
-  sprint_30m: {
-    code: 'sprint_30m',
-    label: 'Sprint 30 m',
-    testType: 'photocell_sprint_30m',
-    category: 'speed',
-    distanceMeters: 30,
-  },
-  sprint_40m: {
-    code: 'sprint_40m',
-    label: 'Sprint 40 m',
-    testType: 'photocell_sprint_40m',
-    category: 'speed',
-    distanceMeters: 40,
-  },
-  sprint_50m: {
-    code: 'sprint_50m',
-    label: 'Sprint 50 m',
-    testType: 'photocell_sprint_50m',
-    category: 'speed',
-    distanceMeters: 50,
-  },
-  t_test: {
-    code: 't_test',
-    label: 'T-Test',
-    testType: 'photocell_t_test',
-    category: 'agility',
-  },
-  test_505: {
-    code: 'test_505',
-    label: '505',
-    testType: 'photocell_505',
-    category: 'agility',
-  },
-  illinois: {
-    code: 'illinois',
-    label: 'Illinois',
-    testType: 'photocell_illinois',
-    category: 'agility',
-  },
-  rast: {
-    code: 'rast',
-    label: 'RAST',
-    testType: 'photocell_rast',
-    category: 'resistance',
-  },
-  rsa: {
-    code: 'rsa',
-    label: 'RSA',
-    testType: 'photocell_rsa',
-    category: 'resistance',
-  },
 };
 
 function normalizeHeader(value: string): string {
@@ -177,24 +139,59 @@ function metricStat(values: number[], higherIsBetter: boolean): { best: number |
   };
 }
 
+function protocolFromEntity(entity: EvaluationProtocol): ProtocolDef {
+  const config = entity.config ?? {};
+  const distanceMeters =
+    typeof config.distanceMeters === 'number' ? config.distanceMeters : undefined;
+  const gates = Array.isArray(config.gates)
+    ? config.gates.filter((g): g is number => typeof g === 'number')
+    : undefined;
+  const testType =
+    typeof config.testType === 'string' && config.testType
+      ? config.testType
+      : `photocell_${entity.code}`;
+  const category = (entity.category as PhotocellProtocolCategory) || 'speed';
+  return {
+    code: entity.code,
+    label: entity.label,
+    testType,
+    category,
+    distanceMeters,
+    gates,
+  };
+}
+
+function detectDistanceFromTestName(name: string | null): number | null {
+  if (!name) return null;
+  const m = name.toLowerCase().match(/(\d+)\s*m/);
+  if (!m) return null;
+  const n = Number(m[1]);
+  return Number.isFinite(n) && n > 0 ? n : null;
+}
+
 @Injectable()
 export class PhotocellImportService {
-  getProtocolOptions(): Array<{ code: string; label: string; category: PhotocellProtocolCategory }> {
-    return Object.values(PROTOCOLS).map((protocol) => ({
-      code: protocol.code,
-      label: protocol.label,
-      category: protocol.category,
-    }));
+  constructor(private readonly protocols: EvaluationProtocolService) {}
+
+  async getProtocolOptions(): Promise<Array<{ code: string; label: string; category: string }>> {
+    const rows = await this.protocols.list('photocells', true);
+    return rows.map((p) => ({ code: p.code, label: p.label, category: p.category }));
   }
 
-  buildPreview(dto: PhotocellImportDto): PhotocellPreviewResponse {
-    const protocol = PROTOCOLS[dto.protocolCode];
-    if (!protocol) {
-      throw new BadRequestException('Protocolo de fotocélulas no soportado');
-    }
+  async buildPreview(dto: PhotocellImportDto): Promise<PhotocellPreviewResponse> {
     if (!dto.headers?.length) {
       throw new BadRequestException('Faltan encabezados para interpretar la importación');
     }
+
+    const catalog = await this.protocols.list('photocells', true);
+    if (!catalog.length) {
+      throw new BadRequestException('No hay protocolos de fotocélulas configurados');
+    }
+
+    let protocolEntity =
+      (dto.protocolCode
+        ? await this.protocols.findActiveByDeviceAndCode('photocells', dto.protocolCode)
+        : null) ?? null;
 
     const parsedRows = this.normalizeRows(dto.headers, dto.rows);
     const nonEmptyRows = parsedRows.filter((row) =>
@@ -204,12 +201,45 @@ export class PhotocellImportService {
       throw new BadRequestException('No hay filas con datos para interpretar');
     }
 
-    const interpreted = this.interpretByProtocol(protocol, nonEmptyRows);
+    const globalWarnings: string[] = [];
+    const nameHints = [
+      ...new Set(nonEmptyRows.map((r) => r.athleteName).filter((v): v is string => !!v)),
+    ];
+    if (nameHints.length > 0) {
+      globalWarnings.push(
+        `El archivo menciona: ${nameHints.slice(0, 3).join(', ')}. Se guardará para el atleta seleccionado en STP.`,
+      );
+    }
+
+    // Auto-detect protocol if missing or to upgrade sprint splits → longest distance
+    const autoProtocol = this.detectProtocolFromRows(nonEmptyRows, catalog);
+    if (!protocolEntity && autoProtocol) {
+      protocolEntity = autoProtocol;
+      globalWarnings.push(`Protocolo detectado automáticamente: ${autoProtocol.label}.`);
+    }
+    if (!protocolEntity) {
+      throw new BadRequestException('Protocolo de fotocélulas no soportado');
+    }
+
+    // If user picked a short sprint but rows are a split ladder, upgrade to max gate protocol
+    const upgraded = this.maybeUpgradeSprintProtocol(protocolEntity, nonEmptyRows, catalog);
+    if (upgraded && upgraded.code !== protocolEntity.code) {
+      globalWarnings.push(
+        `Se agruparon parciales en ${upgraded.label} (en lugar de crear una evaluación por distancia).`,
+      );
+      protocolEntity = upgraded;
+    }
+
+    const protocol = protocolFromEntity(protocolEntity);
+    const evaluations = this.buildCanonicalEvaluations(protocol, nonEmptyRows, dto.evaluationDate);
+
+    if (!evaluations.length) {
+      throw new BadRequestException('No se pudo interpretar ninguna evaluación a partir de los datos');
+    }
+
+    const first = evaluations[0];
     return {
       sourceType: 'photocell',
-      protocolCode: protocol.code,
-      protocolLabel: protocol.label,
-      testType: protocol.testType,
       athleteId: dto.athleteId,
       evaluationDate: dto.evaluationDate,
       sourceName: dto.sourceName?.trim() || null,
@@ -217,13 +247,96 @@ export class PhotocellImportService {
         headers: dto.headers.slice(0, 20),
         rows: dto.rows.slice(0, 12),
       },
-      warnings: interpreted.warnings,
-      metrics: interpreted.metrics,
-      repetitions: interpreted.repetitions,
-      aggregates: interpreted.aggregates,
-      summaryAnalysis: interpreted.summaryAnalysis,
-      completeness: interpreted.completeness,
+      warnings: [...globalWarnings, ...evaluations.flatMap((e) => e.warnings)],
+      evaluations,
+      protocolCode: first.protocolCode,
+      protocolLabel: first.protocolLabel,
+      testType: first.testType,
+      metrics: first.metrics,
+      repetitions: first.repetitions,
+      aggregates: first.aggregates,
+      summaryAnalysis: first.summaryAnalysis,
+      completeness: first.completeness,
     };
+  }
+
+  private detectProtocolFromRows(
+    rows: ParsedRow[],
+    catalog: EvaluationProtocol[],
+  ): EvaluationProtocol | null {
+    const distances = [
+      ...new Set(
+        rows
+          .map((r) => r.splitMeters ?? detectDistanceFromTestName(r.testName))
+          .filter((d): d is number => d != null && d > 0),
+      ),
+    ].sort((a, b) => a - b);
+
+    if (distances.length >= 2) {
+      const max = distances[distances.length - 1];
+      const match = catalog.find((p) => {
+        const def = protocolFromEntity(p);
+        return def.category === 'speed' && def.distanceMeters === max;
+      });
+      if (match) return match;
+    }
+
+    if (distances.length === 1) {
+      const match = catalog.find((p) => protocolFromEntity(p).distanceMeters === distances[0]);
+      if (match) return match;
+    }
+
+    const testNames = rows.map((r) => (r.testName ?? '').toLowerCase()).join(' ');
+    if (testNames.includes('rast')) return catalog.find((p) => p.code === 'rast') ?? null;
+    if (testNames.includes('rsa')) return catalog.find((p) => p.code === 'rsa') ?? null;
+    if (testNames.includes('505')) return catalog.find((p) => p.code === 'test_505') ?? null;
+    if (testNames.includes('illinois')) return catalog.find((p) => p.code === 'illinois') ?? null;
+    if (testNames.includes('t-test') || testNames.includes('t test') || testNames.includes('ttest')) {
+      return catalog.find((p) => p.code === 't_test') ?? null;
+    }
+    return null;
+  }
+
+  private maybeUpgradeSprintProtocol(
+    selected: EvaluationProtocol,
+    rows: ParsedRow[],
+    catalog: EvaluationProtocol[],
+  ): EvaluationProtocol {
+    const def = protocolFromEntity(selected);
+    if (def.category !== 'speed') return selected;
+
+    const distances = [
+      ...new Set(
+        rows
+          .map((r) => r.splitMeters ?? detectDistanceFromTestName(r.testName))
+          .filter((d): d is number => d != null && d > 0),
+      ),
+    ].sort((a, b) => a - b);
+
+    if (distances.length < 2) return selected;
+    const max = distances[distances.length - 1];
+    const upgraded = catalog.find((p) => {
+      const d = protocolFromEntity(p);
+      return d.category === 'speed' && d.distanceMeters === max;
+    });
+    return upgraded ?? selected;
+  }
+
+  private buildCanonicalEvaluations(
+    protocol: ProtocolDef,
+    rows: ParsedRow[],
+    evaluationDate: string,
+  ): CanonicalEvaluationPreview[] {
+    switch (protocol.category) {
+      case 'speed':
+        return this.buildSprintEvaluations(protocol, rows, evaluationDate);
+      case 'agility':
+        return this.buildAgilityEvaluations(protocol, rows, evaluationDate);
+      case 'resistance':
+        return this.buildResistanceEvaluations(protocol, rows, evaluationDate);
+      default:
+        throw new BadRequestException('Categoría de protocolo no soportada');
+    }
   }
 
   private normalizeRows(headers: string[], rows: Array<Array<string | null>>): ParsedRow[] {
@@ -237,11 +350,19 @@ export class PhotocellImportService {
       });
 
       const metros = pickNumber(record, ['metros', 'metro', 'distancia', 'distance', 'm']);
+      const apellido = pickValue(record, ['apellido', 'lastname', 'last_name']);
+      const nombre = pickValue(record, ['nombre', 'name', 'firstname', 'first_name']);
+      const athleteName =
+        apellido || nombre ? [apellido, nombre].filter(Boolean).join(' ').trim() : pickValue(record, ['atleta', 'athlete', 'jugador']);
+
       return {
         raw: record,
         testName: pickValue(record, ['nombretest', 'test', 'nombre_test', 'protocol', 'protocolo', 'prueba']),
+        athleteName,
         splitIndex: pickNumber(record, ['parcial', 'split_index', 'split_num', 'split']),
-        splitMeters: metros != null && metros > 0 ? metros : null,
+        splitMeters: metros != null && metros > 0 ? metros : detectDistanceFromTestName(
+          pickValue(record, ['nombretest', 'test', 'nombre_test', 'protocol', 'protocolo', 'prueba']),
+        ),
         timeSeconds: pickNumber(record, [
           'tiempoparcial',
           'tiempo_parcial',
@@ -259,27 +380,7 @@ export class PhotocellImportService {
     });
   }
 
-  private interpretByProtocol(protocol: ProtocolDef, rows: ParsedRow[]) {
-    switch (protocol.category) {
-      case 'speed':
-        return this.buildSprintPreview(protocol, rows);
-      case 'agility':
-        return this.buildAgilityPreview(protocol, rows);
-      case 'resistance':
-        return this.buildResistancePreview(protocol, rows);
-      default:
-        throw new BadRequestException('Categoría de protocolo no soportada');
-    }
-  }
-
-  /**
-   * Sprint con gates intermedios: varias filas, metros crecientes y tiempos acumulativos.
-   * Si no aplica → start_finish (0 m → meta; varias filas = varios intentos).
-   */
-  private detectSprintMeasurementMode(
-    rows: ParsedRow[],
-    protocol: ProtocolDef,
-  ): 'start_finish' | 'split_profile' {
+  private detectSprintMeasurementMode(rows: ParsedRow[], protocol: ProtocolDef): 'start_finish' | 'split_profile' {
     const withTime = rows.filter((r) => r.timeSeconds != null);
     if (withTime.length < 2) return 'start_finish';
 
@@ -296,41 +397,35 @@ export class PhotocellImportService {
       }
     }
 
-    const gateProfile = SPRINT_SPLIT_GATE_PROFILES[protocol.code];
-    if (gateProfile && withTime.length === gateProfile.length) {
-      const partials = withTime.map((r, i) => r.splitIndex ?? i + 1);
-      const matchesPartials = partials.every((p, i) => p === i + 1);
+    const gateProfile = protocol.gates;
+    if (gateProfile && gateProfile.length >= 2 && withTime.length === gateProfile.length) {
       const times = withTime.map((r) => r.timeSeconds!);
       const monotonic = times.every((t, i) => i === 0 || t >= times[i - 1]);
-      if (matchesPartials && monotonic) return 'split_profile';
+      if (monotonic) return 'split_profile';
     }
 
     return 'start_finish';
   }
 
-  private buildSprintGates(distance: number | null, splitMeters: number[]): Array<{ meters: number }> {
-    if (splitMeters.length > 0) {
-      const points = [0, ...splitMeters];
-      return [...new Set(points)].sort((a, b) => a - b).map((meters) => ({ meters }));
-    }
-    if (distance != null) return [{ meters: 0 }, { meters: distance }];
-    return [{ meters: 0 }];
-  }
-
-  private buildSprintPreview(protocol: ProtocolDef, rows: ParsedRow[]) {
+  private buildSprintEvaluations(
+    protocol: ProtocolDef,
+    rows: ParsedRow[],
+    evaluationDate: string,
+  ): CanonicalEvaluationPreview[] {
     const mode = this.detectSprintMeasurementMode(rows, protocol);
     if (mode === 'split_profile') {
-      return this.buildSprintSplitProfile(protocol, rows);
+      return [this.buildSprintSplitProfile(protocol, rows, evaluationDate)];
     }
-    return this.buildSprintStartFinish(protocol, rows);
+    return this.buildSprintStartFinishAttempts(protocol, rows, evaluationDate);
   }
 
-  /** 0 m → meta. Cada fila = un intento completo (no un split intermedio). */
-  private buildSprintStartFinish(protocol: ProtocolDef, rows: ParsedRow[]) {
-    const warnings: string[] = [];
+  /** Cada intento = una evaluación canónica. */
+  private buildSprintStartFinishAttempts(
+    protocol: ProtocolDef,
+    rows: ParsedRow[],
+    evaluationDate: string,
+  ): CanonicalEvaluationPreview[] {
     const distance = protocol.distanceMeters ?? null;
-    const gates = this.buildSprintGates(distance, []);
-
     const attempts = rows
       .map((row, index) => {
         if (row.timeSeconds == null) return null;
@@ -339,13 +434,15 @@ export class PhotocellImportService {
         if (velocity == null && distance != null && row.timeSeconds > 0) {
           velocity = round3(distance / row.timeSeconds);
         }
+        let acceleration = row.accelerationMps2;
+        if (acceleration == null && velocity != null && row.timeSeconds > 0) {
+          acceleration = round3(velocity / row.timeSeconds);
+        }
         return {
-          label: `Intento ${attemptNumber}`,
           attemptNumber,
-          distanceMeters: distance,
-          timeSeconds: round3(row.timeSeconds),
+          timeSeconds: round3(row.timeSeconds)!,
           velocityMps: velocity,
-          accelerationMps2: row.accelerationMps2 ?? null,
+          accelerationMps2: acceleration,
         };
       })
       .filter((entry): entry is NonNullable<typeof entry> => entry != null);
@@ -354,77 +451,80 @@ export class PhotocellImportService {
       throw new BadRequestException('No se encontraron tiempos válidos para el sprint');
     }
 
-    const times = attempts.map((a) => a.timeSeconds as number);
-    const best = Math.min(...times);
-    const worst = Math.max(...times);
-    const bestAttempt = attempts.find((a) => a.timeSeconds === best) ?? attempts[0];
-    const velocities = attempts
-      .map((a) => a.velocityMps)
-      .filter((v): v is number => v != null);
-
-    if (rows.length > attempts.length) {
-      warnings.push(`Se omitieron ${rows.length - attempts.length} fila(s) sin tiempo interpretable.`);
-    }
-    if (attempts.length > 1) {
-      warnings.push(
-        `Se detectaron ${attempts.length} intentos; el tiempo de referencia es el mejor (${best.toFixed(3)} s).`,
-      );
-    }
-
-    const headlineVelocity =
-      bestAttempt.velocityMps ??
-      (distance != null && best > 0 ? round3(distance / best) : average(velocities));
-
-    const metrics: Record<string, unknown> = {
-      sourceType: 'photocell',
-      measurementMode: 'start_finish' satisfies PhotocellMeasurementMode,
-      protocolCode: protocol.code,
-      protocolLabel: protocol.label,
-      totalDistanceMeters: distance,
-      gates,
-      attemptCount: attempts.length,
-      bestTimeSeconds: round3(best),
-      worstTimeSeconds: round3(worst),
-      avgTimeSeconds: average(times),
-      totalTimeSeconds: round3(best),
-      avgVelocityMps: headlineVelocity,
-      maxVelocityMps: velocities.length ? round3(Math.max(...velocities)) : headlineVelocity,
-      sourceRowCount: rows.length,
-      parsedRowCount: attempts.length,
-    };
-
-    const summaryParts = [
-      `Evaluación de fotocélulas: ${protocol.label} (salida 0 m → ${distance ?? '?'} m).`,
-      `Mejor tiempo ${best.toFixed(3)} s.`,
-    ];
-    if (headlineVelocity != null) {
-      summaryParts.push(`Velocidad media ${headlineVelocity.toFixed(3)} m/s.`);
-    }
-    if (attempts.length === 1) {
-      summaryParts.push('1 intento registrado.');
-    } else {
-      summaryParts.push(`${attempts.length} intentos registrados.`);
-    }
-
-    return {
-      warnings,
-      metrics,
-      repetitions: attempts,
-      aggregates: attempts.length > 1 ? { timeSeconds: metricStat(times, false) } : {},
-      summaryAnalysis: summaryParts.join(' '),
-      completeness: this.computeCompleteness([
-        metrics.bestTimeSeconds,
-        metrics.avgVelocityMps,
-        distance,
-      ]),
-    };
+    return attempts.map((attempt) => {
+      const measurements: CanonicalMeasurement[] = [
+        {
+          partial: 1,
+          distance,
+          time: attempt.timeSeconds,
+          velocity: attempt.velocityMps,
+          acceleration: attempt.accelerationMps2,
+          power: null,
+          label: `${distance ?? '?'} m`,
+        },
+      ];
+      const derivedMetrics: Record<string, number | null> = {
+        totalTimeSeconds: attempt.timeSeconds,
+        avgVelocityMps: attempt.velocityMps,
+        maxVelocityMps: attempt.velocityMps,
+        avgAccelerationMps2: attempt.accelerationMps2,
+      };
+      const metrics: Record<string, unknown> = {
+        sourceType: 'photocell',
+        measurementMode: 'start_finish' satisfies PhotocellMeasurementMode,
+        protocolCode: protocol.code,
+        protocolLabel: protocol.label,
+        totalDistanceMeters: distance,
+        gates: distance != null ? [{ meters: 0 }, { meters: distance }] : [{ meters: 0 }],
+        attemptCount: 1,
+        bestTimeSeconds: attempt.timeSeconds,
+        totalTimeSeconds: attempt.timeSeconds,
+        avgVelocityMps: attempt.velocityMps,
+        maxVelocityMps: attempt.velocityMps,
+        avgAccelerationMps2: attempt.accelerationMps2,
+      };
+      return {
+        protocolCode: protocol.code,
+        protocolLabel: protocol.label,
+        testType: protocol.testType,
+        evaluationDate,
+        attempt: attempt.attemptNumber,
+        measurementMode: 'start_finish' as const,
+        measurements,
+        derivedMetrics,
+        metrics,
+        repetitions: [
+          {
+            label: `Intento ${attempt.attemptNumber}`,
+            attemptNumber: attempt.attemptNumber,
+            distanceMeters: distance,
+            timeSeconds: attempt.timeSeconds,
+            velocityMps: attempt.velocityMps,
+            accelerationMps2: attempt.accelerationMps2,
+          },
+        ],
+        aggregates: {},
+        summaryAnalysis: [
+          `Evaluación de fotocélulas: ${protocol.label}.`,
+          `Intento ${attempt.attemptNumber}: ${attempt.timeSeconds.toFixed(3)} s.`,
+          attempt.velocityMps != null ? `Velocidad media ${attempt.velocityMps.toFixed(3)} m/s.` : null,
+        ]
+          .filter(Boolean)
+          .join(' '),
+        completeness: this.computeCompleteness([attempt.timeSeconds, attempt.velocityMps, distance]),
+        warnings: [],
+      };
+    });
   }
 
-  /** Varias filas con gates intermedios en un mismo intento (fotocélulas extra). */
-  private buildSprintSplitProfile(protocol: ProtocolDef, rows: ParsedRow[]) {
+  private buildSprintSplitProfile(
+    protocol: ProtocolDef,
+    rows: ParsedRow[],
+    evaluationDate: string,
+  ): CanonicalEvaluationPreview {
     const warnings: string[] = [];
     const distance = protocol.distanceMeters ?? null;
-    const gateProfile = SPRINT_SPLIT_GATE_PROFILES[protocol.code];
+    const gateProfile = protocol.gates;
 
     const usable = rows
       .map((row, index) => {
@@ -451,139 +551,185 @@ export class PhotocellImportService {
 
     usable.sort((a, b) => (a.splitMeters ?? 0) - (b.splitMeters ?? 0));
 
-    const repetitions = usable.map((entry, index) => {
-      const prevTime = index > 0 ? usable[index - 1].timeSeconds! : 0;
+    // Deduplicate same distance keeping last cumulative time
+    const byDistance = new Map<number, (typeof usable)[number]>();
+    for (const entry of usable) {
+      byDistance.set(entry.splitMeters!, entry);
+    }
+    const unique = [...byDistance.values()].sort((a, b) => (a.splitMeters ?? 0) - (b.splitMeters ?? 0));
+
+    const measurements: CanonicalMeasurement[] = unique.map((entry, index) => {
+      const prevTime = index > 0 ? unique[index - 1].timeSeconds! : 0;
       const cumulativeTime = entry.timeSeconds!;
       const segmentTime = round3(cumulativeTime - prevTime);
-      const prevMeters = index > 0 ? usable[index - 1].splitMeters! : 0;
+      const prevMeters = index > 0 ? unique[index - 1].splitMeters! : 0;
       const segmentMeters = (entry.splitMeters ?? 0) - prevMeters;
       let velocity = entry.velocityMps;
       if (velocity == null && segmentMeters > 0 && segmentTime != null && segmentTime > 0) {
         velocity = round3(segmentMeters / segmentTime);
       }
+      let acceleration = entry.accelerationMps2;
+      if (acceleration == null && velocity != null && segmentTime != null && segmentTime > 0) {
+        acceleration = round3(velocity / segmentTime);
+      }
       return {
+        partial: entry.splitIndex,
+        distance: entry.splitMeters,
+        time: round3(cumulativeTime),
+        velocity,
+        acceleration,
+        power: null,
         label: `${entry.splitMeters} m`,
-        splitIndex: entry.splitIndex,
-        splitMeters: entry.splitMeters,
-        cumulativeTimeSeconds: round3(cumulativeTime),
-        segmentTimeSeconds: segmentTime,
-        velocityMps: velocity,
-        accelerationMps2: entry.accelerationMps2 ?? null,
+        extras: {
+          cumulativeTimeSeconds: round3(cumulativeTime),
+          segmentTimeSeconds: segmentTime,
+          segmentMeters,
+        },
       };
     });
 
-    const totalTime = repetitions[repetitions.length - 1]?.cumulativeTimeSeconds ?? null;
-    const splitMetersList = usable.map((u) => u.splitMeters!);
-    const gates = this.buildSprintGates(distance, splitMetersList);
-    const velocities = repetitions
-      .map((r) => r.velocityMps)
-      .filter((v): v is number => v != null);
+    const totalTime = measurements[measurements.length - 1]?.time ?? null;
+    const velocities = measurements.map((m) => m.velocity).filter((v): v is number => v != null);
+    const accelerations = measurements.map((m) => m.acceleration).filter((v): v is number => v != null);
+    const totalDistance = distance ?? unique[unique.length - 1]?.splitMeters ?? null;
+
+    const derivedMetrics: Record<string, number | null> = {
+      totalTimeSeconds: totalTime,
+      avgVelocityMps:
+        velocities.length > 0
+          ? average(velocities)
+          : totalTime && totalDistance
+            ? round3(totalDistance / totalTime)
+            : null,
+      maxVelocityMps: velocities.length ? round3(Math.max(...velocities)) : null,
+      avgAccelerationMps2: accelerations.length ? average(accelerations) : null,
+    };
+
+    const repetitions = measurements.map((m) => ({
+      label: m.label,
+      splitIndex: m.partial,
+      splitMeters: m.distance,
+      cumulativeTimeSeconds: m.extras?.cumulativeTimeSeconds ?? m.time,
+      segmentTimeSeconds: m.extras?.segmentTimeSeconds ?? null,
+      velocityMps: m.velocity,
+      accelerationMps2: m.acceleration,
+    }));
 
     const metrics: Record<string, unknown> = {
       sourceType: 'photocell',
       measurementMode: 'split_profile' satisfies PhotocellMeasurementMode,
       protocolCode: protocol.code,
       protocolLabel: protocol.label,
-      totalDistanceMeters: distance ?? splitMetersList[splitMetersList.length - 1],
-      gates,
-      splitCount: repetitions.length,
-      totalTimeSeconds: totalTime,
-      avgVelocityMps:
-        velocities.length > 0
-          ? average(velocities)
-          : totalTime && distance
-            ? round3(distance / totalTime)
-            : null,
-      maxVelocityMps: velocities.length ? round3(Math.max(...velocities)) : null,
-      sourceRowCount: rows.length,
-      parsedRowCount: usable.length,
+      totalDistanceMeters: totalDistance,
+      gates: [0, ...unique.map((u) => u.splitMeters!)].map((meters) => ({ meters })),
+      splitCount: measurements.length,
+      ...derivedMetrics,
     };
 
+    if (rows.length > unique.length) {
+      warnings.push(`Se consolidaron ${rows.length} filas en ${unique.length} parciales de distancia.`);
+    }
+
     return {
-      warnings,
+      protocolCode: protocol.code,
+      protocolLabel: protocol.label,
+      testType: protocol.testType,
+      evaluationDate,
+      attempt: 1,
+      measurementMode: 'split_profile',
+      measurements,
+      derivedMetrics,
       metrics,
       repetitions,
       aggregates: {},
       summaryAnalysis: [
-        `Evaluación de fotocélulas: ${protocol.label} con ${repetitions.length} splits.`,
+        `Evaluación de fotocélulas: ${protocol.label} con ${measurements.length} parciales.`,
         totalTime != null ? `Tiempo total ${Number(totalTime).toFixed(3)} s.` : null,
-        metrics.avgVelocityMps != null
-          ? `Velocidad media ${Number(metrics.avgVelocityMps).toFixed(3)} m/s.`
+        derivedMetrics.avgVelocityMps != null
+          ? `Velocidad media ${Number(derivedMetrics.avgVelocityMps).toFixed(3)} m/s.`
           : null,
       ]
         .filter(Boolean)
         .join(' '),
-      completeness: this.computeCompleteness([totalTime, metrics.avgVelocityMps, repetitions.length]),
+      completeness: this.computeCompleteness([totalTime, derivedMetrics.avgVelocityMps, measurements.length]),
+      warnings,
     };
   }
 
-  private buildAgilityPreview(protocol: ProtocolDef, rows: ParsedRow[]) {
+  private buildAgilityEvaluations(
+    protocol: ProtocolDef,
+    rows: ParsedRow[],
+    evaluationDate: string,
+  ): CanonicalEvaluationPreview[] {
     const usable = rows
       .map((row, index) => ({
-        label: row.repetitionIndex != null ? `Intento ${row.repetitionIndex}` : `Intento ${index + 1}`,
+        attemptNumber: row.repetitionIndex ?? index + 1,
         timeSeconds: row.timeSeconds,
       }))
-      .filter((entry) => entry.timeSeconds != null) as Array<{ label: string; timeSeconds: number }>;
+      .filter((entry) => entry.timeSeconds != null) as Array<{ attemptNumber: number; timeSeconds: number }>;
 
     if (!usable.length) {
       throw new BadRequestException('No se encontraron tiempos válidos para la prueba de cambio de dirección');
     }
 
-    const times = usable.map((entry) => entry.timeSeconds);
-    const metrics: Record<string, unknown> = {
-      sourceType: 'photocell',
-      measurementMode: 'repeated_attempts' satisfies PhotocellMeasurementMode,
-      protocolCode: protocol.code,
-      protocolLabel: protocol.label,
-      attemptCount: usable.length,
-      bestTimeSeconds: round3(Math.min(...times)),
-      avgTimeSeconds: average(times),
-      worstTimeSeconds: round3(Math.max(...times)),
-      sourceRowCount: rows.length,
-      parsedRowCount: usable.length,
-    };
-
-    const summaryAnalysis = [
-      `Evaluación de fotocélulas: ${protocol.label}.`,
-      `Mejor intento ${Math.min(...times).toFixed(3)} s.`,
-      `Promedio ${average(times)?.toFixed(3)} s.`,
-      `Se interpretaron ${usable.length} intento(s).`,
-    ].join(' ');
-
-    return {
-      warnings:
-        rows.length > usable.length
-          ? [`Se omitieron ${rows.length - usable.length} fila(s) sin tiempo interpretable.`]
-          : [],
-      metrics,
-      repetitions: usable.map((entry) => ({
-        label: entry.label,
-        timeSeconds: round3(entry.timeSeconds),
-      })),
-      aggregates: {
-        timeSeconds: metricStat(times, false),
-      },
-      summaryAnalysis,
-      completeness: this.computeCompleteness([metrics.bestTimeSeconds, metrics.avgTimeSeconds]),
-    };
+    return usable.map((entry) => {
+      const time = round3(entry.timeSeconds)!;
+      const measurements: CanonicalMeasurement[] = [
+        {
+          partial: 1,
+          distance: null,
+          time,
+          velocity: null,
+          acceleration: null,
+          power: null,
+          label: `Intento ${entry.attemptNumber}`,
+        },
+      ];
+      const derivedMetrics = {
+        bestTimeSeconds: time,
+        avgTimeSeconds: time,
+        worstTimeSeconds: time,
+        totalTimeSeconds: time,
+      };
+      return {
+        protocolCode: protocol.code,
+        protocolLabel: protocol.label,
+        testType: protocol.testType,
+        evaluationDate,
+        attempt: entry.attemptNumber,
+        measurementMode: 'repeated_attempts' as const,
+        measurements,
+        derivedMetrics,
+        metrics: {
+          sourceType: 'photocell',
+          measurementMode: 'repeated_attempts',
+          protocolCode: protocol.code,
+          protocolLabel: protocol.label,
+          attemptCount: 1,
+          ...derivedMetrics,
+        },
+        repetitions: [{ label: `Intento ${entry.attemptNumber}`, timeSeconds: time }],
+        aggregates: {},
+        summaryAnalysis: `Evaluación de fotocélulas: ${protocol.label}. Intento ${entry.attemptNumber}: ${time.toFixed(3)} s.`,
+        completeness: this.computeCompleteness([time]),
+        warnings: [],
+      };
+    });
   }
 
-  private buildResistancePreview(protocol: ProtocolDef, rows: ParsedRow[]) {
+  private buildResistanceEvaluations(
+    protocol: ProtocolDef,
+    rows: ParsedRow[],
+    evaluationDate: string,
+  ): CanonicalEvaluationPreview[] {
     const usable = rows
       .map((row, index) => ({
-        label:
-          row.sprintNumber != null
-            ? `Sprint ${row.sprintNumber}`
-            : row.repetitionIndex != null
-              ? `Sprint ${row.repetitionIndex}`
-              : row.splitIndex != null
-                ? `Sprint ${row.splitIndex}`
-                : `Sprint ${index + 1}`,
+        sprintNumber: row.sprintNumber ?? row.repetitionIndex ?? row.splitIndex ?? index + 1,
         timeSeconds: row.timeSeconds,
         powerWatts: row.powerWatts,
       }))
       .filter((entry) => entry.timeSeconds != null) as Array<{
-      label: string;
+      sprintNumber: number;
       timeSeconds: number;
       powerWatts: number | null;
     }>;
@@ -592,18 +738,23 @@ export class PhotocellImportService {
       throw new BadRequestException('No se encontraron tiempos válidos para el protocolo de resistencia');
     }
 
-    const times = usable.map((entry) => entry.timeSeconds);
-    const powers = usable.map((entry) => entry.powerWatts).filter((value): value is number => value != null);
+    const times = usable.map((e) => e.timeSeconds);
+    const powers = usable.map((e) => e.powerWatts).filter((v): v is number => v != null);
     const best = Math.min(...times);
     const worst = Math.max(...times);
     const fatigueIndex = best > 0 ? round3(((worst - best) / best) * 100) : null;
 
-    const metrics: Record<string, unknown> = {
-      sourceType: 'photocell',
-      measurementMode: 'repeated_sprints' satisfies PhotocellMeasurementMode,
-      protocolCode: protocol.code,
-      protocolLabel: protocol.label,
-      sprintCount: usable.length,
+    const measurements: CanonicalMeasurement[] = usable.map((entry) => ({
+      partial: entry.sprintNumber,
+      distance: null,
+      time: round3(entry.timeSeconds),
+      velocity: null,
+      acceleration: null,
+      power: entry.powerWatts != null ? round3(entry.powerWatts) : null,
+      label: `Sprint ${entry.sprintNumber}`,
+    }));
+
+    const derivedMetrics: Record<string, number | null> = {
       bestSprintSeconds: round3(best),
       worstSprintSeconds: round3(worst),
       avgSprintSeconds: average(times),
@@ -611,47 +762,57 @@ export class PhotocellImportService {
       maxPowerWatts: powers.length ? round3(Math.max(...powers)) : null,
       avgPowerWatts: powers.length ? average(powers) : null,
       minPowerWatts: powers.length ? round3(Math.min(...powers)) : null,
-      sourceRowCount: rows.length,
-      parsedRowCount: usable.length,
     };
 
     const warnings: string[] = [];
     if (!powers.length) {
       warnings.push('No se detectó potencia en el archivo; solo se calcularon métricas basadas en tiempos.');
     }
-    if (rows.length > usable.length) {
-      warnings.push(`Se omitieron ${rows.length - usable.length} fila(s) sin tiempo interpretable.`);
-    }
 
-    const summaryAnalysis = [
-      `Evaluación de fotocélulas: ${protocol.label}.`,
-      `Mejor sprint ${best.toFixed(3)} s.`,
-      `Peor sprint ${worst.toFixed(3)} s.`,
-      average(times) != null ? `Promedio ${average(times)!.toFixed(3)} s.` : null,
-      fatigueIndex != null ? `Índice de fatiga ${fatigueIndex.toFixed(3)}%.` : null,
-    ]
-      .filter(Boolean)
-      .join(' ');
-
-    return {
-      warnings,
-      metrics,
-      repetitions: usable.map((entry) => ({
-        label: entry.label,
-        timeSeconds: round3(entry.timeSeconds),
-        powerWatts: entry.powerWatts != null ? round3(entry.powerWatts) : null,
-      })),
-      aggregates: {
-        timeSeconds: metricStat(times, false),
-        ...(powers.length ? { powerWatts: metricStat(powers, true) } : {}),
+    return [
+      {
+        protocolCode: protocol.code,
+        protocolLabel: protocol.label,
+        testType: protocol.testType,
+        evaluationDate,
+        attempt: 1,
+        measurementMode: 'repeated_sprints',
+        measurements,
+        derivedMetrics,
+        metrics: {
+          sourceType: 'photocell',
+          measurementMode: 'repeated_sprints',
+          protocolCode: protocol.code,
+          protocolLabel: protocol.label,
+          sprintCount: usable.length,
+          ...derivedMetrics,
+        },
+        repetitions: measurements.map((m) => ({
+          label: m.label,
+          timeSeconds: m.time,
+          powerWatts: m.power,
+        })),
+        aggregates: {
+          timeSeconds: metricStat(times, false),
+          ...(powers.length ? { powerWatts: metricStat(powers, true) } : {}),
+        },
+        summaryAnalysis: [
+          `Evaluación de fotocélulas: ${protocol.label}.`,
+          `Mejor sprint ${best.toFixed(3)} s.`,
+          `Peor sprint ${worst.toFixed(3)} s.`,
+          average(times) != null ? `Promedio ${average(times)!.toFixed(3)} s.` : null,
+          fatigueIndex != null ? `Índice de fatiga ${fatigueIndex.toFixed(3)}%.` : null,
+        ]
+          .filter(Boolean)
+          .join(' '),
+        completeness: this.computeCompleteness([
+          derivedMetrics.bestSprintSeconds,
+          derivedMetrics.avgSprintSeconds,
+          derivedMetrics.fatigueIndexPct,
+        ]),
+        warnings,
       },
-      summaryAnalysis,
-      completeness: this.computeCompleteness([
-        metrics.bestSprintSeconds,
-        metrics.avgSprintSeconds,
-        metrics.fatigueIndexPct,
-      ]),
-    };
+    ];
   }
 
   private computeCompleteness(values: unknown[]): number {

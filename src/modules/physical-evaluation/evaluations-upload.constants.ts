@@ -17,4 +17,25 @@ export const ALLOWED_EVALUATION_MIMETYPES = new Set([
   'text/csv',
   'text/plain', // algunos CSV
   'application/vnd.ms-excel',
+  'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet',
 ]);
+
+export function isAllowedEvaluationFilename(filename: string): boolean {
+  const name = (filename || '').toLowerCase();
+  return (
+    name.endsWith('.pdf') ||
+    name.endsWith('.csv') ||
+    name.endsWith('.xlsx') ||
+    name.endsWith('.xls')
+  );
+}
+
+export function isSpreadsheetFilename(filename: string): boolean {
+  const name = (filename || '').toLowerCase();
+  return name.endsWith('.xlsx') || name.endsWith('.xls');
+}
+
+export function isTabularEvaluationFilename(filename: string): boolean {
+  const name = (filename || '').toLowerCase();
+  return name.endsWith('.csv') || isSpreadsheetFilename(name);
+}

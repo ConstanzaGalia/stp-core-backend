@@ -10,6 +10,9 @@ import {
 } from 'typeorm';
 import { User } from './user.entity';
 import { PhysicalEvaluationTest } from './physical-evaluation-test.entity';
+import { PhysicalEvaluationMeasurement } from './physical-evaluation-measurement.entity';
+import { EvaluationCriteriaSet } from './evaluation-criteria-set.entity';
+import type { EvaluationDevice } from './evaluation-protocol.entity';
 
 export type PhysicalEvaluationProcessingStatus = 'pending' | 'processing' | 'ready' | 'error';
 
@@ -149,8 +152,35 @@ export class PhysicalEvaluation {
   @Column({ type: 'text', name: 'ai_analysis_error', nullable: true, default: () => 'null' })
   aiAnalysisError: string | null;
 
+  /** Motor de Evaluaciones: origen del dato (force_platform, photocells, …). */
+  @Column({ type: 'varchar', length: 40, nullable: true })
+  device: EvaluationDevice | string | null;
+
+  @Column({ type: 'varchar', length: 80, name: 'protocol_code', nullable: true })
+  protocolCode: string | null;
+
+  @Column({ type: 'int', nullable: true })
+  attempt: number | null;
+
+  @Column({ type: 'jsonb', name: 'derived_metrics', nullable: true, default: () => 'null' })
+  derivedMetrics: Record<string, number | null> | null;
+
+  @Column({ type: 'jsonb', nullable: true, default: () => 'null' })
+  metadata: Record<string, unknown> | null;
+
+  /** Plantilla de criterios usada para interpretar el informe (CMJ, etc.). */
+  @Column({ type: 'uuid', name: 'criteria_set_id', nullable: true })
+  criteriaSetId: string | null;
+
+  @ManyToOne(() => EvaluationCriteriaSet, { nullable: true, onDelete: 'SET NULL' })
+  @JoinColumn({ name: 'criteria_set_id' })
+  criteriaSet: EvaluationCriteriaSet | null;
+
   @OneToMany(() => PhysicalEvaluationTest, (t) => t.evaluation, { cascade: true })
   tests: PhysicalEvaluationTest[];
+
+  @OneToMany(() => PhysicalEvaluationMeasurement, (m) => m.evaluation, { cascade: true })
+  measurements: PhysicalEvaluationMeasurement[];
 
   @CreateDateColumn({ name: 'created_at' })
   createdAt: Date;

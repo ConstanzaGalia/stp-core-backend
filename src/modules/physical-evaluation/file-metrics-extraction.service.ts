@@ -17,13 +17,20 @@ export interface CsvExtractResult {
   repetitions: Array<Record<string, unknown>>;
 }
 
+/**
+ * Normaliza labels Ivolution → claves del reporte.
+ * "Altura de Salto (cm)" → "altura_de_salto" (sin unidad).
+ */
 function normKey(k: string): string {
-  return k
+  return String(k ?? '')
+    .replace(/\s*\([^)]*\)\s*/g, ' ')
     .normalize('NFD')
     .replace(/[\u0300-\u036f]/g, '')
     .toLowerCase()
     .replace(/\s+/g, '_')
-    .replace(/[^a-z0-9_]/g, '');
+    .replace(/[^a-z0-9_]/g, '')
+    .replace(/_+/g, '_')
+    .replace(/^_|_$/g, '');
 }
 
 function parseLocalizedNumber(raw: string): number | null {
@@ -42,7 +49,13 @@ function average(nums: number[]): number | null {
 
 function isFeatureColumnHeader(header: string): boolean {
   const n = normKey(header);
-  return n === 'caracteristica' || n === 'feature' || n === 'metric' || n === 'metrica';
+  // A1 vacío en exports XLSX Ivolution: la 1ª columna es el label de métrica sin título.
+  return !n || n === 'caracteristica' || n === 'feature' || n === 'metric' || n === 'metrica';
+}
+
+function isReferenceColumnHeader(header: string): boolean {
+  const n = normKey(header);
+  return n === 'referencia' || n === 'reference';
 }
 
 /** Ivolution y exports ES suelen usar `;`; el default de csv-parse es `,`. */
@@ -88,6 +101,46 @@ export class FileMetricsExtractionService {
   }
 
   /**
+   * Preview tabulado enviado por el cliente (ya parseado desde XLSX/CSV).
+   * headers[0] = label de métrica; resto = repeticiones (Rep 1…).
+   */
+  extractFromPreviewTable(
+    testType: string,
+    headers: string[],
+    rows: Array<Array<string | null>>,
+  ): CsvExtractResult {
+    if (!headers?.length || !rows?.length) {
+      return { metrics: { parseNote: 'preview_vacio' }, repetitions: [] };
+    }
+
+    const featureHeader = String(headers[0] ?? 'Característica').trim() || 'Característica';
+    const repetitionHeaders = headers
+      .slice(1)
+      .map((h, i) => String(h ?? '').trim() || `Rep ${i + 1}`)
+      .filter((h) => {
+        const n = normKey(h);
+        return n && n !== 'referencia' && n !== 'reference';
+      });
+
+    if (!repetitionHeaders.length) {
+      return { metrics: { parseNote: 'preview_sin_reps' }, repetitions: [] };
+    }
+
+    const records: Record<string, string>[] = rows.map((row) => {
+      const record: Record<string, string> = {
+        [featureHeader]: String(row[0] ?? '').trim(),
+      };
+      repetitionHeaders.forEach((repHeader, index) => {
+        // +1: col 0 es el label; las reps del preview ya excluyen Referencia
+        record[repHeader] = String(row[index + 1] ?? '').trim();
+      });
+      return record;
+    });
+
+    return this.extractVerticalMetricsFormat(testType, records, featureHeader, repetitionHeaders);
+  }
+
+  /**
    * CSV export vertical: primera columna = nombre de métrica, resto = repeticiones.
    * Fallback: comportamiento legacy (última fila como fila ancha de claves).
    */
@@ -117,11 +170,49 @@ export class FileMetricsExtractionService {
     }
 
     const headerKeys = Object.keys(records[0] || {});
-    const featureHeader = headerKeys.find((h) => isFeatureColumnHeader(h));
-    const repetitionHeaders = headerKeys.filter((h) => h !== featureHeader);
 
-    if (featureHeader && repetitionHeaders.length > 0) {
-      return this.extractVerticalMetricsFormat(testType, records, featureHeader, repetitionHeaders);
+    const countFilled = (header: string) =>
+      records.filter((row) => String(row[header] ?? '').trim().length > 0).length;
+
+    const referenciaHeader = headerKeys.find((h) => isReferenceColumnHeader(h));
+    const caracteristicaHeader = headerKeys.find((h) => {
+      const n = normKey(h);
+      return n === 'caracteristica' || n === 'feature' || n === 'metric' || n === 'metrica';
+    });
+    const emptyFeatureHeader = headerKeys.find((h) => isFeatureColumnHeader(h));
+
+    // Preferir la columna que realmente tiene los nombres (Ivolution: Referencia con labels; A vacía renombrada a Característica)
+    let featureHeader: string | undefined;
+    const candidates = [caracteristicaHeader, referenciaHeader, emptyFeatureHeader].filter(
+      (h): h is string => Boolean(h),
+    );
+    let bestFill = 0;
+    for (const h of candidates) {
+      const fill = countFilled(h);
+      if (fill > bestFill) {
+        bestFill = fill;
+        featureHeader = h;
+      }
+    }
+    if (!featureHeader) {
+      featureHeader = caracteristicaHeader ?? referenciaHeader ?? emptyFeatureHeader;
+    }
+
+    const repetitionHeaders = headerKeys.filter(
+      (h) =>
+        h !== featureHeader &&
+        !isReferenceColumnHeader(h) &&
+        normKey(h) !== 'caracteristica' &&
+        String(h).trim() !== '',
+    );
+
+    const looksVertical =
+      featureHeader != null &&
+      repetitionHeaders.length > 0 &&
+      records.some((row) => String(row[featureHeader!] ?? '').trim().length > 0);
+
+    if (looksVertical) {
+      return this.extractVerticalMetricsFormat(testType, records, featureHeader!, repetitionHeaders);
     }
 
     return this.extractLegacyLastRowWideFormat(testType, records);

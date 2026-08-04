@@ -1,4 +1,4 @@
-import { IsDateString, IsUUID } from 'class-validator';
+import { IsDateString, IsOptional, IsUUID } from 'class-validator';
 
 export class CreateEvaluacionDto {
   @IsUUID()
@@ -6,4 +6,8 @@ export class CreateEvaluacionDto {
 
   @IsDateString()
   evaluationDate: string;
+
+  @IsOptional()
+  @IsUUID()
+  criteriaSetId?: string;
 }

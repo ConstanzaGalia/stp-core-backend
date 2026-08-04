@@ -41,4 +41,9 @@ export class UpdateAthleteProfileDto {
   @IsString()
   @MaxLength(100)
   primarySport?: string;
+
+  @IsOptional()
+  @IsString()
+  @MaxLength(200)
+  clubName?: string;
 }

@@ -15,9 +15,10 @@ export class PhotocellImportDto {
   @IsDateString()
   evaluationDate: string;
 
+  @IsOptional()
   @IsString()
   @MaxLength(120)
-  protocolCode: string;
+  protocolCode?: string;
 
   @IsOptional()
   @IsString()

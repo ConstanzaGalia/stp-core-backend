@@ -1,9 +1,10 @@
-import { Body, Controller, Delete, Get, Param, Post, Query, UseGuards } from '@nestjs/common';
+import { Body, Controller, Delete, Get, Param, Patch, Post, Query, UseGuards } from '@nestjs/common';
 import { AuthGuard } from '@nestjs/passport';
 import { GetUser } from '../auth/get-user.decorator';
 import { User } from 'src/entities/user.entity';
 import { PhysicalEvaluationService } from './physical-evaluation.service';
 import { CreatePhysicalEvaluationDto } from './dto/create-physical-evaluation.dto';
+import { UpdateEvaluationCriteriaDto } from './dto/update-evaluation-criteria.dto';
 
 /**
  * API legacy: alta manual de tests con métricas JSON.
@@ -39,6 +40,16 @@ export class PhysicalEvaluationController {
   @Get(':userId/:evaluationId')
   getOne(@GetUser() actor: User, @Param('userId') userId: string, @Param('evaluationId') evaluationId: string) {
     return this.service.findOneById(actor, userId, evaluationId);
+  }
+
+  @Patch(':userId/:evaluationId/criteria-set')
+  updateCriteriaSet(
+    @GetUser() actor: User,
+    @Param('userId') userId: string,
+    @Param('evaluationId') evaluationId: string,
+    @Body() dto: UpdateEvaluationCriteriaDto,
+  ) {
+    return this.service.updateCriteriaSetId(actor, userId, evaluationId, dto.criteriaSetId ?? null);
   }
 
   @Delete(':userId/:evaluationId')
