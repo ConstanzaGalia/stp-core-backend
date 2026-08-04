@@ -9,6 +9,8 @@ import { In, Repository } from 'typeorm';
 import { User } from 'src/entities/user.entity';
 import { PhysicalEvaluation, PhysicalEvaluationFileMeta } from 'src/entities/physical-evaluation.entity';
 import { PhysicalEvaluationTest } from 'src/entities/physical-evaluation-test.entity';
+import { PhysicalEvaluationMeasurement } from 'src/entities/physical-evaluation-measurement.entity';
+import { EvaluationCriteriaSet } from 'src/entities/evaluation-criteria-set.entity';
 import { AthleteEvaluation } from 'src/entities/athlete-evaluation.entity';
 import { UserRole } from 'src/common/enums/enums';
 import { CompanyService } from '../company/company.service';
@@ -16,7 +18,10 @@ import { AthletesService } from '../athletes/athletes.service';
 import { PhysicalEvaluationAnalysisService } from './physical-evaluation-analysis.service';
 import { CreatePhysicalEvaluationDto } from './dto/create-physical-evaluation.dto';
 import type { PhysicalTestInput } from './physical-evaluation.types';
-import type { PhotocellPreviewResponse } from './photocell-import.service';
+import type {
+  CanonicalEvaluationPreview,
+  PhotocellPreviewResponse,
+} from './photocell-import.service';
 
 const STAFF_ROLES: UserRole[] = [
   UserRole.STP_ADMIN,
@@ -61,6 +66,8 @@ export class PhysicalEvaluationService {
     private readonly evaluationRepo: Repository<PhysicalEvaluation>,
     @InjectRepository(PhysicalEvaluationTest)
     private readonly testRepo: Repository<PhysicalEvaluationTest>,
+    @InjectRepository(PhysicalEvaluationMeasurement)
+    private readonly measurementRepo: Repository<PhysicalEvaluationMeasurement>,
     @InjectRepository(AthleteEvaluation)
     private readonly legacyEvalRepo: Repository<AthleteEvaluation>,
     @InjectRepository(User)
@@ -225,7 +232,12 @@ export class PhysicalEvaluationService {
   }
 
   /** Evaluación vacía para completar luego con `POST /evaluaciones/:id/upload`. */
-  async createEmptyEvaluation(actor: User, athleteUserId: string, evaluationDateIso: string): Promise<PhysicalEvaluation> {
+  async createEmptyEvaluation(
+    actor: User,
+    athleteUserId: string,
+    evaluationDateIso: string,
+    criteriaSetId?: string | null,
+  ): Promise<PhysicalEvaluation> {
     const target = await this.assertCanAccessAthlete(actor, athleteUserId, true);
     if (!this.isStaff(actor)) {
       throw new ForbiddenException('Solo el staff puede crear evaluaciones');
@@ -237,6 +249,8 @@ export class PhysicalEvaluationService {
       summaryScore: null,
       summaryAnalysis: null,
       structuredAnalysis: null,
+      device: 'force_platform',
+      criteriaSetId: criteriaSetId?.trim() || null,
       tests: [],
     });
     const saved = await this.evaluationRepo.save(evaluation);
@@ -290,6 +304,35 @@ export class PhysicalEvaluationService {
     await this.evaluationRepo.save(evaluation);
   }
 
+  async updateCriteriaSetId(
+    actor: User,
+    athleteUserId: string,
+    evaluationId: string,
+    criteriaSetId: string | null,
+  ): Promise<PhysicalEvaluation> {
+    await this.assertCanAccessAthlete(actor, athleteUserId, true);
+    if (!this.isStaff(actor)) {
+      throw new ForbiddenException('Solo el staff puede actualizar el criterio');
+    }
+    const ev = await this.evaluationRepo.findOne({
+      where: { id: evaluationId },
+      relations: ['user', 'criteriaSet'],
+    });
+    if (!ev?.user?.id || ev.user.id !== athleteUserId) {
+      throw new NotFoundException('Evaluación no encontrada');
+    }
+    const nextId = criteriaSetId?.trim() || null;
+    if (nextId) {
+      const set = await this.evaluationRepo.manager.findOne(EvaluationCriteriaSet, {
+        where: { id: nextId },
+      });
+      if (!set) throw new NotFoundException('Criterio no encontrado');
+    }
+    ev.criteriaSetId = nextId;
+    await this.evaluationRepo.save(ev);
+    return this.findOneById(actor, athleteUserId, evaluationId);
+  }
+
   /** Recalcula resumen global de la evaluación física (no altera el perfil STP del atleta). */
   async recomputeEvaluationSummary(evaluationId: string): Promise<void> {
     const ev = await this.evaluationRepo.findOne({
@@ -314,6 +357,11 @@ export class PhysicalEvaluationService {
     ev.summaryScore = computed.summaryScore;
     ev.summaryAnalysis = computed.summaryAnalysis;
     ev.structuredAnalysis = computed.structuredAnalysis as unknown as Record<string, unknown>;
+    ev.processingStatus = 'ready';
+    const structured = computed.structuredAnalysis as { warnings?: string[]; completeness?: number };
+    ev.warnings = Array.isArray(structured?.warnings) ? structured.warnings : [];
+    ev.completeness =
+      typeof structured?.completeness === 'number' ? structured.completeness : null;
     await this.evaluationRepo.save(ev);
   }
 
@@ -364,6 +412,7 @@ export class PhysicalEvaluationService {
       summaryScore,
       summaryAnalysis,
       structuredAnalysis: computed.structuredAnalysis as unknown as Record<string, unknown>,
+      device: 'force_platform',
       tests,
     });
 
@@ -372,17 +421,67 @@ export class PhysicalEvaluationService {
     return this.findOneById(actor, athleteUserId, saved.id);
   }
 
-  async createPhotocellEvaluation(
+  async createPhotocellEvaluations(
     actor: User,
     preview: PhotocellPreviewResponse,
-  ): Promise<PhysicalEvaluation> {
+  ): Promise<PhysicalEvaluation | PhysicalEvaluation[]> {
     const target = await this.assertCanAccessAthlete(actor, preview.athleteId, true);
     if (!this.isStaff(actor)) {
       throw new ForbiddenException('Solo el staff puede registrar evaluaciones');
     }
 
+    const candidates = preview.evaluations?.length
+      ? preview.evaluations
+      : [this.legacyPreviewToCandidate(preview)];
+
+    const savedIds: string[] = [];
+    for (const candidate of candidates) {
+      const saved = await this.persistCanonicalPhotocell(target, preview, candidate);
+      savedIds.push(saved.id);
+    }
+
+    const results: PhysicalEvaluation[] = [];
+    for (const id of savedIds) {
+      results.push(await this.findOneById(actor, target.id, id));
+    }
+    return results.length === 1 ? results[0] : results;
+  }
+
+  /** @deprecated Prefer createPhotocellEvaluations */
+  async createPhotocellEvaluation(
+    actor: User,
+    preview: PhotocellPreviewResponse,
+  ): Promise<PhysicalEvaluation> {
+    const result = await this.createPhotocellEvaluations(actor, preview);
+    return Array.isArray(result) ? result[0] : result;
+  }
+
+  private legacyPreviewToCandidate(preview: PhotocellPreviewResponse): CanonicalEvaluationPreview {
+    return {
+      protocolCode: preview.protocolCode,
+      protocolLabel: preview.protocolLabel,
+      testType: preview.testType,
+      evaluationDate: preview.evaluationDate,
+      attempt: 1,
+      measurementMode: (preview.metrics?.measurementMode as CanonicalEvaluationPreview['measurementMode']) ?? 'start_finish',
+      measurements: [],
+      derivedMetrics: {},
+      metrics: preview.metrics ?? {},
+      repetitions: preview.repetitions ?? [],
+      aggregates: preview.aggregates ?? {},
+      summaryAnalysis: preview.summaryAnalysis,
+      completeness: preview.completeness,
+      warnings: preview.warnings ?? [],
+    };
+  }
+
+  private async persistCanonicalPhotocell(
+    target: User,
+    preview: PhotocellPreviewResponse,
+    candidate: CanonicalEvaluationPreview,
+  ): Promise<PhysicalEvaluation> {
     const testMetrics = {
-      ...preview.metrics,
+      ...candidate.metrics,
       _preview: preview.preview,
       _source: {
         sourceType: preview.sourceType,
@@ -391,34 +490,59 @@ export class PhysicalEvaluationService {
     };
     this.assertMetricsPayloadSize([{ metrics: testMetrics }]);
 
-    const evaluationDate = parseEvaluationDateOnly(preview.evaluationDate);
+    const evaluationDate = parseEvaluationDateOnly(candidate.evaluationDate || preview.evaluationDate);
 
     const test = new PhysicalEvaluationTest();
-    test.testName = preview.protocolLabel;
-    test.testType = preview.testType;
+    test.testName = candidate.protocolLabel;
+    test.testType = candidate.testType;
     test.metrics = testMetrics;
-    test.repetitions = preview.repetitions ?? [];
-    test.aggregates = (preview.aggregates ?? {}) as Record<
+    test.repetitions = candidate.repetitions ?? [];
+    test.aggregates = (candidate.aggregates ?? {}) as Record<
       string,
       { best: number | null; mean: number | null; worst: number | null } | number | null
     >;
-    test.warnings = preview.warnings ?? [];
+    test.warnings = candidate.warnings ?? [];
+
+    const measurements = (candidate.measurements ?? []).map((m, index) => {
+      const row = new PhysicalEvaluationMeasurement();
+      row.partial = m.partial;
+      row.distance = m.distance;
+      row.time = m.time;
+      row.velocity = m.velocity;
+      row.acceleration = m.acceleration;
+      row.power = m.power;
+      row.extras = {
+        ...(m.extras ?? {}),
+        ...(m.label ? { label: m.label } : {}),
+      };
+      row.sortOrder = index;
+      return row;
+    });
 
     const evaluation = this.evaluationRepo.create({
       user: target,
       evaluationDate,
       summaryScore: null,
-      summaryAnalysis: preview.summaryAnalysis,
+      summaryAnalysis: candidate.summaryAnalysis,
       structuredAnalysis: null,
       processingStatus: 'ready',
-      warnings: preview.warnings ?? [],
-      completeness: preview.completeness,
+      warnings: [...(preview.warnings ?? []), ...(candidate.warnings ?? [])],
+      completeness: candidate.completeness,
+      device: 'photocells',
+      protocolCode: candidate.protocolCode,
+      attempt: candidate.attempt,
+      derivedMetrics: candidate.derivedMetrics ?? null,
+      metadata: {
+        sourceType: preview.sourceType,
+        sourceName: preview.sourceName,
+        measurementMode: candidate.measurementMode,
+      },
       tests: [test],
+      measurements,
       files: [],
     });
 
-    const saved = await this.evaluationRepo.save(evaluation);
-    return this.findOneById(actor, target.id, saved.id);
+    return this.evaluationRepo.save(evaluation);
   }
 
   async listForAthlete(
@@ -429,7 +553,7 @@ export class PhysicalEvaluationService {
     await this.assertCanAccessAthlete(actor, athleteUserId, false);
     const list = await this.evaluationRepo.find({
       where: { user: { id: athleteUserId } },
-      relations: ['tests'],
+      relations: ['tests', 'measurements'],
       order: { evaluationDate: 'DESC', createdAt: 'DESC' },
     });
     if (options?.excludeStpLegacyOnly) {
@@ -442,9 +566,12 @@ export class PhysicalEvaluationService {
     await this.assertCanAccessAthlete(actor, athleteUserId, false);
     const ev = await this.evaluationRepo.findOne({
       where: { id: evaluationId, user: { id: athleteUserId } },
-      relations: ['tests'],
+      relations: ['tests', 'measurements', 'criteriaSet'],
     });
     if (!ev) throw new NotFoundException('Evaluación no encontrada');
+    if (ev.measurements?.length) {
+      ev.measurements.sort((a, b) => (a.sortOrder ?? 0) - (b.sortOrder ?? 0));
+    }
     return ev;
   }
 

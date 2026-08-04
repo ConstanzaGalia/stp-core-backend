@@ -25,7 +25,7 @@ const HEIGHT_ALIASES = [
   'altura',
 ];
 
-const RSI_ALIASES = ['rsi', 'RSI', 'reactive_strength_index'];
+const RSI_ALIASES = ['rsi', 'RSI', 'reactive_strength_index', 'rsi_values'];
 
 const CONTACT_ALIASES = [
   'contact_time',
@@ -51,6 +51,17 @@ const MCCALL_FORCE_ALIASES = [
   'fuerza_maxima',
   'fuerza_pico',
 ];
+
+const CUSTOM_LIKE = new Set(['custom', 'unknown', 'force_platform', '']);
+
+function looksLikeCmjMetrics(metrics: Record<string, number[]>): boolean {
+  const hasHeight =
+    (metrics.altura_de_salto?.length ?? 0) > 0 ||
+    (metrics.jump_height?.length ?? 0) > 0 ||
+    (metrics.jump_height_cm?.length ?? 0) > 0;
+  const hasRsi = (metrics.rsi?.length ?? 0) > 0;
+  return hasHeight || hasRsi;
+}
 
 function avg(nums: number[]): number | null {
   if (!nums.length) return null;
@@ -174,8 +185,24 @@ export class DerivedVariablesService {
     const djRsi = gatherFromTests(normalized, RSI_ALIASES, DJ_TYPES);
     const djContactRaw = gatherFromTests(normalized, CONTACT_ALIASES, DJ_TYPES);
 
-    const cmjRsiVals = gatherFromTests(normalized, RSI_ALIASES, CMJ_TYPES);
-    const cmjContactRaw = gatherFromTests(normalized, CONTACT_ALIASES, CMJ_TYPES);
+    // CMJ + custom/unknown con métricas de salto: no perder RSI por testType incorrecto
+    let cmjRsiVals = gatherWithFallback(normalized, CMJ_TYPES, ['rsi', 'RSI', 'reactive_strength_index', 'rsi_values']);
+    if (!cmjRsiVals.length) {
+      for (const t of normalized) {
+        const tt = t.testType.trim().toLowerCase();
+        if (!CUSTOM_LIKE.has(tt) && !CMJ_TYPES.has(tt)) continue;
+        if (!looksLikeCmjMetrics(t.metrics)) continue;
+        for (const alias of ['rsi', 'RSI', 'reactive_strength_index', 'rsi_values']) {
+          const arr = t.metrics[alias];
+          if (arr?.length) cmjRsiVals.push(...arr);
+        }
+      }
+    }
+
+    let cmjContactRaw = gatherWithFallback(normalized, CMJ_TYPES, CONTACT_ALIASES);
+    if (!cmjContactRaw.length) {
+      cmjContactRaw = gatherFromTests(normalized, CONTACT_ALIASES);
+    }
 
     const djContact = djContactRaw.map((value) => (value > 5 ? value / 1000 : value));
     const cmjContact = cmjContactRaw.map((value) => (value > 5 ? value / 1000 : value));

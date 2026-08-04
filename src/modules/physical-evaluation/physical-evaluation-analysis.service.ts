@@ -67,8 +67,9 @@ export class PhysicalEvaluationAnalysisService {
     const summaryScore = Math.round(totalScore * 20);
     const summaryAnalysis = narrativeText + '\n\n---\n\n' + perTestBlocks;
 
-    const warnings = this.buildWarnings(derived);
-    const completeness = this.computeCompleteness(derived);
+    const testTypes = tests.map((t) => t.testType.trim().toLowerCase());
+    const warnings = this.buildWarnings(derived, testTypes);
+    const completeness = this.computeCompleteness(derived, testTypes);
     const strategy = this.buildStrategy(categoryScores);
     const trainingDecision = this.trainingDecision.build(triggered, categoryScores);
 
@@ -107,35 +108,64 @@ export class PhysicalEvaluationAnalysisService {
     return blocks.join('\n\n---\n\n');
   }
 
-  private buildWarnings(d: DerivedVariables): string[] {
+  private buildWarnings(d: DerivedVariables, testTypes: string[]): string[] {
     const w: string[] = [];
+    const hasSj = testTypes.some((t) =>
+      ['squat_jump', 'sq_jump', 'squatjump', 'sj'].includes(t),
+    );
+    const hasDj = testTypes.some((t) => ['drop_jump', 'dropjump', 'dj'].includes(t));
+    const hasMccall = testTypes.some(
+      (t) => t.includes('mccall') || t.includes('imtp') || t === 'isometric_mid_thigh_pull',
+    );
+    const hasCmj = testTypes.some(
+      (t) => t.includes('cmj') || t === 'custom' || t === 'unknown' || t === '',
+    );
+
     if (d.body_weight_kg == null && d.mccall_peak_force != null) {
       w.push('Sin peso corporal válido en CSV: no se calculó fuerza relativa (N/kg).');
     }
-    if (d.elasticity_index == null && d.cmj_height != null && d.sj_height == null) {
-      w.push('Falta test de Squat Jump (o altura SJ): índice de elasticidad CMJ-SJ no calculado.');
+    // Solo advertir SJ faltante si el atleta subió más de un tipo esperado o ya hay CMJ+intento de elasticidad
+    if (hasSj === false && hasCmj && hasDj === false && hasMccall === false) {
+      // Protocolo solo CMJ: no es advertencia
+    } else if (d.elasticity_index == null && d.cmj_height != null && d.sj_height == null && hasSj) {
+      w.push('Falta altura de Squat Jump: índice de elasticidad CMJ-SJ no calculado.');
     }
-    if (d.reactive_rsi == null) {
-      w.push('Sin RSI (CMJ o Drop Jump): la reactividad en reglas puede quedar limitada.');
+    // RSI: solo advertir si hay CMJ/DJ y realmente falta el valor
+    if ((hasCmj || hasDj) && d.reactive_rsi == null) {
+      w.push('Sin RSI en el archivo: la reactividad en reglas puede quedar limitada.');
     }
     return w;
   }
 
-  private computeCompleteness(d: DerivedVariables): number {
-    const keys: (keyof DerivedVariables)[] = [
-      'cmj_height',
-      'reactive_rsi',
-      'cmj_propulsive_force',
-      'asymmetry',
-      'sj_height',
-      'elasticity_index',
-      'mccall_peak_force',
-    ];
+  private computeCompleteness(d: DerivedVariables, testTypes: string[]): number {
+    const hasSj = testTypes.some((t) =>
+      ['squat_jump', 'sq_jump', 'squatjump', 'sj'].includes(t),
+    );
+    const hasDj = testTypes.some((t) => ['drop_jump', 'dropjump', 'dj'].includes(t));
+    const hasMccall = testTypes.some(
+      (t) => t.includes('mccall') || t.includes('imtp') || t === 'isometric_mid_thigh_pull',
+    );
+    const hasCmj = testTypes.some(
+      (t) => t.includes('cmj') || t === 'custom' || t === 'unknown' || t === '',
+    );
+
+    const keys: (keyof DerivedVariables)[] = [];
+    if (hasCmj || (!hasSj && !hasDj && !hasMccall)) {
+      keys.push('cmj_height', 'reactive_rsi', 'cmj_propulsive_force', 'asymmetry');
+    }
+    if (hasDj) keys.push('reactive_rsi');
+    if (hasSj) keys.push('sj_height', 'elasticity_index');
+    if (hasMccall) keys.push('mccall_peak_force');
+    if (!keys.length) {
+      keys.push('cmj_height', 'reactive_rsi', 'cmj_propulsive_force', 'asymmetry');
+    }
+
+    const unique = [...new Set(keys)];
     let ok = 0;
-    for (const k of keys) {
+    for (const k of unique) {
       if (d[k] != null) ok++;
     }
-    return Math.round((ok / keys.length) * 100);
+    return Math.round((ok / unique.length) * 100);
   }
 
   private buildStrategy(scores: CategoryScores): StrategyBlock | null {

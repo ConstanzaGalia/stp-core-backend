@@ -149,6 +149,10 @@ export class User {
   @Column({ name: 'primary_sport', nullable: true, length: 100 })
   primarySport?: string;
 
+  /** Club de origen (clubs deportivos). Nullable: la UI usa el nombre del centro como default. */
+  @Column({ name: 'club_name', nullable: true, length: 200 })
+  clubName?: string;
+
   /** Participante cargado solo para evaluaciones (feria/externo); no aparece en roster de alumnos hasta promoción. */
   @Column({ name: 'evaluation_portal_only', type: 'boolean', default: false })
   evaluationPortalOnly?: boolean;

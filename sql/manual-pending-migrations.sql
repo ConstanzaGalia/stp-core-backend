@@ -67,3 +67,13 @@ ALTER TABLE athlete_invitations
 --
 -- SELECT column_name FROM information_schema.columns
 -- WHERE table_name = 'divisions' ORDER BY ordinal_position;
+
+-- 6) Motor de Evaluaciones (ejecutar también los scripts dedicados):
+--    sql/create-evaluation-protocols.sql
+--    sql/extend-physical-evaluation-engine.sql
+--    sql/create-evaluation-criteria-sets.sql
+
+-- 7) Club de origen del atleta (sports_club)
+ALTER TABLE "user"
+  ADD COLUMN IF NOT EXISTS club_name VARCHAR(200) NULL;
+

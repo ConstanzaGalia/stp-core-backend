@@ -12,6 +12,8 @@ import {
   DEFAULT_EVALUATIONS_MAX_FILE_MB,
   DEFAULT_EVALUATIONS_UPLOAD_DIR,
   EVALUATIONS_MAX_FILES_PER_REQUEST,
+  isAllowedEvaluationFilename,
+  isSpreadsheetFilename,
 } from './evaluations-upload.constants';
 
 function resolveUploadRoot(): string {
@@ -34,9 +36,86 @@ function humanizeFilename(name: string): string {
 function extFromOriginal(name: string, mime: string): string {
   const lower = name.toLowerCase();
   if (lower.endsWith('.csv')) return '.csv';
+  if (lower.endsWith('.xlsx')) return '.xlsx';
+  if (lower.endsWith('.xls')) return '.xls';
   if (lower.endsWith('.pdf')) return '.pdf';
   if (mime === 'application/pdf') return '.pdf';
+  if (mime === 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet') return '.xlsx';
+  if (mime === 'application/vnd.ms-excel') return '.xls';
   return '.bin';
+}
+
+function sheetToStringMatrix(
+  XLSX: typeof import('xlsx'),
+  sheet: import('xlsx').WorkSheet,
+): string[][] {
+  const cellAddrs = Object.keys(sheet).filter((key) => !key.startsWith('!'));
+  if (!cellAddrs.length) return [];
+
+  let maxR = 0;
+  let maxC = 0;
+  for (const addr of cellAddrs) {
+    const { r, c } = XLSX.utils.decode_cell(addr);
+    if (r > maxR) maxR = r;
+    if (c > maxC) maxC = c;
+  }
+
+  const matrix: string[][] = [];
+  for (let r = 0; r <= maxR; r++) {
+    const row: string[] = [];
+    for (let c = 0; c <= maxC; c++) {
+      const cell = sheet[XLSX.utils.encode_cell({ r, c })] as
+        | { w?: string; v?: string | number | boolean | Date }
+        | undefined;
+      let value = '';
+      if (cell) {
+        if (cell.w != null && String(cell.w).trim() !== '') value = String(cell.w).trim();
+        else if (cell.v != null) value = String(cell.v).trim();
+      }
+      row.push(value);
+    }
+    matrix.push(row);
+  }
+  return matrix;
+}
+
+function matrixToVerticalCsv(matrix: string[][]): string {
+  const rows = matrix.filter((row) => row.some((cell) => cell.length > 0));
+  if (rows.length < 2) return '';
+
+  const header = [...rows[0]];
+  while (header.length > 0 && header[header.length - 1] === '') header.pop();
+  // Export Ivolution XLSX: A1 vacío | Referencia | Rep N
+  if (!header[0]) header[0] = 'Característica';
+
+  const maxCols = Math.max(header.length, ...rows.slice(1).map((r) => r.length));
+  while (header.length < maxCols) header.push('');
+
+  const escapeCell = (value: string) => {
+    if (value.includes(';') || value.includes('"') || value.includes('\n')) {
+      return `"${value.replace(/"/g, '""')}"`;
+    }
+    return value;
+  };
+
+  return [
+    header.map(escapeCell).join(';'),
+    ...rows.slice(1).map((row) => header.map((_, index) => escapeCell(row[index] ?? '')).join(';')),
+  ].join('\n');
+}
+
+function spreadsheetBufferToCsv(buffer: Buffer): string {
+  // eslint-disable-next-line @typescript-eslint/no-require-imports
+  const XLSX = require('xlsx') as typeof import('xlsx');
+  const workbook = XLSX.read(buffer, { type: 'buffer', cellText: true, cellDates: true });
+
+  for (const sheetName of workbook.SheetNames) {
+    const sheet = workbook.Sheets[sheetName];
+    if (!sheet) continue;
+    const csv = matrixToVerticalCsv(sheetToStringMatrix(XLSX, sheet));
+    if (csv) return csv;
+  }
+  return '';
 }
 
 /** Campos opcionales enviados por el cliente (FormData `fileMetadata` JSON). */
@@ -95,30 +174,43 @@ export class EvaluacionesFilesService {
     }
     const mime = (file.mimetype || '').toLowerCase();
     const name = (file.originalname || '').toLowerCase();
-    const extOk = name.endsWith('.pdf') || name.endsWith('.csv');
+    const extOk = isAllowedEvaluationFilename(name);
     const mimeOk = ALLOWED_EVALUATION_MIMETYPES.has(mime) || mime === 'application/octet-stream';
     if (!extOk && !mimeOk) {
       throw new BadRequestException(`Tipo no permitido: ${file.originalname}`);
     }
-    if (!extOk && mimeOk && !name.endsWith('.pdf') && !name.endsWith('.csv')) {
-      throw new BadRequestException(`Solo PDF o CSV: ${file.originalname}`);
+    if (!extOk && mimeOk) {
+      throw new BadRequestException(`Solo PDF, CSV o Excel (XLS/XLSX): ${file.originalname}`);
     }
   }
 
-  private async extractContentSample(file: Express.Multer.File): Promise<{ sample: string; isCsv: boolean }> {
+  private async extractContentSample(file: Express.Multer.File): Promise<{ sample: string; isTabular: boolean }> {
     const mime = (file.mimetype || '').toLowerCase();
     const name = file.originalname?.toLowerCase() || '';
     const isCsv = mime.includes('csv') || name.endsWith('.csv');
+    const isSpreadsheet =
+      isSpreadsheetFilename(name) ||
+      mime.includes('spreadsheet') ||
+      mime === 'application/vnd.ms-excel';
+
     if (isCsv) {
-      return { sample: file.buffer.toString('utf8').slice(0, 12000), isCsv: true };
+      return { sample: file.buffer.toString('utf8').slice(0, 12000), isTabular: true };
+    }
+    if (isSpreadsheet) {
+      try {
+        const csv = spreadsheetBufferToCsv(file.buffer);
+        return { sample: csv.slice(0, 12000), isTabular: true };
+      } catch {
+        return { sample: '', isTabular: true };
+      }
     }
     try {
       // eslint-disable-next-line @typescript-eslint/no-require-imports
       const pdfParse = require('pdf-parse') as (b: Buffer) => Promise<{ text: string }>;
       const data = await pdfParse(file.buffer);
-      return { sample: (data.text || '').slice(0, 15000), isCsv: false };
+      return { sample: (data.text || '').slice(0, 15000), isTabular: false };
     } catch {
-      return { sample: '', isCsv: false };
+      return { sample: '', isTabular: false };
     }
   }
 
@@ -153,27 +245,59 @@ export class EvaluacionesFilesService {
       await fs.writeFile(absPath, file.buffer);
 
       const relativePath = path.posix.join(evaluationId, storedName);
-      const { sample, isCsv } = await this.extractContentSample(file);
+      const { sample, isTabular } = await this.extractContentSample(file);
       const { testType: inferredType, hints } = this.testTypeFromFile.resolve(file.originalname, file.mimetype, sample);
       const testType = meta.selectedTestType?.trim() || inferredType;
 
       const fileId = randomUUID();
 
-      let parsedMetrics: Record<string, unknown> = {};
-      let repetitions: Array<Record<string, unknown>> = [];
-      if (isCsv) {
-        const csvFull = file.buffer.toString('utf8');
-        const extracted = this.metricsExtraction.extractFromCsv(testType, csvFull);
-        parsedMetrics = extracted.metrics;
-        repetitions = extracted.repetitions;
-      } else {
-        parsedMetrics = this.metricsExtraction.extractFromPdfText(testType, sample);
-      }
-
       const previewPayload =
         meta.previewHeaders?.length && meta.previewRows?.length
           ? { headers: meta.previewHeaders, rows: meta.previewRows }
           : null;
+
+      let parsedMetrics: Record<string, unknown> = {};
+      let repetitions: Array<Record<string, unknown>> = [];
+      if (isTabular) {
+        const csvFull = isSpreadsheetFilename(file.originalname)
+          ? spreadsheetBufferToCsv(file.buffer)
+          : file.buffer.toString('utf8');
+        const extracted = csvFull.trim()
+          ? this.metricsExtraction.extractFromCsv(testType, csvFull)
+          : { metrics: {} as Record<string, unknown>, repetitions: [] as Array<Record<string, unknown>> };
+
+        // Preferir preview del cliente si el re-parse del archivo rinde pocas métricas numéricas
+        // (típico en XLSX Ivolution donde el front ya resolvió el layout).
+        const fromPreview =
+          previewPayload != null
+            ? this.metricsExtraction.extractFromPreviewTable(
+                testType,
+                previewPayload.headers,
+                previewPayload.rows,
+              )
+            : null;
+
+        const countNumeric = (m: Record<string, unknown>) =>
+          Object.entries(m).filter(
+            ([k, v]) => !k.startsWith('csv_') && !k.startsWith('parse') && typeof v === 'number',
+          ).length;
+
+        const fileCount = countNumeric(extracted.metrics);
+        const previewCount = fromPreview ? countNumeric(fromPreview.metrics) : 0;
+
+        if (previewCount > fileCount) {
+          // Preview gana en cantidad, pero no descartamos keys del archivo (defensa si preview truncado)
+          parsedMetrics = { ...extracted.metrics, ...fromPreview!.metrics };
+          repetitions = fromPreview!.repetitions.length ? fromPreview!.repetitions : extracted.repetitions;
+        } else {
+          parsedMetrics = { ...fromPreview?.metrics, ...extracted.metrics };
+          repetitions = extracted.repetitions.length
+            ? extracted.repetitions
+            : fromPreview?.repetitions ?? [];
+        }
+      } else {
+        parsedMetrics = this.metricsExtraction.extractFromPdfText(testType, sample);
+      }
 
       const fileMetaRow: PhysicalEvaluationFileMeta = {
         id: fileId,

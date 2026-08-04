@@ -14,6 +14,9 @@ import { Company } from './entities/company.entity';
 import { AthleteEvaluation } from './entities/athlete-evaluation.entity';
 import { PhysicalEvaluation } from './entities/physical-evaluation.entity';
 import { PhysicalEvaluationTest } from './entities/physical-evaluation-test.entity';
+import { PhysicalEvaluationMeasurement } from './entities/physical-evaluation-measurement.entity';
+import { EvaluationProtocol } from './entities/evaluation-protocol.entity';
+import { EvaluationCriteriaSet } from './entities/evaluation-criteria-set.entity';
 import { Exercise } from './entities/excercise.entity';
 import { Expense } from './entities/expense.entity';
 import { FixedExpenseTemplate } from './entities/fixed-expense-template.entity';
@@ -54,6 +57,9 @@ export const TYPEORM_ENTITIES = [
   AthleteEvaluation,
   PhysicalEvaluation,
   PhysicalEvaluationTest,
+  PhysicalEvaluationMeasurement,
+  EvaluationProtocol,
+  EvaluationCriteriaSet,
   AthleteInvitation,
   AthleteSchedule,
   Division,

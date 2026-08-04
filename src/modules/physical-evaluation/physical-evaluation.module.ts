@@ -2,12 +2,17 @@ import { Module } from '@nestjs/common';
 import { TypeOrmModule } from '@nestjs/typeorm';
 import { PhysicalEvaluation } from 'src/entities/physical-evaluation.entity';
 import { PhysicalEvaluationTest } from 'src/entities/physical-evaluation-test.entity';
+import { PhysicalEvaluationMeasurement } from 'src/entities/physical-evaluation-measurement.entity';
 import { AthleteEvaluation } from 'src/entities/athlete-evaluation.entity';
+import { EvaluationProtocol } from 'src/entities/evaluation-protocol.entity';
+import { EvaluationCriteriaSet } from 'src/entities/evaluation-criteria-set.entity';
 import { User } from 'src/entities/user.entity';
 import { CompanyModule } from '../company/company.module';
 import { AthletesModule } from '../athletes/athletes.module';
 import { PhysicalEvaluationController } from './physical-evaluation.controller';
 import { EvaluacionesController } from './evaluaciones.controller';
+import { EvaluationProtocolController } from './evaluation-protocol.controller';
+import { EvaluationCriteriaSetController } from './evaluation-criteria-set.controller';
 import { PhysicalEvaluationService } from './physical-evaluation.service';
 import { PhysicalEvaluationAnalysisService } from './physical-evaluation-analysis.service';
 import { EvaluacionesFilesService } from './evaluaciones-files.service';
@@ -21,14 +26,29 @@ import { AnalysisGeneratorService } from './analysis/analysis-generator.service'
 import { TrainingDecisionService } from './analysis/training-decision.service';
 import { AiAnalysisService } from './ai-analysis.service';
 import { PhotocellImportService } from './photocell-import.service';
+import { EvaluationProtocolService } from './evaluation-protocol.service';
+import { EvaluationCriteriaSetService } from './evaluation-criteria-set.service';
 
 @Module({
   imports: [
-    TypeOrmModule.forFeature([PhysicalEvaluation, PhysicalEvaluationTest, User, AthleteEvaluation]),
+    TypeOrmModule.forFeature([
+      PhysicalEvaluation,
+      PhysicalEvaluationTest,
+      PhysicalEvaluationMeasurement,
+      EvaluationProtocol,
+      EvaluationCriteriaSet,
+      User,
+      AthleteEvaluation,
+    ]),
     CompanyModule,
     AthletesModule,
   ],
-  controllers: [PhysicalEvaluationController, EvaluacionesController],
+  controllers: [
+    PhysicalEvaluationController,
+    EvaluacionesController,
+    EvaluationProtocolController,
+    EvaluationCriteriaSetController,
+  ],
   providers: [
     PhysicalEvaluationService,
     PhysicalEvaluationAnalysisService,
@@ -43,7 +63,9 @@ import { PhotocellImportService } from './photocell-import.service';
     TrainingDecisionService,
     AiAnalysisService,
     PhotocellImportService,
+    EvaluationProtocolService,
+    EvaluationCriteriaSetService,
   ],
-  exports: [PhysicalEvaluationService],
+  exports: [PhysicalEvaluationService, EvaluationProtocolService, EvaluationCriteriaSetService],
 })
 export class PhysicalEvaluationModule {}
