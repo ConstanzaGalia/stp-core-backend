@@ -1,8 +1,10 @@
 import {
   Body,
   Controller,
+  Get,
   Param,
   Post,
+  Query,
   UploadedFiles,
   UseGuards,
   UseInterceptors,
@@ -21,6 +23,12 @@ import { PhotocellImportDto } from './dto/photocell-import.dto';
 import { PhotocellImportService } from './photocell-import.service';
 import { CreateManualStrengthEvaluationDto } from './dto/create-manual-strength-evaluation.dto';
 import { StrengthManualService } from './strength-manual/strength-manual.service';
+import { EvaluationBulkService } from './evaluation-bulk.service';
+import {
+  BulkDuplicateCheckDto,
+  PhotocellBatchConfirmDto,
+  PhotocellBatchPreviewDto,
+} from './dto/photocell-batch-import.dto';
 import {
   DEFAULT_EVALUATIONS_MAX_FILE_MB,
   EVALUATIONS_MAX_FILES_PER_REQUEST,
@@ -55,6 +63,7 @@ export class EvaluacionesController {
     private readonly aiAnalysis: AiAnalysisService,
     private readonly photocellImport: PhotocellImportService,
     private readonly strengthManual: StrengthManualService,
+    private readonly evaluationBulk: EvaluationBulkService,
   ) {}
 
   @Post()
@@ -65,6 +74,42 @@ export class EvaluacionesController {
       dto.evaluationDate,
       dto.criteriaSetId,
     );
+  }
+
+  @Get('company/:companyId/bulk/roster')
+  bulkRoster(
+    @GetUser() actor: User,
+    @Param('companyId') companyId: string,
+    @Query('divisionId') divisionId?: string,
+  ) {
+    return this.evaluationBulk.getBulkRoster(actor, companyId, divisionId);
+  }
+
+  @Post('company/:companyId/bulk/duplicates')
+  bulkDuplicates(
+    @GetUser() actor: User,
+    @Param('companyId') companyId: string,
+    @Body() dto: BulkDuplicateCheckDto,
+  ) {
+    return this.evaluationBulk.checkDuplicates(actor, companyId, dto);
+  }
+
+  @Post('company/:companyId/bulk/photocell/preview')
+  bulkPhotocellPreview(
+    @GetUser() actor: User,
+    @Param('companyId') companyId: string,
+    @Body() dto: PhotocellBatchPreviewDto,
+  ) {
+    return this.evaluationBulk.previewPhotocellBatch(actor, companyId, dto);
+  }
+
+  @Post('company/:companyId/bulk/photocell/confirm')
+  bulkPhotocellConfirm(
+    @GetUser() actor: User,
+    @Param('companyId') companyId: string,
+    @Body() dto: PhotocellBatchConfirmDto,
+  ) {
+    return this.evaluationBulk.confirmPhotocellBatch(actor, companyId, dto);
   }
 
   @Post('photocell/preview')

@@ -27,6 +27,7 @@ import { TrainingDecisionService } from './analysis/training-decision.service';
 import { AiAnalysisService } from './ai-analysis.service';
 import { PhotocellImportService } from './photocell-import.service';
 import { StrengthManualService } from './strength-manual/strength-manual.service';
+import { EvaluationBulkService } from './evaluation-bulk.service';
 import { EvaluationProtocolService } from './evaluation-protocol.service';
 import { EvaluationCriteriaSetService } from './evaluation-criteria-set.service';
 import { PerformanceClassificationService } from './performance-classification.service';
@@ -66,6 +67,7 @@ import { PerformanceClassificationService } from './performance-classification.s
     AiAnalysisService,
     PhotocellImportService,
     StrengthManualService,
+    EvaluationBulkService,
     EvaluationProtocolService,
     EvaluationCriteriaSetService,
     PerformanceClassificationService,

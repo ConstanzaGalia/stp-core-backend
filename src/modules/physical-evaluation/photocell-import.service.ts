@@ -91,6 +91,29 @@ export type PhotocellPreviewResponse = {
   completeness: number;
 };
 
+export type PhotocellAthleteGroupPreview = {
+  sourceNameHint: string;
+  rowIndexes: number[];
+  rowCount: number;
+  headers: string[];
+  rows: Array<Array<string | null>>;
+  warnings: string[];
+  evaluations: CanonicalEvaluationPreview[];
+  protocolCode: string | null;
+  protocolLabel: string | null;
+  testType: string | null;
+  completeness: number;
+  error: string | null;
+};
+
+export type PhotocellMultiAthletePreviewResponse = {
+  sourceType: 'photocell_bulk';
+  evaluationDate: string;
+  sourceName: string | null;
+  warnings: string[];
+  groups: PhotocellAthleteGroupPreview[];
+};
+
 function normalizeHeader(value: string): string {
   return value
     .normalize('NFD')
@@ -269,6 +292,150 @@ export class PhotocellImportService {
       aggregates: first.aggregates,
       summaryAnalysis: first.summaryAnalysis,
       completeness: first.completeness,
+    };
+  }
+
+  /**
+   * Agrupa filas por nombre de atleta del archivo y genera previews canónicos por grupo.
+   * No asigna athleteId de STP: eso lo resuelve EvaluationBulkService.
+   */
+  async buildMultiAthletePreview(input: {
+    evaluationDate: string;
+    protocolCode?: string;
+    sourceName?: string;
+    headers: string[];
+    rows: Array<Array<string | null>>;
+  }): Promise<PhotocellMultiAthletePreviewResponse> {
+    if (!input.headers?.length) {
+      throw new BadRequestException('Faltan encabezados para interpretar la importación');
+    }
+    if (!input.rows?.length) {
+      throw new BadRequestException('No hay filas con datos para interpretar');
+    }
+    if (input.rows.length > 2000) {
+      throw new BadRequestException('Máximo 2000 filas por importación masiva');
+    }
+
+    const catalog = await this.protocols.list('photocells', true);
+    if (!catalog.length) {
+      throw new BadRequestException('No hay protocolos de fotocélulas configurados');
+    }
+
+    const parsedRows = this.normalizeRows(input.headers, input.rows);
+    const groupsMap = new Map<
+      string,
+      { hint: string; indexes: number[]; rows: ParsedRow[]; rawRows: Array<Array<string | null>> }
+    >();
+
+    parsedRows.forEach((row, index) => {
+      const hasData = Object.values(row.raw).some((value) => value != null && String(value).trim() !== '');
+      if (!hasData) return;
+      const hint = (row.athleteName || '').trim() || '__sin_nombre__';
+      const key = hint === '__sin_nombre__' ? hint : hint.normalize('NFD').replace(/[\u0300-\u036f]/g, '').toLowerCase().replace(/\s+/g, ' ').trim();
+      const existing = groupsMap.get(key);
+      if (existing) {
+        existing.indexes.push(index);
+        existing.rows.push(row);
+        existing.rawRows.push(input.rows[index] ?? []);
+      } else {
+        groupsMap.set(key, {
+          hint: hint === '__sin_nombre__' ? 'Sin nombre en archivo' : hint,
+          indexes: [index],
+          rows: [row],
+          rawRows: [input.rows[index] ?? []],
+        });
+      }
+    });
+
+    if (!groupsMap.size) {
+      throw new BadRequestException('No hay filas con datos para interpretar');
+    }
+    if (groupsMap.size > 200) {
+      throw new BadRequestException('Máximo 200 atletas distintos por importación masiva');
+    }
+
+    const globalWarnings: string[] = [];
+    const groups: PhotocellAthleteGroupPreview[] = [];
+
+    for (const group of groupsMap.values()) {
+      try {
+        let protocolEntity =
+          (input.protocolCode
+            ? await this.protocols.findActiveByDeviceAndCode('photocells', input.protocolCode)
+            : null) ?? null;
+
+        const localWarnings: string[] = [];
+        const autoProtocol = this.detectProtocolFromRows(group.rows, catalog);
+        if (!protocolEntity && autoProtocol) {
+          protocolEntity = autoProtocol;
+          localWarnings.push(`Protocolo detectado automáticamente: ${autoProtocol.label}.`);
+        }
+        if (!protocolEntity) {
+          throw new BadRequestException('Protocolo de fotocélulas no soportado');
+        }
+
+        const upgraded = this.maybeUpgradeSprintProtocol(protocolEntity, group.rows, catalog);
+        if (upgraded && upgraded.code !== protocolEntity.code) {
+          localWarnings.push(
+            `Se agruparon parciales en ${upgraded.label} (en lugar de crear una evaluación por distancia).`,
+          );
+          protocolEntity = upgraded;
+        }
+
+        const protocol = protocolFromEntity(protocolEntity);
+        const evaluations = this.buildCanonicalEvaluations(protocol, group.rows, input.evaluationDate);
+        if (!evaluations.length) {
+          throw new BadRequestException('No se pudo interpretar ninguna evaluación a partir de los datos');
+        }
+
+        const first = evaluations[0];
+        groups.push({
+          sourceNameHint: group.hint,
+          rowIndexes: group.indexes,
+          rowCount: group.rows.length,
+          headers: input.headers,
+          rows: group.rawRows,
+          warnings: [...localWarnings, ...evaluations.flatMap((e) => e.warnings)],
+          evaluations,
+          protocolCode: first.protocolCode,
+          protocolLabel: first.protocolLabel,
+          testType: first.testType,
+          completeness: first.completeness,
+          error: null,
+        });
+      } catch (error) {
+        const message =
+          error instanceof BadRequestException
+            ? String(error.message)
+            : error instanceof Error
+              ? error.message
+              : 'Error al interpretar el grupo';
+        groups.push({
+          sourceNameHint: group.hint,
+          rowIndexes: group.indexes,
+          rowCount: group.rows.length,
+          headers: input.headers,
+          rows: group.rawRows,
+          warnings: [],
+          evaluations: [],
+          protocolCode: null,
+          protocolLabel: null,
+          testType: null,
+          completeness: 0,
+          error: message,
+        });
+      }
+    }
+
+    groups.sort((a, b) => a.sourceNameHint.localeCompare(b.sourceNameHint, 'es'));
+    globalWarnings.push(`Se detectaron ${groups.length} atleta(s) en el archivo.`);
+
+    return {
+      sourceType: 'photocell_bulk',
+      evaluationDate: input.evaluationDate,
+      sourceName: input.sourceName?.trim() || null,
+      warnings: globalWarnings,
+      groups,
     };
   }
 

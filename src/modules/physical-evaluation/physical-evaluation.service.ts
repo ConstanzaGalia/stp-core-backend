@@ -479,6 +479,53 @@ export class PhysicalEvaluationService {
     return results.length === 1 ? results[0] : results;
   }
 
+  /**
+   * Busca evaluaciones existentes para detectar duplicados en carga masiva.
+   * Clave: athlete + fecha + device (+ protocolCode si se indica).
+   */
+  async findDuplicateEvaluations(input: {
+    athleteId: string;
+    evaluationDateIso: string;
+    device?: string | null;
+    protocolCode?: string | null;
+  }): Promise<
+    Array<{
+      id: string;
+      device: string | null;
+      protocolCode: string | null;
+      attempt: number | null;
+      evaluationDate: string;
+    }>
+  > {
+    const evaluationDate = parseEvaluationDateOnly(input.evaluationDateIso);
+    const where: Record<string, unknown> = {
+      user: { id: input.athleteId },
+      evaluationDate,
+    };
+    if (input.device?.trim()) where.device = input.device.trim();
+    if (input.protocolCode?.trim()) where.protocolCode = input.protocolCode.trim();
+
+    const rows = await this.evaluationRepo.find({
+      where,
+      // createdAt debe ir en select: TypeORM genera DISTINCT por el join a user
+      // y el ORDER BY falla si la columna no está seleccionada.
+      select: ['id', 'device', 'protocolCode', 'attempt', 'evaluationDate', 'createdAt'],
+      order: { createdAt: 'DESC' },
+      take: 20,
+    });
+
+    return rows.map((row) => ({
+      id: row.id,
+      device: row.device ?? null,
+      protocolCode: row.protocolCode ?? null,
+      attempt: row.attempt ?? null,
+      evaluationDate:
+        row.evaluationDate instanceof Date
+          ? row.evaluationDate.toISOString().slice(0, 10)
+          : String(row.evaluationDate).slice(0, 10),
+    }));
+  }
+
   /** @deprecated Prefer createPhotocellEvaluations */
   async createPhotocellEvaluation(
     actor: User,

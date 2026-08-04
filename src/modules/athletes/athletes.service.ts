@@ -550,6 +550,8 @@ export class AthletesService {
       return await this.invitationRepository
         .createQueryBuilder('inv')
         .innerJoinAndSelect('inv.user', 'user')
+        .leftJoinAndSelect('inv.division', 'division')
+        .leftJoinAndSelect('inv.position', 'position')
         .where('inv.companyId = :cid', { cid: companyId })
         .andWhere('inv.status = :status', { status: InvitationStatus.APPROVED })
         .andWhere('inv.division_id IN (:...divIds)', { divIds: scope.divisionIds })
@@ -562,7 +564,7 @@ export class AthletesService {
         company: { id: companyId },
         status: InvitationStatus.APPROVED,
       },
-      relations: ['user'],
+      relations: ['user', 'division', 'position'],
       order: { approvedAt: 'DESC' },
     });
   }
