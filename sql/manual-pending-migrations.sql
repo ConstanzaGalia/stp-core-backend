@@ -78,3 +78,11 @@ ALTER TABLE athlete_invitations
 ALTER TABLE "user"
   ADD COLUMN IF NOT EXISTS club_name VARCHAR(200) NULL;
 
+-- 8) Portal Analytics de evaluaciones (participantes solo-eval + flag de acceso)
+ALTER TABLE "user"
+  ADD COLUMN IF NOT EXISTS evaluation_portal_only BOOLEAN NOT NULL DEFAULT false;
+
+COMMENT ON COLUMN "user".evaluation_portal_only IS
+  'Si true, el atleta usa el portal Analytics de evaluaciones (layout reducido)';
+
+
