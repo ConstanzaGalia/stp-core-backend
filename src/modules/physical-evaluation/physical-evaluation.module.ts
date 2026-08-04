@@ -26,6 +26,7 @@ import { AnalysisGeneratorService } from './analysis/analysis-generator.service'
 import { TrainingDecisionService } from './analysis/training-decision.service';
 import { AiAnalysisService } from './ai-analysis.service';
 import { PhotocellImportService } from './photocell-import.service';
+import { StrengthManualService } from './strength-manual/strength-manual.service';
 import { EvaluationProtocolService } from './evaluation-protocol.service';
 import { EvaluationCriteriaSetService } from './evaluation-criteria-set.service';
 
@@ -63,6 +64,7 @@ import { EvaluationCriteriaSetService } from './evaluation-criteria-set.service'
     TrainingDecisionService,
     AiAnalysisService,
     PhotocellImportService,
+    StrengthManualService,
     EvaluationProtocolService,
     EvaluationCriteriaSetService,
   ],

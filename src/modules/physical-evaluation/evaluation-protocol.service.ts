@@ -16,6 +16,19 @@ const BOOTSTRAP_PROTOCOLS: Array<Partial<EvaluationProtocol> & { code: string; l
   { code: 'illinois', label: 'Illinois', device: 'photocells', category: 'agility', config: { testType: 'photocell_illinois' }, active: true, sortOrder: 130 },
   { code: 'rast', label: 'RAST', device: 'photocells', category: 'resistance', config: { testType: 'photocell_rast' }, active: true, sortOrder: 210 },
   { code: 'rsa', label: 'RSA', device: 'photocells', category: 'resistance', config: { testType: 'photocell_rsa' }, active: true, sortOrder: 220 },
+  {
+    code: 'big_three_manual',
+    label: 'Tres básicos (manual)',
+    device: 'manual',
+    category: 'strength',
+    config: {
+      testTypes: ['manual_squat', 'manual_bench', 'manual_deadlift'],
+      lifts: ['squat', 'bench', 'deadlift'],
+      formula: 'epley_rir_v1',
+    },
+    active: true,
+    sortOrder: 300,
+  },
 ];
 
 @Injectable()

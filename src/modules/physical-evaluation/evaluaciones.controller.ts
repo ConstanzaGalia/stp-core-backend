@@ -19,6 +19,8 @@ import { CreateEvaluacionDto } from './dto/create-evaluacion.dto';
 import { GenerateAiAnalysisDto } from './dto/generate-ai-analysis.dto';
 import { PhotocellImportDto } from './dto/photocell-import.dto';
 import { PhotocellImportService } from './photocell-import.service';
+import { CreateManualStrengthEvaluationDto } from './dto/create-manual-strength-evaluation.dto';
+import { StrengthManualService } from './strength-manual/strength-manual.service';
 import {
   DEFAULT_EVALUATIONS_MAX_FILE_MB,
   EVALUATIONS_MAX_FILES_PER_REQUEST,
@@ -52,6 +54,7 @@ export class EvaluacionesController {
     private readonly evaluacionesFiles: EvaluacionesFilesService,
     private readonly aiAnalysis: AiAnalysisService,
     private readonly photocellImport: PhotocellImportService,
+    private readonly strengthManual: StrengthManualService,
   ) {}
 
   @Post()
@@ -73,6 +76,16 @@ export class EvaluacionesController {
   async createPhotocell(@GetUser() actor: User, @Body() dto: PhotocellImportDto) {
     const preview = await this.photocellImport.buildPreview(dto);
     return this.physicalEvaluations.createPhotocellEvaluations(actor, preview);
+  }
+
+  @Post('manual-strength/preview')
+  previewManualStrength(@GetUser() actor: User, @Body() dto: CreateManualStrengthEvaluationDto) {
+    return this.strengthManual.buildPreview(actor, dto);
+  }
+
+  @Post('manual-strength')
+  createManualStrength(@GetUser() actor: User, @Body() dto: CreateManualStrengthEvaluationDto) {
+    return this.strengthManual.create(actor, dto);
   }
 
   @Post(':id/ai-analysis')

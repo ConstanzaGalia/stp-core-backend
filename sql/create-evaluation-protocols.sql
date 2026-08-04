@@ -31,7 +31,8 @@ VALUES
   ('test_505', '505', 'photocells', 'agility', '{"testType":"photocell_505"}'::jsonb, TRUE, 120),
   ('illinois', 'Illinois', 'photocells', 'agility', '{"testType":"photocell_illinois"}'::jsonb, TRUE, 130),
   ('rast', 'RAST', 'photocells', 'resistance', '{"testType":"photocell_rast"}'::jsonb, TRUE, 210),
-  ('rsa', 'RSA', 'photocells', 'resistance', '{"testType":"photocell_rsa"}'::jsonb, TRUE, 220)
+  ('rsa', 'RSA', 'photocells', 'resistance', '{"testType":"photocell_rsa"}'::jsonb, TRUE, 220),
+  ('big_three_manual', 'Tres básicos (manual)', 'manual', 'strength', '{"testTypes":["manual_squat","manual_bench","manual_deadlift"],"lifts":["squat","bench","deadlift"],"formula":"epley_rir_v1"}'::jsonb, TRUE, 300)
 ON CONFLICT (code) DO UPDATE SET
   label = EXCLUDED.label,
   device = EXCLUDED.device,

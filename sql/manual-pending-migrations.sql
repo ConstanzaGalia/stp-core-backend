@@ -72,6 +72,7 @@ ALTER TABLE athlete_invitations
 --    sql/create-evaluation-protocols.sql
 --    sql/extend-physical-evaluation-engine.sql
 --    sql/create-evaluation-criteria-sets.sql
+--    sql/create-manual-strength-protocol.sql
 
 -- 7) Club de origen del atleta (sports_club)
 ALTER TABLE "user"
