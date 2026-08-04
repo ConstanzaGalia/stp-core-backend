@@ -1,4 +1,14 @@
-import { IsBoolean, IsObject, IsOptional, IsString, MaxLength } from 'class-validator';
+import {
+  IsBoolean,
+  IsDateString,
+  IsIn,
+  IsInt,
+  IsObject,
+  IsOptional,
+  IsString,
+  MaxLength,
+  Min,
+} from 'class-validator';
 
 export class CreateEvaluationCriteriaSetDto {
   @IsString()
@@ -21,8 +31,40 @@ export class CreateEvaluationCriteriaSetDto {
 
   @IsOptional()
   @IsString()
+  @MaxLength(30)
+  sex?: string | null;
+
+  @IsOptional()
+  @IsString()
   @MaxLength(40)
   testType?: string;
+
+  @IsOptional()
+  @IsString()
+  @MaxLength(80)
+  protocolCode?: string | null;
+
+  @IsOptional()
+  @IsString()
+  @MaxLength(30)
+  version?: string;
+
+  @IsOptional()
+  @IsDateString()
+  effectiveFrom?: string | null;
+
+  @IsOptional()
+  @IsDateString()
+  effectiveTo?: string | null;
+
+  @IsOptional()
+  @IsIn(['manual', 'historical'])
+  source?: 'manual' | 'historical';
+
+  @IsOptional()
+  @IsInt()
+  @Min(1)
+  sampleSize?: number | null;
 
   @IsOptional()
   @IsString()
@@ -54,8 +96,40 @@ export class UpdateEvaluationCriteriaSetDto {
 
   @IsOptional()
   @IsString()
+  @MaxLength(30)
+  sex?: string | null;
+
+  @IsOptional()
+  @IsString()
   @MaxLength(40)
   testType?: string;
+
+  @IsOptional()
+  @IsString()
+  @MaxLength(80)
+  protocolCode?: string | null;
+
+  @IsOptional()
+  @IsString()
+  @MaxLength(30)
+  version?: string;
+
+  @IsOptional()
+  @IsDateString()
+  effectiveFrom?: string | null;
+
+  @IsOptional()
+  @IsDateString()
+  effectiveTo?: string | null;
+
+  @IsOptional()
+  @IsIn(['manual', 'historical'])
+  source?: 'manual' | 'historical';
+
+  @IsOptional()
+  @IsInt()
+  @Min(1)
+  sampleSize?: number | null;
 
   @IsOptional()
   @IsString()

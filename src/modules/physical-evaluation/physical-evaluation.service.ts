@@ -22,6 +22,11 @@ import type {
   CanonicalEvaluationPreview,
   PhotocellPreviewResponse,
 } from './photocell-import.service';
+import { EvaluationCriteriaSetService } from './evaluation-criteria-set.service';
+import {
+  PerformanceClassificationService,
+  type PerformanceClassificationSnapshot,
+} from './performance-classification.service';
 
 const STAFF_ROLES: UserRole[] = [
   UserRole.STP_ADMIN,
@@ -75,6 +80,8 @@ export class PhysicalEvaluationService {
     private readonly analysisService: PhysicalEvaluationAnalysisService,
     private readonly companyService: CompanyService,
     private readonly athletesService: AthletesService,
+    private readonly criteriaSetService: EvaluationCriteriaSetService,
+    private readonly performanceClassification: PerformanceClassificationService,
   ) {}
 
   private assertMetricsPayloadSize(tests: { metrics: Record<string, unknown> }[]) {
@@ -329,6 +336,21 @@ export class PhysicalEvaluationService {
       if (!set) throw new NotFoundException('Criterio no encontrado');
     }
     ev.criteriaSetId = nextId;
+    ev.classificationSnapshot = null;
+    if (nextId && ev.device === 'photocells') {
+      const set = await this.criteriaSetService.findById(nextId);
+      this.assertCriteriaMatchesPhotocell(set, ev.protocolCode);
+      const test = await this.testRepo.findOne({ where: { evaluation: { id: ev.id } } });
+      ev.classificationSnapshot = this.buildPhotocellClassificationSnapshot({
+        targetId: athleteUserId,
+        evaluationDate: ev.evaluationDate,
+        protocolCode: ev.protocolCode,
+        attempt: ev.attempt,
+        derivedMetrics: ev.derivedMetrics,
+        testMetrics: test?.metrics ?? {},
+        criteriaSet: set,
+      }) as unknown as Record<string, unknown>;
+    }
     await this.evaluationRepo.save(ev);
     return this.findOneById(actor, athleteUserId, evaluationId);
   }
@@ -424,6 +446,7 @@ export class PhysicalEvaluationService {
   async createPhotocellEvaluations(
     actor: User,
     preview: PhotocellPreviewResponse,
+    criteriaSetId?: string | null,
   ): Promise<PhysicalEvaluation | PhysicalEvaluation[]> {
     const target = await this.assertCanAccessAthlete(actor, preview.athleteId, true);
     if (!this.isStaff(actor)) {
@@ -433,10 +456,19 @@ export class PhysicalEvaluationService {
     const candidates = preview.evaluations?.length
       ? preview.evaluations
       : [this.legacyPreviewToCandidate(preview)];
+    const criteriaSet = criteriaSetId?.trim()
+      ? await this.criteriaSetService.findById(criteriaSetId.trim())
+      : null;
 
     const savedIds: string[] = [];
     for (const candidate of candidates) {
-      const saved = await this.persistCanonicalPhotocell(target, preview, candidate);
+      if (criteriaSet) this.assertCriteriaMatchesPhotocell(criteriaSet, candidate.protocolCode);
+      const saved = await this.persistCanonicalPhotocell(
+        target,
+        preview,
+        candidate,
+        criteriaSet,
+      );
       savedIds.push(saved.id);
     }
 
@@ -479,6 +511,7 @@ export class PhysicalEvaluationService {
     target: User,
     preview: PhotocellPreviewResponse,
     candidate: CanonicalEvaluationPreview,
+    criteriaSet: EvaluationCriteriaSet | null,
   ): Promise<PhysicalEvaluation> {
     const testMetrics = {
       ...candidate.metrics,
@@ -501,7 +534,9 @@ export class PhysicalEvaluationService {
       string,
       { best: number | null; mean: number | null; worst: number | null } | number | null
     >;
-    test.warnings = candidate.warnings ?? [];
+    test.warnings = [...new Set((candidate.warnings ?? []).map((warning) => warning.trim()))].filter(
+      Boolean,
+    );
 
     const measurements = (candidate.measurements ?? []).map((m, index) => {
       const row = new PhysicalEvaluationMeasurement();
@@ -526,12 +561,30 @@ export class PhysicalEvaluationService {
       summaryAnalysis: candidate.summaryAnalysis,
       structuredAnalysis: null,
       processingStatus: 'ready',
-      warnings: [...(preview.warnings ?? []), ...(candidate.warnings ?? [])],
+      warnings: [
+        ...new Set(
+          [...(preview.warnings ?? []), ...(candidate.warnings ?? [])]
+            .map((warning) => warning.trim())
+            .filter(Boolean),
+        ),
+      ],
       completeness: candidate.completeness,
       device: 'photocells',
       protocolCode: candidate.protocolCode,
       attempt: candidate.attempt,
       derivedMetrics: candidate.derivedMetrics ?? null,
+      criteriaSetId: criteriaSet?.id ?? null,
+      classificationSnapshot: criteriaSet
+        ? (this.buildPhotocellClassificationSnapshot({
+            targetId: target.id,
+            evaluationDate,
+            protocolCode: candidate.protocolCode,
+            attempt: candidate.attempt,
+            derivedMetrics: candidate.derivedMetrics ?? null,
+            testMetrics,
+            criteriaSet,
+          }) as unknown as Record<string, unknown>)
+        : null,
       metadata: {
         sourceType: preview.sourceType,
         sourceName: preview.sourceName,
@@ -543,6 +596,54 @@ export class PhysicalEvaluationService {
     });
 
     return this.evaluationRepo.save(evaluation);
+  }
+
+  private assertCriteriaMatchesPhotocell(
+    criteriaSet: EvaluationCriteriaSet,
+    protocolCode: string | null,
+  ): void {
+    if (criteriaSet.testType !== 'photocells') {
+      throw new BadRequestException('El criterio seleccionado no corresponde a fotocélulas');
+    }
+    if (
+      criteriaSet.protocolCode &&
+      protocolCode &&
+      criteriaSet.protocolCode !== protocolCode
+    ) {
+      throw new BadRequestException(
+        `El criterio ${criteriaSet.name} corresponde a ${criteriaSet.protocolCode}, no a ${protocolCode}`,
+      );
+    }
+  }
+
+  private buildPhotocellClassificationSnapshot(input: {
+    targetId: string;
+    evaluationDate: Date;
+    protocolCode: string | null;
+    attempt: number | null;
+    derivedMetrics: Record<string, number | null> | null;
+    testMetrics: Record<string, unknown>;
+    criteriaSet: EvaluationCriteriaSet;
+  }): PerformanceClassificationSnapshot {
+    const evaluationDateSeed =
+      input.evaluationDate instanceof Date
+        ? input.evaluationDate.toISOString().slice(0, 10)
+        : String(input.evaluationDate).slice(0, 10);
+    return this.performanceClassification.buildSnapshot({
+      criteriaSet: input.criteriaSet,
+      metrics: {
+        ...input.testMetrics,
+        ...(input.derivedMetrics ?? {}),
+      },
+      protocolCode: input.protocolCode,
+      seed: [
+        input.targetId,
+        evaluationDateSeed,
+        input.protocolCode ?? 'photocells',
+        input.attempt ?? 1,
+        input.criteriaSet.id,
+      ].join(':'),
+    });
   }
 
   async listForAthlete(

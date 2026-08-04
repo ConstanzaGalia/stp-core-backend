@@ -176,6 +176,15 @@ export class PhysicalEvaluation {
   @JoinColumn({ name: 'criteria_set_id' })
   criteriaSet: EvaluationCriteriaSet | null;
 
+  /** Resultado congelado para que un informe histórico no cambie al actualizar referencias. */
+  @Column({
+    type: 'jsonb',
+    name: 'classification_snapshot',
+    nullable: true,
+    default: () => 'null',
+  })
+  classificationSnapshot: Record<string, unknown> | null;
+
   @OneToMany(() => PhysicalEvaluationTest, (t) => t.evaluation, { cascade: true })
   tests: PhysicalEvaluationTest[];
 

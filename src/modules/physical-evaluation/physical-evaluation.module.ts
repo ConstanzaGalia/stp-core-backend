@@ -29,6 +29,7 @@ import { PhotocellImportService } from './photocell-import.service';
 import { StrengthManualService } from './strength-manual/strength-manual.service';
 import { EvaluationProtocolService } from './evaluation-protocol.service';
 import { EvaluationCriteriaSetService } from './evaluation-criteria-set.service';
+import { PerformanceClassificationService } from './performance-classification.service';
 
 @Module({
   imports: [
@@ -67,6 +68,7 @@ import { EvaluationCriteriaSetService } from './evaluation-criteria-set.service'
     StrengthManualService,
     EvaluationProtocolService,
     EvaluationCriteriaSetService,
+    PerformanceClassificationService,
   ],
   exports: [PhysicalEvaluationService, EvaluationProtocolService, EvaluationCriteriaSetService],
 })

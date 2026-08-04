@@ -21,6 +21,10 @@ export class PhotocellImportDto {
   protocolCode?: string;
 
   @IsOptional()
+  @IsUUID()
+  criteriaSetId?: string;
+
+  @IsOptional()
   @IsString()
   @MaxLength(255)
   sourceName?: string;

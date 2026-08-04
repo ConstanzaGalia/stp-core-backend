@@ -75,7 +75,11 @@ export class EvaluacionesController {
   @Post('photocell')
   async createPhotocell(@GetUser() actor: User, @Body() dto: PhotocellImportDto) {
     const preview = await this.photocellImport.buildPreview(dto);
-    return this.physicalEvaluations.createPhotocellEvaluations(actor, preview);
+    return this.physicalEvaluations.createPhotocellEvaluations(
+      actor,
+      preview,
+      dto.criteriaSetId,
+    );
   }
 
   @Post('manual-strength/preview')
