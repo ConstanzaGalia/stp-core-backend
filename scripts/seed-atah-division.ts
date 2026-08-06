@@ -24,8 +24,8 @@ import * as fs from 'fs';
 
 const entitiesPath = (path.join(__dirname, '..', 'src', 'entities') + '/*.entity.{ts,js}').replace(/\\/g, '/');
 
-const COMPANY_ID = 'ea3a67be-d5f9-4f5e-b41b-ede061095b8a';
-const DIVISION_ID = '2dbff042-a9a7-4458-a6ba-c62eca57e20e';
+/** Se resuelve desde la división al correr el seed. */
+const DIVISION_ID = 'b388ce96-af3e-4cbe-90f9-ef0e8f3e95e3';
 
 /** bcrypt de EntrenamientoSTP1@ (mismo que seed-alumnos.ts) */
 const PASSWORD_HASH = '$2b$10$2kESj2Fk980RQ6C.YK410ey0I/0.hhmpB3xkCkyBJ8wYxVAmREl1m';
@@ -37,6 +37,7 @@ interface JugadoraRow {
   fechaNacimiento?: string;
   peso?: number;
   altura?: number;
+  club?: string;
 }
 
 function buildDataSource(): DataSource {
@@ -94,6 +95,7 @@ function parseJugadoras(content: string): JugadoraRow[] {
     const fechaNacimiento = String(row.fechaNacimiento ?? row.fecha_nacimiento ?? row.dateOfBirth ?? '').trim();
     const peso = row.peso != null && row.peso !== '' ? Number(row.peso) : undefined;
     const altura = row.altura != null && row.altura !== '' ? Number(row.altura) : undefined;
+    const club = String(row.club ?? row.clubName ?? row.club_name ?? '').trim();
     return {
       nombre,
       apellido,
@@ -101,6 +103,7 @@ function parseJugadoras(content: string): JugadoraRow[] {
       fechaNacimiento: fechaNacimiento || undefined,
       peso: Number.isFinite(peso) ? peso : undefined,
       altura: Number.isFinite(altura) ? altura : undefined,
+      club: club || undefined,
     };
   });
 }
@@ -176,23 +179,17 @@ async function run() {
   const divisionRepo = dataSource.getRepository(Division);
   const invitationRepo = dataSource.getRepository(AthleteInvitation);
 
-  const company = await companyRepo.findOne({ where: { id: COMPANY_ID }, relations: ['users'] });
-  if (!company) {
-    console.error('No se encontró el centro con ID:', COMPANY_ID);
-    await dataSource.destroy();
-    process.exit(1);
-  }
-
   const division = await divisionRepo.findOne({ where: { id: DIVISION_ID } });
   if (!division) {
     console.error('No se encontró la división con ID:', DIVISION_ID);
     await dataSource.destroy();
     process.exit(1);
   }
-  if (division.companyId !== COMPANY_ID) {
-    console.error(
-      `La división ${DIVISION_ID} pertenece al centro ${division.companyId}, no a ${COMPANY_ID}.`,
-    );
+
+  const COMPANY_ID = division.companyId;
+  const company = await companyRepo.findOne({ where: { id: COMPANY_ID }, relations: ['users'] });
+  if (!company) {
+    console.error('No se encontró el centro con ID:', COMPANY_ID, '(de la división)');
     await dataSource.destroy();
     process.exit(1);
   }
@@ -232,6 +229,10 @@ async function run() {
         }
         if (a.altura != null && user.altura == null) {
           user.altura = a.altura;
+          profileDirty = true;
+        }
+        if (a.club && !user.clubName) {
+          user.clubName = a.club;
           profileDirty = true;
         }
         if (a.dni && !user.biography) {
@@ -302,6 +303,7 @@ async function run() {
         dateOfBirth,
         peso: a.peso,
         altura: a.altura,
+        clubName: a.club,
         biography: a.dni ? `DNI ${a.dni}` : undefined,
       });
       await userRepo.save(user);

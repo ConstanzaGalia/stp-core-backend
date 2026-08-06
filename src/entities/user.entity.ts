@@ -136,6 +136,10 @@ export class User {
   @Column({ type: 'float', nullable: true })
   altura?: number;
 
+  /** Sexo del atleta: femenino | masculino. Nullable. */
+  @Column({ name: 'sexo', nullable: true, length: 20 })
+  sexo?: string | null;
+
   @Column({ nullable: true })
   objetivo?: string;
 

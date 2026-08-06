@@ -155,8 +155,9 @@ export class AthleteEvaluationService {
   async updateProfile(actor: User, userId: string, dto: UpdateAthleteProfileDto): Promise<User> {
     const user = await this.assertCanUpdateProfile(actor, userId);
 
-    if (dto.peso !== undefined) user.peso = dto.peso;
-    if (dto.altura !== undefined) user.altura = dto.altura;
+    if (dto.peso !== undefined) user.peso = dto.peso ?? null;
+    if (dto.altura !== undefined) user.altura = dto.altura ?? null;
+    if (dto.sexo !== undefined) user.sexo = dto.sexo?.trim() || null;
     if (dto.objetivo !== undefined) user.objetivo = dto.objetivo;
     if (dto.primarySport !== undefined) user.primarySport = dto.primarySport.trim() || null;
     if (dto.clubName !== undefined) user.clubName = dto.clubName.trim() || null;
@@ -168,7 +169,7 @@ export class AthleteEvaluationService {
     await this.assertCanReadAthlete(actor, userId);
     const user = await this.userRepo.findOne({
       where: { id: userId },
-      select: ['id', 'name', 'lastName', 'email', 'peso', 'altura', 'objetivo', 'athleteScore', 'stpLevel', 'dateOfBirth', 'primarySport', 'clubName', 'evaluationPortalOnly'],
+      select: ['id', 'name', 'lastName', 'email', 'peso', 'altura', 'sexo', 'objetivo', 'athleteScore', 'stpLevel', 'dateOfBirth', 'primarySport', 'clubName', 'evaluationPortalOnly'],
     });
     if (!user) throw new NotFoundException(`User ${userId} not found`);
 

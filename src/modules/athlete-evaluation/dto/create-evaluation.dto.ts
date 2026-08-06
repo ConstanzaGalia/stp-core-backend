@@ -1,5 +1,4 @@
-import { IsInt, Min, Max, IsOptional, IsString, IsNumber, MaxLength } from 'class-validator';
-import { Type } from 'class-transformer';
+import { IsInt, Min, Max, IsOptional, IsString, IsNumber, MaxLength, IsIn, ValidateIf } from 'class-validator';
 
 export class CreateEvaluationDto {
   @IsInt()
@@ -24,14 +23,19 @@ export class CreateEvaluationDto {
 
 export class UpdateAthleteProfileDto {
   @IsOptional()
+  @ValidateIf((_, v) => v !== null && v !== undefined)
   @IsNumber()
-  @Type(() => Number)
-  peso?: number;
+  peso?: number | null;
 
   @IsOptional()
+  @ValidateIf((_, v) => v !== null && v !== undefined)
   @IsNumber()
-  @Type(() => Number)
-  altura?: number;
+  altura?: number | null;
+
+  @IsOptional()
+  @ValidateIf((_, v) => v != null && v !== '')
+  @IsIn(['femenino', 'masculino'])
+  sexo?: string | null;
 
   @IsOptional()
   @IsString()

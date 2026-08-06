@@ -99,6 +99,10 @@ export class STPSessionInstance {
   @Column({ type: 'text', nullable: true, default: () => 'null' })
   notes: string | null;
 
+  /** Nota privada del entrenador. Nunca se expone al atleta. */
+  @Column({ name: 'coach_observations', type: 'text', nullable: true, default: () => 'null' })
+  coachObservations: string | null;
+
   @Column({ name: 'created_by_user_id', type: 'uuid', nullable: true })
   createdByUserId: string | null;
 

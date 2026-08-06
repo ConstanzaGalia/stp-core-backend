@@ -11,6 +11,7 @@ import {
   UseGuards,
 } from '@nestjs/common';
 import { AuthGuard } from '@nestjs/passport';
+import { UserRole } from 'src/common/enums/enums';
 import { GetUser } from '../auth/get-user.decorator';
 import { User } from 'src/entities/user.entity';
 import { TrainingPlannerService } from './training-planner.service';
@@ -90,9 +91,11 @@ export class TrainingPlannerController {
   @Get('sessions')
   listSessions(
     @Query('athleteId') athleteId: string,
-    @Query('macroWeekId') macroWeekId?: string,
+    @Query('macroWeekId') macroWeekId: string | undefined,
+    @GetUser() user: User,
   ) {
-    return this.service.listSessions(athleteId, macroWeekId ?? null);
+    const includePrivate = user.role !== UserRole.ATHLETE;
+    return this.service.listSessions(athleteId, macroWeekId ?? null, includePrivate);
   }
 
   /** GET /training-planner/sessions/:id?athleteId= */
@@ -100,8 +103,10 @@ export class TrainingPlannerController {
   getSession(
     @Param('id') id: string,
     @Query('athleteId') athleteId: string,
+    @GetUser() user: User,
   ) {
-    return this.service.getSession(athleteId, id);
+    const includePrivate = user.role !== UserRole.ATHLETE;
+    return this.service.getSession(athleteId, id, includePrivate);
   }
 
   /** POST /training-planner/sessions — create or upsert */

@@ -352,22 +352,30 @@ export class TrainingPlannerService {
 
   // ── Session Instances ───────────────────────────────────────────────────────
 
-  async listSessions(athleteId: string, macroWeekId?: string | null) {
+  async listSessions(
+    athleteId: string,
+    macroWeekId?: string | null,
+    includePrivate = false,
+  ) {
     const where: Record<string, string> = { athleteId };
     if (macroWeekId) where.macroWeekId = macroWeekId;
     const entities = await this.sessionRepo.find({
       where,
       order: { scheduledDate: 'ASC', sessionOrdinal: 'ASC' },
     });
-    return entities.map((e) => this.serializeSession(e));
+    return entities.map((e) => this.serializeSession(e, { includePrivate }));
   }
 
-  async getSession(athleteId: string, sessionId: string) {
+  async getSession(
+    athleteId: string,
+    sessionId: string,
+    includePrivate = false,
+  ) {
     const entity = await this.sessionRepo.findOne({
       where: { id: sessionId, athleteId },
     });
     if (!entity) return null;
-    const serialized = this.serializeSession(entity);
+    const serialized = this.serializeSession(entity, { includePrivate });
     return this.enrichSessionWithExerciseMeta(serialized);
   }
 
@@ -396,12 +404,14 @@ export class TrainingPlannerService {
       review?: unknown;
       athleteCompletionStatus?: string;
       notes?: string | null;
+      coachObservations?: string | null;
     },
     actor?: User,
   ) {
     const existing = await this.sessionRepo.findOne({ where: { id: data.id } });
     const isNew = !existing;
     let entity = existing ?? this.sessionRepo.create({ id: data.id });
+    const isStaff = actor ? isStaffUser(actor) : false;
 
     Object.assign(entity, {
       athleteId: data.athleteId,
@@ -430,9 +440,14 @@ export class TrainingPlannerService {
       review: data.review ?? null,
       athleteCompletionStatus: data.athleteCompletionStatus ?? 'pending',
       notes: data.notes ?? null,
+      // Solo staff puede escribir/actualizar observaciones privadas.
+      // Si un atleta guarda (p.ej. feedback legacy), preservar el valor existente.
+      coachObservations: isStaff
+        ? (data.coachObservations ?? null)
+        : (existing?.coachObservations ?? null),
     });
 
-    if (actor && isStaffUser(actor)) {
+    if (actor && isStaff) {
       const displayName = formatStaffDisplayName(actor);
       if (isNew) {
         entity.createdByUserId = actor.id;
@@ -443,7 +458,7 @@ export class TrainingPlannerService {
     }
 
     const saved = await this.sessionRepo.save(entity);
-    return this.serializeSession(saved);
+    return this.serializeSession(saved, { includePrivate: isStaff });
   }
 
   async deleteSession(athleteId: string, sessionId: string) {
@@ -455,7 +470,11 @@ export class TrainingPlannerService {
     return true;
   }
 
-  private serializeSession(e: STPSessionInstance) {
+  private serializeSession(
+    e: STPSessionInstance,
+    options: { includePrivate?: boolean } = {},
+  ) {
+    const { includePrivate = false } = options;
     return {
       id: e.id,
       athleteId: e.athleteId,
@@ -480,6 +499,9 @@ export class TrainingPlannerService {
       review: e.review ?? null,
       athleteCompletionStatus: e.athleteCompletionStatus ?? 'pending',
       notes: e.notes ?? null,
+      ...(includePrivate
+        ? { coachObservations: e.coachObservations ?? null }
+        : {}),
       createdByUserId: e.createdByUserId ?? null,
       createdByName: e.createdByName ?? null,
       lastSavedByUserId: e.lastSavedByUserId ?? null,
