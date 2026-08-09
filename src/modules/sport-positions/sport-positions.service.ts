@@ -157,7 +157,7 @@ export class SportPositionsService {
         status: InvitationStatus.APPROVED,
       },
     });
-    if (!invitation) throw new NotFoundException('La jugadora no pertenece a este club');
+    if (!invitation) throw new NotFoundException('El jugador no pertenece a este club');
     invitation.positionId = positionId;
     return this.invitationRepository.save(invitation);
   }
@@ -181,7 +181,7 @@ export class SportPositionsService {
         positionId,
       },
     });
-    if (!invitation) throw new NotFoundException('La jugadora no tiene esta posición asignada');
+    if (!invitation) throw new NotFoundException('El jugador no tiene esta posición asignada');
     invitation.positionId = null;
     await this.invitationRepository.save(invitation);
   }

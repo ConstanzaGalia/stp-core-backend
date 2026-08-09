@@ -57,7 +57,7 @@ export class StrengthManualService {
     const bodyWeightKg = target.peso;
     if (!isValidBodyWeightKg(bodyWeightKg)) {
       throw new BadRequestException(
-        'La jugadora no tiene peso corporal válido en el perfil. Completá el peso biométrico antes de guardar esta evaluación.',
+        'El jugador no tiene peso corporal válido en el perfil. Completá el peso biométrico antes de guardar esta evaluación.',
       );
     }
 

@@ -194,7 +194,7 @@ export class DivisionsService {
         status: InvitationStatus.APPROVED,
       },
     });
-    if (!invitation) throw new NotFoundException('La jugadora no pertenece a este club');
+    if (!invitation) throw new NotFoundException('El jugador no pertenece a este club');
     invitation.divisionId = divisionId;
     return this.invitationRepository.save(invitation);
   }
@@ -218,7 +218,7 @@ export class DivisionsService {
         divisionId,
       },
     });
-    if (!invitation) throw new NotFoundException('La jugadora no está asignada a esta división');
+    if (!invitation) throw new NotFoundException('El jugador no está asignado a esta división');
     invitation.divisionId = null;
     await this.invitationRepository.save(invitation);
   }

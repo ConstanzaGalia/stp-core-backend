@@ -59,7 +59,7 @@ export class AthleteInvitation {
   @JoinColumn({ name: 'companyId' })
   company: Company;
 
-  /** División a la que pertenece la jugadora (solo para clubs deportivos). Nullable. */
+  /** División a la que pertenece el jugador (solo para clubs deportivos). Nullable. */
   @ManyToOne(() => Division, { nullable: true, onDelete: 'SET NULL', eager: false })
   @JoinColumn({ name: 'division_id' })
   division: Division | null;
