@@ -36,6 +36,7 @@ import { ScheduleConfig } from './entities/schedule-config.entity';
 import { ScheduleException } from './entities/schedule-exception.entity';
 import { StaffAssociationRequest } from './entities/staff-association-request.entity';
 import { StaffCompensationProfile } from './entities/staff-compensation-profile.entity';
+import { StaffCompensationPeriodRate } from './entities/staff-compensation-period-rate.entity';
 import { StaffShiftAssignment } from './entities/staff-shift-assignment.entity';
 import { StaffShiftClosure } from './entities/staff-shift-closure.entity';
 import { StaffWeekNote } from './entities/staff-week-note.entity';
@@ -88,6 +89,7 @@ export const TYPEORM_ENTITIES = [
   ScheduleException,
   StaffAssociationRequest,
   StaffCompensationProfile,
+  StaffCompensationPeriodRate,
   StaffShiftAssignment,
   StaffShiftClosure,
   StaffWeekNote,

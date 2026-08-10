@@ -81,6 +81,13 @@ export class UpdateCompensationBatchDto {
   profiles: UpsertCompensationProfileDto[];
 }
 
+export class UpdatePayrollPeriodRatesDto {
+  @IsArray()
+  @ValidateNested({ each: true })
+  @Type(() => UpsertCompensationProfileDto)
+  profiles: UpsertCompensationProfileDto[];
+}
+
 export class CopyWeekDto {
   @IsDateString()
   sourceWeekStart: string;

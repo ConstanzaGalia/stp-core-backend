@@ -15,6 +15,7 @@ import { StaffSchedulingService } from './staff-scheduling.service';
 import {
   CopyWeekDto,
   UpdateCompensationBatchDto,
+  UpdatePayrollPeriodRatesDto,
   UpsertWeekAssignmentsDto,
 } from './dto/staff-scheduling.dto';
 
@@ -126,6 +127,23 @@ export class StaffSchedulingController {
       user,
       parseInt(year, 10),
       parseInt(month, 10),
+    );
+  }
+
+  @Put('payroll/rates')
+  updatePayrollPeriodRates(
+    @Param('companyId') companyId: string,
+    @GetUser() user: User,
+    @Query('year') year: string,
+    @Query('month') month: string,
+    @Body() dto: UpdatePayrollPeriodRatesDto,
+  ) {
+    return this.staffSchedulingService.updatePayrollPeriodRates(
+      companyId,
+      user,
+      parseInt(year, 10),
+      parseInt(month, 10),
+      dto,
     );
   }
 

@@ -14,6 +14,7 @@ import {
   StaffCompensationProfile,
   StaffPayType,
 } from '../../entities/staff-compensation-profile.entity';
+import { StaffCompensationPeriodRate } from '../../entities/staff-compensation-period-rate.entity';
 import { StaffShiftAssignment } from '../../entities/staff-shift-assignment.entity';
 import { StaffShiftClosure } from '../../entities/staff-shift-closure.entity';
 import { StaffWeekNote } from '../../entities/staff-week-note.entity';
@@ -21,6 +22,7 @@ import { UserRole } from '../../common/enums/enums';
 import {
   UpsertWeekAssignmentsDto,
   UpdateCompensationBatchDto,
+  UpdatePayrollPeriodRatesDto,
 } from './dto/staff-scheduling.dto';
 import {
   addDays,
@@ -63,6 +65,8 @@ export class StaffSchedulingService {
     private readonly scheduleExceptionRepository: Repository<ScheduleException>,
     @InjectRepository(StaffCompensationProfile)
     private readonly compensationRepository: Repository<StaffCompensationProfile>,
+    @InjectRepository(StaffCompensationPeriodRate)
+    private readonly periodRateRepository: Repository<StaffCompensationPeriodRate>,
     @InjectRepository(StaffShiftAssignment)
     private readonly assignmentRepository: Repository<StaffShiftAssignment>,
     @InjectRepository(StaffShiftClosure)
@@ -614,6 +618,11 @@ export class StaffSchedulingService {
     const { staff, profiles } = await this.getCompanyWithSchedulableStaff(companyId);
     const profileByUser = new Map(profiles.map((p) => [p.userId, p]));
 
+    const periodRates = await this.periodRateRepository.find({
+      where: { companyId, year, month },
+    });
+    const periodRateByUser = new Map(periodRates.map((r) => [r.userId, r]));
+
     const monthStart = `${year}-${String(month).padStart(2, '0')}-01`;
     const monthEndDate = new Date(Date.UTC(year, month, 0));
     const monthEnd = toCalendarDateString(monthEndDate);
@@ -636,31 +645,30 @@ export class StaffSchedulingService {
       const hoursMonth = hoursByUser.get(s.id) ?? 0;
       totalHours += hoursMonth;
       const profile = profileByUser.get(s.id);
-      const payType = profile?.payType ?? StaffPayType.HOURLY;
-      const hourlyRate = profile?.hourlyRate != null ? Number(profile.hourlyRate) : 0;
-      const fixedAmount =
-        profile?.fixedMonthlyAmount != null ? Number(profile.fixedMonthlyAmount) : 0;
+      const periodRate = periodRateByUser.get(s.id);
+      const resolved = this.resolveCompensationForPeriod(profile, periodRate);
 
       let monthlyTotal = 0;
-      if (payType === StaffPayType.FIXED_MONTHLY) {
-        monthlyTotal = fixedAmount;
-      } else if (payType === StaffPayType.WEEKLY_HOURS_X4) {
-        monthlyTotal = hoursMonth * hourlyRate;
+      if (resolved.payType === StaffPayType.FIXED_MONTHLY) {
+        monthlyTotal = resolved.fixedAmount;
       } else {
-        monthlyTotal = hoursMonth * hourlyRate;
+        monthlyTotal = hoursMonth * resolved.hourlyRate;
       }
 
       return {
         userId: s.id,
         name: formatStaffDisplayNameFromParts(s.name, s.lastName),
         role: s.role,
-        payType,
+        payType: resolved.payType,
         hoursMonth,
-        hourlyRate: payType === StaffPayType.FIXED_MONTHLY ? null : hourlyRate,
-        fixedAmount: payType === StaffPayType.FIXED_MONTHLY ? fixedAmount : null,
+        hourlyRate:
+          resolved.payType === StaffPayType.FIXED_MONTHLY ? null : resolved.hourlyRate,
+        fixedAmount:
+          resolved.payType === StaffPayType.FIXED_MONTHLY ? resolved.fixedAmount : null,
         percentOfTotal: 0,
         monthlyTotal,
         displayColor: profile?.displayColor,
+        hasPeriodRate: !!periodRate,
       };
     });
 
@@ -762,6 +770,92 @@ export class StaffSchedulingService {
     }
 
     return this.getCompensationProfiles(companyId, user);
+  }
+
+  private resolveCompensationForPeriod(
+    profile: StaffCompensationProfile | undefined,
+    periodRate: StaffCompensationPeriodRate | undefined,
+  ): { payType: StaffPayType; hourlyRate: number; fixedAmount: number } {
+    if (periodRate) {
+      return {
+        payType: periodRate.payType,
+        hourlyRate: periodRate.hourlyRate != null ? Number(periodRate.hourlyRate) : 0,
+        fixedAmount:
+          periodRate.fixedMonthlyAmount != null ? Number(periodRate.fixedMonthlyAmount) : 0,
+      };
+    }
+
+    const payType = profile?.payType ?? StaffPayType.HOURLY;
+    return {
+      payType,
+      hourlyRate: profile?.hourlyRate != null ? Number(profile.hourlyRate) : 0,
+      fixedAmount:
+        profile?.fixedMonthlyAmount != null ? Number(profile.fixedMonthlyAmount) : 0,
+    };
+  }
+
+  /** Guarda tarifas solo para el mes indicado; actualiza el perfil como default para meses futuros. */
+  async updatePayrollPeriodRates(
+    companyId: string,
+    user: User,
+    year: number,
+    month: number,
+    dto: UpdatePayrollPeriodRatesDto,
+  ) {
+    await this.assertCompanyAccess(user, companyId);
+
+    if (month < 1 || month > 12) {
+      throw new BadRequestException('Mes inválido');
+    }
+
+    for (const item of dto.profiles) {
+      let periodRate = await this.periodRateRepository.findOne({
+        where: { companyId, userId: item.userId, year, month },
+      });
+      if (!periodRate) {
+        periodRate = this.periodRateRepository.create({
+          companyId,
+          userId: item.userId,
+          year,
+          month,
+        });
+      }
+
+      periodRate.payType = item.payType;
+      if (item.hourlyRate !== undefined) {
+        periodRate.hourlyRate =
+          item.hourlyRate != null ? String(item.hourlyRate) : null;
+      }
+      if (item.fixedMonthlyAmount !== undefined) {
+        periodRate.fixedMonthlyAmount =
+          item.fixedMonthlyAmount != null ? String(item.fixedMonthlyAmount) : null;
+      }
+
+      await this.periodRateRepository.save(periodRate);
+
+      // Perfil global = tarifa default para meses sin override explícito.
+      let profile = await this.compensationRepository.findOne({
+        where: { companyId, userId: item.userId },
+      });
+      if (!profile) {
+        profile = this.compensationRepository.create({
+          companyId,
+          userId: item.userId,
+        });
+      }
+      profile.payType = item.payType;
+      if (item.hourlyRate !== undefined) {
+        profile.hourlyRate =
+          item.hourlyRate != null ? String(item.hourlyRate) : null;
+      }
+      if (item.fixedMonthlyAmount !== undefined) {
+        profile.fixedMonthlyAmount =
+          item.fixedMonthlyAmount != null ? String(item.fixedMonthlyAmount) : null;
+      }
+      await this.compensationRepository.save(profile);
+    }
+
+    return this.getPayroll(companyId, user, year, month);
   }
 
   async getStaffMemberWeek(
