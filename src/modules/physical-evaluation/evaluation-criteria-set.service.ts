@@ -63,6 +63,47 @@ const HOCKEY_MAYOR_FEMALE_SPRINT_30M_THRESHOLDS: CriteriaThresholds = {
   },
 };
 
+const HOCKEY_MAYOR_FEMALE_SPRINT_10M_THRESHOLDS: CriteriaThresholds = {
+  bestTimeSeconds: {
+    greenMax: 2.0,
+    yellowMax: 2.12,
+    unit: 's',
+    direction: 'LOWER_IS_BETTER',
+    higherIsBetter: false,
+    messages: {
+      green: [
+        'Excelente rendimiento de aceleración en 10 metros.',
+        'La marca evidencia una salida y primeros metros destacados.',
+        'El tiempo alcanzado representa una fortaleza clara en aceleración corta.',
+      ],
+      yellow: [
+        'Buen rendimiento en 10 m, con margen para seguir reduciendo la marca.',
+        'La aceleración inicial es adecuada y todavía puede evolucionar.',
+        'El tiempo se encuentra en un nivel competitivo, con espacio de mejora.',
+      ],
+      red: [
+        'El desarrollo de la aceleración en 10 m será un objetivo prioritario.',
+        'Conviene orientar el próximo período a mejorar arranques y primeros metros.',
+        'La marca muestra una oportunidad concreta para desarrollar la aceleración corta.',
+      ],
+    },
+  },
+  avgVelocityMps: {
+    greenMin: 5.0,
+    yellowMin: 4.72,
+    unit: 'm/s',
+    direction: 'HIGHER_IS_BETTER',
+    higherIsBetter: true,
+  },
+  avgAccelerationMps2: {
+    greenMin: 5.0,
+    yellowMin: 4.45,
+    unit: 'm/s²',
+    direction: 'HIGHER_IS_BETTER',
+    higherIsBetter: true,
+  },
+};
+
 @Injectable()
 export class EvaluationCriteriaSetService implements OnModuleInit {
   private readonly logger = new Logger(EvaluationCriteriaSetService.name);
@@ -105,6 +146,20 @@ export class EvaluationCriteriaSetService implements OnModuleInit {
           source: 'manual',
           description: 'Referencia práctica inicial para Sprint 30 m.',
           thresholds: HOCKEY_MAYOR_FEMALE_SPRINT_30M_THRESHOLDS,
+          isActive: true,
+        },
+        {
+          code: 'hockey_mayor_female_sprint_10m_v1',
+          name: 'Hockey Mayor Damas · Sprint 10 m · v1.0',
+          sport: 'hockey',
+          ageGroup: 'mayor',
+          sex: 'female',
+          testType: 'photocells',
+          protocolCode: 'sprint_10m',
+          version: '1.0',
+          source: 'manual',
+          description: 'Referencia práctica inicial para Sprint 10 m.',
+          thresholds: HOCKEY_MAYOR_FEMALE_SPRINT_10M_THRESHOLDS,
           isActive: true,
         },
       ];

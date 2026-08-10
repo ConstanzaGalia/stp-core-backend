@@ -204,6 +204,29 @@ function hasMaterialDifference(source: number, calculated: number, tolerance = 0
   return Math.abs(source - calculated) / denominator > tolerance;
 }
 
+/** Velocidad media = distancia ÷ tiempo. */
+function calculateAverageVelocityMps(
+  distanceMeters: number | null | undefined,
+  timeSeconds: number | null | undefined,
+): number | null {
+  if (distanceMeters == null || timeSeconds == null) return null;
+  if (!(distanceMeters > 0) || !(timeSeconds > 0)) return null;
+  return round3(distanceMeters / timeSeconds);
+}
+
+/**
+ * Aceleración media con partida detenida (v0 = 0):
+ * d = ½ a t²  ⇒  a = 2d / t²
+ */
+function calculateStandingStartAccelerationMps2(
+  distanceMeters: number | null | undefined,
+  timeSeconds: number | null | undefined,
+): number | null {
+  if (distanceMeters == null || timeSeconds == null) return null;
+  if (!(distanceMeters > 0) || !(timeSeconds > 0)) return null;
+  return round3((2 * distanceMeters) / (timeSeconds * timeSeconds));
+}
+
 @Injectable()
 export class PhotocellImportService {
   constructor(private readonly protocols: EvaluationProtocolService) {}
@@ -616,10 +639,13 @@ export class PhotocellImportService {
         if (row.timeSeconds == null) return null;
         const attemptNumber = row.repetitionIndex ?? row.splitIndex ?? index + 1;
         const distance = row.splitMeters ?? protocolDistance;
-        const calculatedVelocity =
-          distance != null && distance > 0 && row.timeSeconds > 0
-            ? round3(distance / row.timeSeconds)
-            : null;
+        const timeSeconds = round3(row.timeSeconds)!;
+        const calculatedVelocity = calculateAverageVelocityMps(distance, timeSeconds);
+        // Partida detenida: a = 2d / t² (misma base cinemática que v = d/t).
+        const calculatedAcceleration = calculateStandingStartAccelerationMps2(
+          distance,
+          timeSeconds,
+        );
         const warnings: string[] = [];
         if (
           row.velocityMps != null &&
@@ -630,15 +656,29 @@ export class PhotocellImportService {
             `La velocidad informada (${row.velocityMps.toFixed(3)} m/s) no coincide con distancia ÷ tiempo (${calculatedVelocity.toFixed(3)} m/s). Se usó la velocidad recalculada.`,
           );
         }
+        if (
+          row.accelerationMps2 != null &&
+          calculatedAcceleration != null &&
+          hasMaterialDifference(row.accelerationMps2, calculatedAcceleration)
+        ) {
+          warnings.push(
+            `La aceleración informada (${row.accelerationMps2.toFixed(3)} m/s²) no coincide con 2d/t² (${calculatedAcceleration.toFixed(3)} m/s²). Se usó la aceleración recalculada (partida detenida).`,
+          );
+        }
         return {
           attemptNumber,
           distance,
-          timeSeconds: round3(row.timeSeconds)!,
+          timeSeconds,
           velocityMps: calculatedVelocity ?? row.velocityMps,
+          accelerationMps2: calculatedAcceleration ?? row.accelerationMps2,
           sourceVelocityMps: row.velocityMps,
-          // La definición de "Aceleración" depende del software. Se conserva
-          // como dato fuente, pero no se inventa a partir de velocidad/tiempo.
           sourceAccelerationMps2: row.accelerationMps2,
+          velocitySource:
+            calculatedVelocity != null ? 'calculated_distance_over_time' : 'source',
+          accelerationSource:
+            calculatedAcceleration != null
+              ? 'calculated_standing_start_2d_over_t2'
+              : 'source',
           sourceContext: {
             athleteName: row.athleteName,
             sourceDate: row.sourceDate,
@@ -665,16 +705,14 @@ export class PhotocellImportService {
           distance: attempt.distance,
           time: attempt.timeSeconds,
           velocity: attempt.velocityMps,
-          acceleration: attempt.sourceAccelerationMps2,
+          acceleration: attempt.accelerationMps2,
           power: null,
           label: `${attempt.distance ?? '?'} m`,
           extras: {
             sourceVelocityMps: attempt.sourceVelocityMps,
             sourceAccelerationMps2: attempt.sourceAccelerationMps2,
-            velocitySource:
-              attempt.distance != null && attempt.timeSeconds > 0
-                ? 'calculated_distance_over_time'
-                : 'source',
+            velocitySource: attempt.velocitySource,
+            accelerationSource: attempt.accelerationSource,
           },
         },
       ];
@@ -682,7 +720,7 @@ export class PhotocellImportService {
         totalTimeSeconds: attempt.timeSeconds,
         avgVelocityMps: attempt.velocityMps,
         maxVelocityMps: attempt.velocityMps,
-        avgAccelerationMps2: attempt.sourceAccelerationMps2,
+        avgAccelerationMps2: attempt.accelerationMps2,
       };
       const metrics: Record<string, unknown> = {
         sourceType: 'photocell',
@@ -699,15 +737,15 @@ export class PhotocellImportService {
         totalTimeSeconds: attempt.timeSeconds,
         avgVelocityMps: attempt.velocityMps,
         maxVelocityMps: attempt.velocityMps,
-        avgAccelerationMps2: attempt.sourceAccelerationMps2,
+        avgAccelerationMps2: attempt.accelerationMps2,
         sourceVelocityMps: attempt.sourceVelocityMps,
         sourceAccelerationMps2: attempt.sourceAccelerationMps2,
         sourceContext: attempt.sourceContext,
-        velocitySource:
-          attempt.distance != null && attempt.timeSeconds > 0
-            ? 'calculated_distance_over_time'
-            : 'source',
+        velocitySource: attempt.velocitySource,
+        accelerationSource: attempt.accelerationSource,
       };
+      const velocityKmh =
+        attempt.velocityMps != null ? round3(attempt.velocityMps * 3.6) : null;
       return {
         protocolCode: protocol.code,
         protocolLabel: protocol.label,
@@ -725,6 +763,7 @@ export class PhotocellImportService {
             distanceMeters: attempt.distance,
             timeSeconds: attempt.timeSeconds,
             velocityMps: attempt.velocityMps,
+            accelerationMps2: attempt.accelerationMps2,
             sourceVelocityMps: attempt.sourceVelocityMps,
             sourceAccelerationMps2: attempt.sourceAccelerationMps2,
             sourceContext: attempt.sourceContext,
@@ -734,13 +773,21 @@ export class PhotocellImportService {
         summaryAnalysis: [
           `Evaluación de fotocélulas: ${protocol.label}.`,
           `Intento ${attempt.attemptNumber}: ${attempt.timeSeconds.toFixed(3)} s.`,
-          attempt.velocityMps != null ? `Velocidad media ${attempt.velocityMps.toFixed(3)} m/s.` : null,
+          attempt.velocityMps != null
+            ? `Velocidad media ${attempt.velocityMps.toFixed(3)} m/s${
+                velocityKmh != null ? ` (${velocityKmh.toFixed(2)} km/h)` : ''
+              }.`
+            : null,
+          attempt.accelerationMps2 != null
+            ? `Aceleración media ${attempt.accelerationMps2.toFixed(3)} m/s² (partida detenida: 2d/t²).`
+            : null,
         ]
           .filter(Boolean)
           .join(' '),
         completeness: this.computeCompleteness([
           attempt.timeSeconds,
           attempt.velocityMps,
+          attempt.accelerationMps2,
           attempt.distance,
         ]),
         warnings: attempt.warnings,
@@ -795,10 +842,14 @@ export class PhotocellImportService {
       const segmentTime = round3(cumulativeTime - prevTime);
       const prevMeters = index > 0 ? unique[index - 1].splitMeters! : 0;
       const segmentMeters = (entry.splitMeters ?? 0) - prevMeters;
-      const velocity =
-        segmentMeters > 0 && segmentTime != null && segmentTime > 0
-          ? round3(segmentMeters / segmentTime)
-          : entry.sourceVelocityMps;
+      const calculatedVelocity = calculateAverageVelocityMps(segmentMeters, segmentTime);
+      const velocity = calculatedVelocity ?? entry.sourceVelocityMps;
+      // Primer tramo desde reposo (partida detenida): a = 2d / t²
+      const calculatedAcceleration =
+        index === 0
+          ? calculateStandingStartAccelerationMps2(segmentMeters, segmentTime)
+          : null;
+      const acceleration = calculatedAcceleration ?? entry.sourceAccelerationMps2;
       if (
         entry.sourceVelocityMps != null &&
         velocity != null &&
@@ -813,7 +864,7 @@ export class PhotocellImportService {
         distance: entry.splitMeters,
         time: round3(cumulativeTime),
         velocity,
-        acceleration: entry.sourceAccelerationMps2,
+        acceleration,
         power: null,
         label: `${entry.splitMeters} m`,
         extras: {
@@ -822,7 +873,14 @@ export class PhotocellImportService {
           segmentMeters,
           sourceVelocityMps: entry.sourceVelocityMps,
           sourceAccelerationMps2: entry.sourceAccelerationMps2,
-          velocitySource: 'calculated_segment_distance_over_time',
+          velocitySource:
+            calculatedVelocity != null ? 'calculated_segment_distance_over_time' : 'source',
+          accelerationSource:
+            calculatedAcceleration != null
+              ? 'calculated_standing_start_2d_over_t2'
+              : entry.sourceAccelerationMps2 != null
+                ? 'source'
+                : null,
         },
       };
     });
@@ -831,13 +889,17 @@ export class PhotocellImportService {
     const velocities = measurements.map((m) => m.velocity).filter((v): v is number => v != null);
     const accelerations = measurements.map((m) => m.acceleration).filter((v): v is number => v != null);
     const totalDistance = distance ?? unique[unique.length - 1]?.splitMeters ?? null;
+    const overallAvgVelocity = calculateAverageVelocityMps(totalDistance, totalTime);
+    const overallAvgAcceleration = calculateStandingStartAccelerationMps2(
+      totalDistance,
+      totalTime,
+    );
 
     const derivedMetrics: Record<string, number | null> = {
       totalTimeSeconds: totalTime,
-      avgVelocityMps:
-        totalTime && totalDistance ? round3(totalDistance / totalTime) : average(velocities),
+      avgVelocityMps: overallAvgVelocity ?? average(velocities),
       maxVelocityMps: velocities.length ? round3(Math.max(...velocities)) : null,
-      avgAccelerationMps2: accelerations.length ? average(accelerations) : null,
+      avgAccelerationMps2: overallAvgAcceleration ?? (accelerations.length ? average(accelerations) : null),
     };
 
     const repetitions = measurements.map((m) => ({
@@ -881,12 +943,22 @@ export class PhotocellImportService {
         `Evaluación de fotocélulas: ${protocol.label} con ${measurements.length} parciales.`,
         totalTime != null ? `Tiempo total ${Number(totalTime).toFixed(3)} s.` : null,
         derivedMetrics.avgVelocityMps != null
-          ? `Velocidad media ${Number(derivedMetrics.avgVelocityMps).toFixed(3)} m/s.`
+          ? `Velocidad media ${Number(derivedMetrics.avgVelocityMps).toFixed(3)} m/s (${(
+              Number(derivedMetrics.avgVelocityMps) * 3.6
+            ).toFixed(2)} km/h).`
+          : null,
+        derivedMetrics.avgAccelerationMps2 != null
+          ? `Aceleración media ${Number(derivedMetrics.avgAccelerationMps2).toFixed(3)} m/s² (partida detenida: 2d/t²).`
           : null,
       ]
         .filter(Boolean)
         .join(' '),
-      completeness: this.computeCompleteness([totalTime, derivedMetrics.avgVelocityMps, measurements.length]),
+      completeness: this.computeCompleteness([
+        totalTime,
+        derivedMetrics.avgVelocityMps,
+        derivedMetrics.avgAccelerationMps2,
+        measurements.length,
+      ]),
       warnings,
     };
   }

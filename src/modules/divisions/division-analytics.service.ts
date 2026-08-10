@@ -33,6 +33,14 @@ const STAFF_VIEW_ROLES: UserRole[] = [
   UserRole.SECRETARIA,
 ];
 
+export type DivisionRosterRecentEval = {
+  date: string;
+  device: string | null;
+  score: number | null;
+};
+
+export type RosterTrafficStatus = 'GREEN' | 'YELLOW' | 'RED';
+
 export type DivisionRosterAthlete = {
   userId: string;
   name: string;
@@ -44,10 +52,23 @@ export type DivisionRosterAthlete = {
   athleteScore: number | null;
   lastPhysicalEvalDate: string | null;
   lastPhysicalScore: number | null;
+  evaluationCount: number;
+  daysSinceLastEval: number | null;
+  recentEvals: DivisionRosterRecentEval[];
+  /** Semáforo de velocidad (Sprint 30 m / criterios). */
+  velocityStatus: RosterTrafficStatus | null;
+  /** Semáforo de aceleración (Sprint 10 m / criterios). */
+  accelerationStatus: RosterTrafficStatus | null;
+  /** Semáforo de fuerza (big three / fuerza relativa). */
+  strengthStatus: RosterTrafficStatus | null;
+  /** Semáforo de CMJ / plataforma. */
+  cmjStatus: RosterTrafficStatus | null;
   sessionsTotal: number;
   sessionsCompleted: number;
   adherencePct: number | null;
 };
+
+const ROSTER_RECENT_EVALS_LIMIT = 5;
 
 export type DivisionAnalyticsOverview = {
   athleteCount: number;
@@ -278,7 +299,7 @@ export class DivisionAnalyticsService {
     if (userIds.length === 0) return [];
 
     const [physicalByUser, sessionsByUser] = await Promise.all([
-      this.loadLatestPhysicalEvals(userIds),
+      this.loadPhysicalEvalSummaries(userIds),
       this.loadSessionStats(userIds),
     ]);
 
@@ -293,6 +314,9 @@ export class DivisionAnalyticsService {
           ? Math.round((sessions.completed / sessions.total) * 100)
           : null;
 
+      const recentEvals = physical?.recentEvals ?? [];
+      const last = recentEvals[0] ?? null;
+
       return {
         userId: uid,
         name: user.name ?? '',
@@ -302,8 +326,17 @@ export class DivisionAnalyticsService {
         positionName: inv.position?.name ?? null,
         stpLevel: user.stpLevel ?? null,
         athleteScore: user.athleteScore ?? null,
-        lastPhysicalEvalDate: physical?.date ?? null,
-        lastPhysicalScore: physical?.score ?? null,
+        lastPhysicalEvalDate: last?.date ?? null,
+        lastPhysicalScore: last?.score ?? null,
+        evaluationCount: physical?.evaluationCount ?? 0,
+        daysSinceLastEval: last
+          ? this.daysBetweenUtc(last.date, new Date())
+          : null,
+        recentEvals,
+        velocityStatus: physical?.velocityStatus ?? null,
+        accelerationStatus: physical?.accelerationStatus ?? null,
+        strengthStatus: physical?.strengthStatus ?? null,
+        cmjStatus: physical?.cmjStatus ?? null,
         sessionsTotal: sessions.total,
         sessionsCompleted: sessions.completed,
         adherencePct,
@@ -311,29 +344,90 @@ export class DivisionAnalyticsService {
     });
   }
 
-  private async loadLatestPhysicalEvals(
+  private daysBetweenUtc(isoDate: string, now: Date): number {
+    const start = new Date(`${isoDate}T00:00:00.000Z`);
+    const end = Date.UTC(now.getUTCFullYear(), now.getUTCMonth(), now.getUTCDate());
+    return Math.max(0, Math.floor((end - start.getTime()) / (1000 * 60 * 60 * 24)));
+  }
+
+  private async loadPhysicalEvalSummaries(
     userIds: string[],
-  ): Promise<Map<string, { date: string; score: number | null }>> {
+  ): Promise<
+    Map<
+      string,
+      {
+        evaluationCount: number;
+        recentEvals: DivisionRosterRecentEval[];
+        velocityStatus: RosterTrafficStatus | null;
+        accelerationStatus: RosterTrafficStatus | null;
+        strengthStatus: RosterTrafficStatus | null;
+        cmjStatus: RosterTrafficStatus | null;
+      }
+    >
+  > {
     const evals = await this.physicalEvalRepository.find({
       where: { user: { id: In(userIds) } },
       relations: ['tests', 'user'],
       order: { evaluationDate: 'DESC', createdAt: 'DESC' },
     });
 
-    const map = new Map<string, { date: string; score: number | null }>();
+    const map = new Map<
+      string,
+      {
+        evaluationCount: number;
+        recentEvals: DivisionRosterRecentEval[];
+        velocityStatus: RosterTrafficStatus | null;
+        accelerationStatus: RosterTrafficStatus | null;
+        strengthStatus: RosterTrafficStatus | null;
+        cmjStatus: RosterTrafficStatus | null;
+      }
+    >();
+
     for (const ev of evals) {
       const uid = ev.user?.id;
-      if (!uid || map.has(uid)) continue;
+      if (!uid) continue;
       if (isStpLegacyOnlyPhysicalEvaluation(ev)) continue;
+
       const d =
         ev.evaluationDate instanceof Date
           ? ev.evaluationDate
           : new Date(ev.evaluationDate);
-      map.set(uid, {
+      const entry: DivisionRosterRecentEval = {
         date: d.toISOString().slice(0, 10),
+        device: ev.device ?? null,
         score: ev.summaryScore ?? null,
-      });
+      };
+
+      const cur = map.get(uid) ?? {
+        evaluationCount: 0,
+        recentEvals: [],
+        velocityStatus: null,
+        accelerationStatus: null,
+        strengthStatus: null,
+        cmjStatus: null,
+      };
+      cur.evaluationCount += 1;
+      if (cur.recentEvals.length < ROSTER_RECENT_EVALS_LIMIT) {
+        cur.recentEvals.push(entry);
+      }
+
+      // Más reciente primero: solo completar si aún no hay status.
+      if (cur.velocityStatus == null) {
+        cur.velocityStatus = extractVelocityStatus(ev);
+      }
+      if (cur.accelerationStatus == null) {
+        cur.accelerationStatus = extractAccelerationStatus(ev);
+      }
+      if (cur.strengthStatus == null) {
+        cur.strengthStatus = extractStrengthStatus(ev);
+      }
+      if (cur.cmjStatus == null) {
+        cur.cmjStatus = extractCmjStatus(ev);
+      }
+
+      map.set(uid, cur);
     }
+
     return map;
   }
 
@@ -405,4 +499,134 @@ export class DivisionAnalyticsService {
 function avg(values: number[]): number | null {
   if (values.length === 0) return null;
   return Math.round((values.reduce((s, v) => s + v, 0) / values.length) * 10) / 10;
+}
+
+function asTrafficStatus(value: unknown): RosterTrafficStatus | null {
+  if (value === 'GREEN' || value === 'YELLOW' || value === 'RED') return value;
+  return null;
+}
+
+function statusFromClassificationSnapshot(
+  snapshot: Record<string, unknown> | null | undefined,
+  metricKeys: string[],
+): RosterTrafficStatus | null {
+  if (!snapshot || typeof snapshot !== 'object') return null;
+  const results = snapshot.results;
+  if (!results || typeof results !== 'object') return null;
+  const map = results as Record<string, { status?: unknown }>;
+  for (const key of metricKeys) {
+    const status = asTrafficStatus(map[key]?.status);
+    if (status) return status;
+  }
+  return null;
+}
+
+function protocolOf(ev: { protocolCode?: string | null }): string | null {
+  return ev.protocolCode ? String(ev.protocolCode) : null;
+}
+
+function extractVelocityStatus(ev: {
+  protocolCode?: string | null;
+  classificationSnapshot?: Record<string, unknown> | null;
+}): RosterTrafficStatus | null {
+  // Velocidad ← Sprint 30 m
+  if (protocolOf(ev) !== 'sprint_30m') return null;
+  return statusFromClassificationSnapshot(ev.classificationSnapshot, [
+    'avgVelocityMps',
+    'maxVelocityMps',
+    'bestTimeSeconds',
+    'totalTimeSeconds',
+  ]);
+}
+
+function extractAccelerationStatus(ev: {
+  protocolCode?: string | null;
+  classificationSnapshot?: Record<string, unknown> | null;
+}): RosterTrafficStatus | null {
+  // Aceleración ← Sprint 10 m
+  if (protocolOf(ev) !== 'sprint_10m') return null;
+  return statusFromClassificationSnapshot(ev.classificationSnapshot, [
+    'avgAccelerationMps2',
+    'bestTimeSeconds',
+    'avgVelocityMps',
+    'totalTimeSeconds',
+  ]);
+}
+
+const SQUAT_REL_HIGH = 1.35;
+const SQUAT_REL_LOW = 1.0;
+
+function isBigThreeEval(ev: {
+  device?: string | null;
+  protocolCode?: string | null;
+}): boolean {
+  const protocol = protocolOf(ev);
+  if (protocol === 'big_three_manual') return true;
+  return ev.device === 'manual' || ev.device === 'big_three_manual';
+}
+
+function extractStrengthStatus(ev: {
+  device?: string | null;
+  protocolCode?: string | null;
+  derivedMetrics?: Record<string, number | null> | null;
+}): RosterTrafficStatus | null {
+  // Fuerza ← big three (manual)
+  if (!isBigThreeEval(ev)) return null;
+
+  const derived = ev.derivedMetrics;
+  if (!derived || typeof derived !== 'object') return null;
+
+  const relative =
+    typeof derived.mean_relative_strength === 'number'
+      ? derived.mean_relative_strength
+      : typeof derived.squat_relative_strength === 'number'
+        ? derived.squat_relative_strength
+        : null;
+
+  if (relative == null || !Number.isFinite(relative)) return null;
+  if (relative >= SQUAT_REL_HIGH) return 'GREEN';
+  if (relative >= SQUAT_REL_LOW) return 'YELLOW';
+  return 'RED';
+}
+
+function extractCmjStatus(ev: {
+  device?: string | null;
+  classificationSnapshot?: Record<string, unknown> | null;
+  structuredAnalysis?: Record<string, unknown> | null;
+}): RosterTrafficStatus | null {
+  if (ev.device !== 'force_platform') return null;
+
+  const fromSnap = statusFromClassificationSnapshot(ev.classificationSnapshot, [
+    'cmj_height',
+    'force_to_body_weight_ratio',
+    'cmj_propulsive_force',
+  ]);
+  if (fromSnap) return fromSnap;
+
+  const structured = ev.structuredAnalysis;
+  if (structured && typeof structured === 'object') {
+    const level = structured.level;
+    if (level === 'high') return 'GREEN';
+    if (level === 'medium') return 'YELLOW';
+    if (level === 'low') return 'RED';
+
+    const categoryScores = structured.categoryScores;
+    if (categoryScores && typeof categoryScores === 'object') {
+      const global = (categoryScores as Record<string, unknown>).global;
+      const potencia = (categoryScores as Record<string, unknown>).potencia;
+      const score =
+        typeof global === 'number'
+          ? global
+          : typeof potencia === 'number'
+            ? potencia
+            : null;
+      if (score != null && Number.isFinite(score)) {
+        if (score >= 3.6) return 'GREEN';
+        if (score >= 2.2) return 'YELLOW';
+        return 'RED';
+      }
+    }
+  }
+
+  return null;
 }
