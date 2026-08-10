@@ -1,6 +1,7 @@
 /**
  * Catálogo de clubes ATAH (código ↔ etiqueta canónica).
  * El match contra user.club_name es case-insensitive + trim.
+ * Códigos dinámicos (desde club_name de jugadores) se generan con slugifyClubCode.
  */
 
 export type AtahClubCode =
@@ -10,6 +11,15 @@ export type AtahClubCode =
   | 'monteros_voley';
 
 export type ClubAnalyticsSexScope = 'damas' | 'caballeros' | 'ambos';
+
+export type AtahClubOptionSource = 'catalog' | 'athletes';
+
+export type AtahClubOption = {
+  code: string;
+  label: string;
+  source: AtahClubOptionSource;
+  athleteCount?: number;
+};
 
 export const ATAH_CLUBS: ReadonlyArray<{ code: AtahClubCode; label: string }> = [
   { code: 'club_atletico_tucuman', label: 'Club Atlético Tucumán' },
@@ -47,12 +57,34 @@ export function normalizeClubKey(value: string): string {
     .replace(/\s+/g, ' ');
 }
 
-export function isAtahClubCode(value: string): value is AtahClubCode {
+/** "Huirapuca" → "huirapuca"; "Los Tarcos Rugby Club" → "los_tarcos_rugby_club" */
+export function slugifyClubCode(label: string): string {
+  const slug = normalizeClubKey(label)
+    .replace(/[^a-z0-9]+/g, '_')
+    .replace(/^_+|_+$/g, '')
+    .slice(0, 64);
+  return slug || 'club';
+}
+
+export function isCatalogAtahClubCode(value: string): value is AtahClubCode {
   return LABEL_BY_CODE.has(value as AtahClubCode);
 }
 
-export function getAtahClubLabel(code: AtahClubCode | string): string | null {
-  return LABEL_BY_CODE.get(code as AtahClubCode) ?? null;
+/** @deprecated Prefer isCatalogAtahClubCode + opciones mergeadas */
+export function isAtahClubCode(value: string): value is AtahClubCode {
+  return isCatalogAtahClubCode(value);
+}
+
+export function getAtahClubLabel(
+  code: AtahClubCode | string,
+  options?: ReadonlyArray<{ code: string; label: string }>,
+): string | null {
+  const fromCatalog = LABEL_BY_CODE.get(code as AtahClubCode);
+  if (fromCatalog) return fromCatalog;
+  if (options?.length) {
+    return options.find((o) => o.code === code)?.label ?? null;
+  }
+  return null;
 }
 
 export function resolveAtahClubCodeFromName(
@@ -62,16 +94,80 @@ export function resolveAtahClubCodeFromName(
   return CODE_BY_NORMALIZED_KEY.get(normalizeClubKey(clubName)) ?? null;
 }
 
-/** Match jugador ↔ club del entrenador analytics (label canónico o alias). */
+/**
+ * Merge catálogo fijo + nombres distintos de jugadores.
+ * Si un club_name ya mapea al catálogo (label/alias), no se duplica.
+ */
+export function buildAtahClubOptions(
+  athleteClubNames: ReadonlyArray<{ name: string; count?: number }>,
+): AtahClubOption[] {
+  const byCode = new Map<string, AtahClubOption>();
+
+  for (const club of ATAH_CLUBS) {
+    byCode.set(club.code, {
+      code: club.code,
+      label: club.label,
+      source: 'catalog',
+    });
+  }
+
+  for (const row of athleteClubNames) {
+    const name = row.name?.trim();
+    if (!name) continue;
+    const catalogCode = resolveAtahClubCodeFromName(name);
+    if (catalogCode) {
+      const existing = byCode.get(catalogCode);
+      if (existing && row.count != null) {
+        existing.athleteCount = (existing.athleteCount ?? 0) + row.count;
+      }
+      continue;
+    }
+    const code = slugifyClubCode(name);
+    const existing = byCode.get(code);
+    if (existing) {
+      if (row.count != null) {
+        existing.athleteCount = (existing.athleteCount ?? 0) + row.count;
+      }
+      continue;
+    }
+    byCode.set(code, {
+      code,
+      label: name,
+      source: 'athletes',
+      athleteCount: row.count,
+    });
+  }
+
+  return [...byCode.values()].sort((a, b) =>
+    a.label.localeCompare(b.label, 'es', { sensitivity: 'base' }),
+  );
+}
+
+export function isValidAtahClubOptionCode(
+  code: string,
+  options: ReadonlyArray<{ code: string }>,
+): boolean {
+  if (!code?.trim()) return false;
+  if (isCatalogAtahClubCode(code)) return true;
+  return options.some((o) => o.code === code);
+}
+
+/** Match jugador ↔ club del entrenador analytics (catálogo, alias o slug dinámico). */
 export function athleteMatchesClubCode(
   athleteClubName: string | null | undefined,
   clubCode: AtahClubCode | string,
   centerName?: string | null,
 ): boolean {
-  if (!isAtahClubCode(clubCode)) return false;
+  if (!clubCode?.trim()) return false;
   const resolvedName = athleteClubName?.trim() || centerName?.trim() || '';
   if (!resolvedName) return false;
-  return resolveAtahClubCodeFromName(resolvedName) === clubCode;
+
+  const catalogResolved = resolveAtahClubCodeFromName(resolvedName);
+  if (catalogResolved && catalogResolved === clubCode) return true;
+  if (isCatalogAtahClubCode(clubCode)) {
+    return catalogResolved === clubCode;
+  }
+  return slugifyClubCode(resolvedName) === clubCode;
 }
 
 export function sexScopeMatchesAthlete(

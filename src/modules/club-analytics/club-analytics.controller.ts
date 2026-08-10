@@ -1,6 +1,7 @@
 import {
   Body,
   Controller,
+  Delete,
   Get,
   Param,
   Patch,
@@ -13,6 +14,7 @@ import { User } from '../../entities/user.entity';
 import { ParseSanitizedUUIDPipe } from 'src/common/pipes/parse-sanitized-uuid.pipe';
 import { ClubAnalyticsService } from './club-analytics.service';
 import {
+  CreateClubAnalyticsTrainerBatchDto,
   CreateClubAnalyticsTrainerDto,
   UpdateClubAnalyticsTrainerDto,
 } from './dto/club-analytics.dto';
@@ -22,12 +24,29 @@ import {
 export class ClubAnalyticsController {
   constructor(private readonly clubAnalyticsService: ClubAnalyticsService) {}
 
+  @Get('company/:companyId/club-analytics-club-options')
+  clubOptions(
+    @GetUser() actor: User,
+    @Param('companyId', ParseSanitizedUUIDPipe) companyId: string,
+  ) {
+    return this.clubAnalyticsService.listClubOptions(actor, companyId);
+  }
+
   @Get('company/:companyId/club-analytics-trainers')
   list(
     @GetUser() actor: User,
     @Param('companyId', ParseSanitizedUUIDPipe) companyId: string,
   ) {
     return this.clubAnalyticsService.listAccesses(actor, companyId);
+  }
+
+  @Post('company/:companyId/club-analytics-trainers/batch')
+  createBatch(
+    @GetUser() actor: User,
+    @Param('companyId', ParseSanitizedUUIDPipe) companyId: string,
+    @Body() dto: CreateClubAnalyticsTrainerBatchDto,
+  ) {
+    return this.clubAnalyticsService.createAccessBatch(actor, companyId, dto.trainers);
   }
 
   @Post('company/:companyId/club-analytics-trainers')
@@ -47,6 +66,15 @@ export class ClubAnalyticsController {
     @Body() dto: UpdateClubAnalyticsTrainerDto,
   ) {
     return this.clubAnalyticsService.updateAccess(actor, companyId, id, dto);
+  }
+
+  @Delete('company/:companyId/club-analytics-trainers/:id')
+  remove(
+    @GetUser() actor: User,
+    @Param('companyId', ParseSanitizedUUIDPipe) companyId: string,
+    @Param('id', ParseSanitizedUUIDPipe) id: string,
+  ) {
+    return this.clubAnalyticsService.deleteAccess(actor, companyId, id);
   }
 
   @Post('company/:companyId/club-analytics-trainers/:id/resend-welcome-email')

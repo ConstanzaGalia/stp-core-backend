@@ -2,6 +2,7 @@ import {
   BadRequestException,
   ConflictException,
   ForbiddenException,
+  HttpException,
   Injectable,
   Logger,
   NotFoundException,
@@ -15,17 +16,19 @@ import { ClubAnalyticsSexScope, UserRole } from '../../common/enums/enums';
 import { isAtahCenter } from '../../common/constants/atah-center';
 import {
   athleteMatchesClubCode,
+  buildAtahClubOptions,
   getAtahClubLabel,
-  isAtahClubCode,
+  isValidAtahClubOptionCode,
   sexScopeLabel,
   sexScopeMatchesAthlete,
-  type AtahClubCode,
+  type AtahClubOption,
 } from '../../common/constants/atah-clubs';
 import { getStpOperatingCompanyId } from '../../common/constants/stp-operating-company';
 import { EncryptService } from '../../services/bcrypt.service';
 import { MailingService } from '../mailer/mailing.service';
 import { clubAnalyticsAccessEmail } from '../../utils/emailTemplates';
 import { DivisionAnalyticsService } from '../divisions/division-analytics.service';
+import { InvitationStatus } from '../../entities/athlete-invitation.entity';
 import {
   CreateClubAnalyticsTrainerDto,
   UpdateClubAnalyticsTrainerDto,
@@ -78,13 +81,47 @@ export class ClubAnalyticsService {
     return company;
   }
 
-  private serializeAccess(row: ClubAnalyticsTrainer) {
+  private async loadClubOptions(companyId: string): Promise<AtahClubOption[]> {
+    const rows: Array<{ name: string; count: string }> = await this.userRepository
+      .createQueryBuilder('u')
+      .innerJoin('athlete_invitations', 'ai', 'ai."userId" = u.id')
+      .select('TRIM(u.club_name)', 'name')
+      .addSelect('COUNT(*)', 'count')
+      .where('ai."companyId" = :cid', { cid: companyId })
+      .andWhere('ai.status = :status', { status: InvitationStatus.APPROVED })
+      .andWhere('u.role = :role', { role: UserRole.ATHLETE })
+      .andWhere('u.club_name IS NOT NULL')
+      .andWhere("TRIM(u.club_name) <> ''")
+      .groupBy('TRIM(u.club_name)')
+      .getRawMany();
+
+    return buildAtahClubOptions(
+      rows.map((r) => ({
+        name: r.name,
+        count: Number(r.count) || undefined,
+      })),
+    );
+  }
+
+  private async assertValidClubCode(companyId: string, clubCode: string) {
+    const options = await this.loadClubOptions(companyId);
+    if (!isValidAtahClubOptionCode(clubCode, options)) {
+      throw new BadRequestException('Club inválido');
+    }
+    return options;
+  }
+
+  private resolveClubLabel(clubCode: string, options?: AtahClubOption[]): string | null {
+    return getAtahClubLabel(clubCode, options) ?? null;
+  }
+
+  private serializeAccess(row: ClubAnalyticsTrainer, options?: AtahClubOption[]) {
     return {
       id: row.id,
       userId: row.userId,
       companyId: row.companyId,
       clubCode: row.clubCode,
-      clubLabel: getAtahClubLabel(row.clubCode),
+      clubLabel: this.resolveClubLabel(row.clubCode, options),
       sexScope: row.sexScope,
       sexScopeLabel: sexScopeLabel(row.sexScope),
       active: row.active,
@@ -101,17 +138,28 @@ export class ClubAnalyticsService {
     };
   }
 
+  async listClubOptions(actor: User, companyId: string) {
+    this.assertDirectorAtah(actor, companyId);
+    if (actor.role !== UserRole.STP_ADMIN) {
+      await this.assertCompanyMembership(actor.id, companyId);
+    }
+    return this.loadClubOptions(companyId);
+  }
+
   async listAccesses(actor: User, companyId: string) {
     this.assertDirectorAtah(actor, companyId);
     if (actor.role !== UserRole.STP_ADMIN) {
       await this.assertCompanyMembership(actor.id, companyId);
     }
-    const rows = await this.accessRepository.find({
-      where: { companyId },
-      relations: ['user'],
-      order: { createdAt: 'DESC' },
-    });
-    return rows.map((r) => this.serializeAccess(r));
+    const [rows, options] = await Promise.all([
+      this.accessRepository.find({
+        where: { companyId },
+        relations: ['user'],
+        order: { createdAt: 'DESC' },
+      }),
+      this.loadClubOptions(companyId),
+    ]);
+    return rows.map((r) => this.serializeAccess(r, options));
   }
 
   async createAccess(actor: User, companyId: string, dto: CreateClubAnalyticsTrainerDto) {
@@ -119,9 +167,7 @@ export class ClubAnalyticsService {
     if (actor.role !== UserRole.STP_ADMIN) {
       await this.assertCompanyMembership(actor.id, companyId);
     }
-    if (!isAtahClubCode(dto.clubCode)) {
-      throw new BadRequestException('Club inválido');
-    }
+    const options = await this.assertValidClubCode(companyId, dto.clubCode);
 
     const company = await this.getCompanyOrThrow(companyId);
     const email = dto.email.trim().toLowerCase();
@@ -186,15 +232,71 @@ export class ClubAnalyticsService {
       user,
       company,
       clubCode: dto.clubCode,
+      clubLabel: this.resolveClubLabel(dto.clubCode, options) ?? dto.clubCode,
       sexScope: dto.sexScope,
       password: tempPassword,
     });
 
     return {
-      access: this.serializeAccess(withUser!),
+      access: this.serializeAccess(withUser!, options),
       temporaryPassword: tempPassword,
       emailSent,
       createdUser,
+    };
+  }
+
+  async createAccessBatch(actor: User, companyId: string, trainers: CreateClubAnalyticsTrainerDto[]) {
+    this.assertDirectorAtah(actor, companyId);
+    if (actor.role !== UserRole.STP_ADMIN) {
+      await this.assertCompanyMembership(actor.id, companyId);
+    }
+
+    const results: Array<{
+      email: string;
+      success: boolean;
+      access?: ReturnType<ClubAnalyticsService['serializeAccess']>;
+      temporaryPassword?: string;
+      emailSent?: boolean;
+      error?: string;
+    }> = [];
+
+    for (const dto of trainers) {
+      const email = dto.email?.trim().toLowerCase() || '';
+      try {
+        const created = await this.createAccess(actor, companyId, dto);
+        results.push({
+          email: created.access.user?.email ?? email,
+          success: true,
+          access: created.access,
+          temporaryPassword: created.emailSent ? undefined : created.temporaryPassword,
+          emailSent: created.emailSent,
+        });
+      } catch (error) {
+        let message = 'No se pudo crear el acceso';
+        if (error instanceof HttpException) {
+          const res = error.getResponse();
+          if (typeof res === 'string') message = res;
+          else if (res && typeof res === 'object' && 'message' in res) {
+            const m = (res as { message?: string | string[] }).message;
+            message = Array.isArray(m) ? m.join(', ') : String(m ?? error.message);
+          } else {
+            message = error.message;
+          }
+        } else if (error instanceof Error) {
+          message = error.message;
+        }
+        results.push({ email, success: false, error: message });
+      }
+    }
+
+    const created = results.filter((r) => r.success).length;
+    return {
+      results,
+      summary: {
+        total: results.length,
+        created,
+        failed: results.length - created,
+      },
     };
   }
 
@@ -214,8 +316,9 @@ export class ClubAnalyticsService {
     });
     if (!row) throw new NotFoundException('Acceso no encontrado');
 
+    let options = await this.loadClubOptions(companyId);
     if (dto.clubCode != null) {
-      if (!isAtahClubCode(dto.clubCode)) throw new BadRequestException('Club inválido');
+      options = await this.assertValidClubCode(companyId, dto.clubCode);
       row.clubCode = dto.clubCode;
     }
     if (dto.sexScope != null) row.sexScope = dto.sexScope;
@@ -227,7 +330,34 @@ export class ClubAnalyticsService {
       }
     }
     await this.accessRepository.save(row);
-    return this.serializeAccess(row);
+    return this.serializeAccess(row, options);
+  }
+
+  async deleteAccess(actor: User, companyId: string, accessId: string) {
+    this.assertDirectorAtah(actor, companyId);
+    if (actor.role !== UserRole.STP_ADMIN) {
+      await this.assertCompanyMembership(actor.id, companyId);
+    }
+    const row = await this.accessRepository.findOne({
+      where: { id: accessId, companyId },
+      relations: ['user'],
+    });
+    if (!row) throw new NotFoundException('Acceso no encontrado');
+
+    const user = row.user;
+    await this.accessRepository.remove(row);
+
+    if (user?.role === UserRole.TRAINER_ONLY_ANALYTICS) {
+      const otherAccesses = await this.accessRepository.count({
+        where: { userId: user.id },
+      });
+      if (otherAccesses === 0) {
+        user.isActive = false;
+        await this.userRepository.save(user);
+      }
+    }
+
+    return { deleted: true, accessId };
   }
 
   async resendWelcomeEmail(actor: User, companyId: string, accessId: string) {
@@ -243,6 +373,7 @@ export class ClubAnalyticsService {
     if (!row.active) throw new BadRequestException('El acceso está inactivo');
 
     const company = await this.getCompanyOrThrow(companyId);
+    const options = await this.loadClubOptions(companyId);
     const tempPassword = DEFAULT_TEMP_PASSWORD;
     row.user.password = await this.encryptService.encryptedData(tempPassword);
     await this.userRepository.save(row.user);
@@ -250,7 +381,8 @@ export class ClubAnalyticsService {
     const emailSent = await this.sendWelcomeEmail({
       user: row.user,
       company,
-      clubCode: row.clubCode as AtahClubCode,
+      clubCode: row.clubCode,
+      clubLabel: this.resolveClubLabel(row.clubCode, options) ?? row.clubCode,
       sexScope: row.sexScope,
       password: tempPassword,
     });
@@ -264,7 +396,8 @@ export class ClubAnalyticsService {
   private async sendWelcomeEmail(input: {
     user: User;
     company: Company;
-    clubCode: AtahClubCode | string;
+    clubCode: string;
+    clubLabel: string;
     sexScope: ClubAnalyticsSexScope;
     password: string;
   }): Promise<boolean> {
@@ -272,7 +405,6 @@ export class ClubAnalyticsService {
       const frontendUrl = (process.env.FRONTEND_URL || 'http://localhost:3000').replace(/\/$/, '');
       const loginUrl = `${frontendUrl}/analytics-evaluaciones/acceder`;
       const from = process.env.RESEND_FROM_EMAIL || 'noreply@stp.com';
-      const clubLabel = getAtahClubLabel(input.clubCode) ?? input.clubCode;
       const centerLogoUrl =
         process.env.EMAIL_CENTER_LOGO_URL?.trim() ||
         (input.company.image?.startsWith('http') ? input.company.image : null);
@@ -282,7 +414,7 @@ export class ClubAnalyticsService {
         name: input.user.name,
         centerName: input.company.name,
         centerLogoUrl,
-        clubLabel,
+        clubLabel: input.clubLabel,
         sexScopeLabel: sexScopeLabel(input.sexScope),
         loginUrl,
         password: input.password,
@@ -315,6 +447,7 @@ export class ClubAnalyticsService {
     if (!access?.company) {
       throw new ForbiddenException('No tenés un acceso analytics activo');
     }
+    const options = await this.loadClubOptions(access.companyId);
     return {
       user: {
         id: actor.id,
@@ -323,7 +456,7 @@ export class ClubAnalyticsService {
         email: actor.email,
         role: actor.role,
       },
-      access: this.serializeAccess(access),
+      access: this.serializeAccess(access, options),
       branding: {
         companyId: access.company.id,
         companyName: access.company.name,
@@ -351,6 +484,7 @@ export class ClubAnalyticsService {
 
   async getPortalRoster(actor: User) {
     const { access, company } = await this.resolvePortalAccess(actor);
+    const options = await this.loadClubOptions(company.id);
     const athletes = await this.divisionAnalytics.buildCompanyRoster(
       company.id,
       (_inv, user) =>
@@ -360,7 +494,7 @@ export class ClubAnalyticsService {
     const overview = this.divisionAnalytics.summarizeRoster(athletes);
     return {
       clubCode: access.clubCode,
-      clubLabel: getAtahClubLabel(access.clubCode),
+      clubLabel: this.resolveClubLabel(access.clubCode, options),
       sexScope: access.sexScope,
       sexScopeLabel: sexScopeLabel(access.sexScope),
       companyName: company.name,

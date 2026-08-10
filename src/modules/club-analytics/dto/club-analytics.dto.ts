@@ -1,8 +1,17 @@
-import { IsBoolean, IsEmail, IsEnum, IsIn, IsOptional, IsString, MinLength } from 'class-validator';
+import {
+  ArrayMaxSize,
+  ArrayMinSize,
+  IsArray,
+  IsBoolean,
+  IsEmail,
+  IsEnum,
+  IsOptional,
+  IsString,
+  MinLength,
+  ValidateNested,
+} from 'class-validator';
+import { Type } from 'class-transformer';
 import { ClubAnalyticsSexScope } from 'src/common/enums/enums';
-import { ATAH_CLUBS, type AtahClubCode } from 'src/common/constants/atah-clubs';
-
-const CLUB_CODES = ATAH_CLUBS.map((c) => c.code);
 
 export class CreateClubAnalyticsTrainerDto {
   @IsString()
@@ -16,8 +25,9 @@ export class CreateClubAnalyticsTrainerDto {
   @IsEmail()
   email: string;
 
-  @IsIn(CLUB_CODES)
-  clubCode: AtahClubCode;
+  @IsString()
+  @MinLength(1)
+  clubCode: string;
 
   @IsEnum(ClubAnalyticsSexScope)
   sexScope: ClubAnalyticsSexScope;
@@ -30,8 +40,9 @@ export class CreateClubAnalyticsTrainerDto {
 
 export class UpdateClubAnalyticsTrainerDto {
   @IsOptional()
-  @IsIn(CLUB_CODES)
-  clubCode?: AtahClubCode;
+  @IsString()
+  @MinLength(1)
+  clubCode?: string;
 
   @IsOptional()
   @IsEnum(ClubAnalyticsSexScope)
@@ -40,4 +51,13 @@ export class UpdateClubAnalyticsTrainerDto {
   @IsOptional()
   @IsBoolean()
   active?: boolean;
+}
+
+export class CreateClubAnalyticsTrainerBatchDto {
+  @IsArray()
+  @ArrayMinSize(1)
+  @ArrayMaxSize(50)
+  @ValidateNested({ each: true })
+  @Type(() => CreateClubAnalyticsTrainerDto)
+  trainers: CreateClubAnalyticsTrainerDto[];
 }
