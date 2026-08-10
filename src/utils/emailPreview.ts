@@ -1,6 +1,7 @@
 import { buildTestEmailHtml } from './emailBrand';
 import {
   approvalStudentEmail,
+  clubAnalyticsAccessEmail,
   inviteStudentEmail,
   notifyTeachersAvailableClassesEmail,
   registerEmail,
@@ -19,6 +20,7 @@ export type EmailPreviewType =
   | 'staff-request'
   | 'staff-approved'
   | 'staff-rejected'
+  | 'club-analytics-access'
   | 'test';
 
 const PREVIEW_TYPES: EmailPreviewType[] = [
@@ -30,6 +32,7 @@ const PREVIEW_TYPES: EmailPreviewType[] = [
   'staff-request',
   'staff-approved',
   'staff-rejected',
+  'club-analytics-access',
   'test',
 ];
 
@@ -105,6 +108,17 @@ export function buildEmailPreviewHtml(type: EmailPreviewType): string {
         from,
         'Por el momento no tenemos cupo en el staff.',
       ).html;
+    case 'club-analytics-access':
+      return clubAnalyticsAccessEmail({
+        email: 'entrenador@example.com',
+        name: 'Juan',
+        centerName: 'ATAH',
+        clubLabel: 'Club San Martín',
+        sexScopeLabel: 'Damas',
+        loginUrl: 'https://entrenamientostp.com/analytics-evaluaciones/acceder',
+        password: 'EntrenamientoSTP1@',
+        from,
+      }).html;
     case 'test':
       return buildTestEmailHtml();
     default:

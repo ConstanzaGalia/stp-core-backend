@@ -42,7 +42,7 @@ export class MailingController {
 
     if (!isEmailPreviewType(type)) {
       throw new NotFoundException(
-        `Unknown preview type: ${type}. Valid types: register, reset, invite, approval, notify, test`,
+        `Unknown preview type: ${type}. Valid types: register, reset, invite, approval, notify, staff-request, staff-approved, staff-rejected, club-analytics-access, test`,
       );
     }
 

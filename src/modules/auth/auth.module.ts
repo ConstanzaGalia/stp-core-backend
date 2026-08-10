@@ -5,6 +5,7 @@ import { TypeOrmModule } from '@nestjs/typeorm';
 import { AuthController } from './auth.controller';
 import { AuthService } from './auth.service';
 import { User } from '../../entities/user.entity';
+import { ClubAnalyticsTrainer } from '../../entities/club-analytics-trainer.entity';
 import { EncryptService } from 'src/services/bcrypt.service';
 import { PassportModule } from '@nestjs/passport';
 import { JwtModule } from '@nestjs/jwt';
@@ -29,11 +30,11 @@ import { MailingService } from '../mailer/mailing.service';
       }),
       inject: [ConfigService],
     }),
-    TypeOrmModule.forFeature([User]),
+    TypeOrmModule.forFeature([User, ClubAnalyticsTrainer]),
     MailingModule,
   ],
   controllers: [AuthController],
   providers: [AuthService, EncryptService, JwtStrategy, ResendService, GoogleStrategy, MailingService],
-  exports: [JwtStrategy, PassportModule]
+  exports: [JwtStrategy, PassportModule, AuthService],
 })
 export class AuthModule {}

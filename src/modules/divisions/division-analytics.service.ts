@@ -169,6 +169,43 @@ export class DivisionAnalyticsService {
     return { division, athletes };
   }
 
+  /**
+   * Roster de todos los jugadores aprobados del centro, con predicado opcional
+   * (usado por el portal analytics de club).
+   */
+  async buildCompanyRoster(
+    companyId: string,
+    predicate?: (inv: AthleteInvitation, user: User) => boolean,
+  ): Promise<DivisionRosterAthlete[]> {
+    const qb = this.invitationRepository
+      .createQueryBuilder('inv')
+      .innerJoinAndSelect('inv.user', 'user')
+      .leftJoinAndSelect('inv.position', 'position')
+      .where('inv.companyId = :cid', { cid: companyId })
+      .andWhere('inv.status = :status', { status: InvitationStatus.APPROVED });
+
+    const invitations = await qb
+      .orderBy('user.lastName', 'ASC')
+      .addOrderBy('user.name', 'ASC')
+      .getMany();
+
+    const rosterInvitations = invitations.filter((inv) => {
+      if (!inv.user || inv.user.evaluationPortalOnly) return false;
+      if (predicate && !predicate(inv, inv.user)) return false;
+      return true;
+    });
+
+    return this.mapInvitationsToRoster(rosterInvitations);
+  }
+
+  async loadMetricRowsForUsers(userIds: string[]): Promise<CoachDashboardMetricRow[]> {
+    return this.loadCoachDashboardMetricRows(userIds);
+  }
+
+  summarizeRoster(athletes: DivisionRosterAthlete[]): DivisionAnalyticsOverview {
+    return this.summarizeAthletes(athletes);
+  }
+
   async getAnalytics(
     actor: User,
     divisionId: string,
@@ -295,6 +332,12 @@ export class DivisionAnalyticsService {
 
     const invitations = await qb.orderBy('user.lastName', 'ASC').addOrderBy('user.name', 'ASC').getMany();
     const rosterInvitations = invitations.filter((inv) => !inv.user?.evaluationPortalOnly);
+    return this.mapInvitationsToRoster(rosterInvitations);
+  }
+
+  private async mapInvitationsToRoster(
+    rosterInvitations: AthleteInvitation[],
+  ): Promise<DivisionRosterAthlete[]> {
     const userIds = rosterInvitations.map((inv) => inv.user!.id);
     if (userIds.length === 0) return [];
 

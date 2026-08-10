@@ -9,4 +9,14 @@ export class LoginResponseDto {
   role: UserRole;
   /** Solo lectura: participante "solo evaluaciones" (portal). */
   evaluationPortalOnly?: boolean;
+  /** Perfil de acceso al portal analytics de club (TRAINER_ONLY_ANALYTICS). */
+  clubAnalytics?: {
+    accessId: string;
+    companyId: string;
+    companyName: string | null;
+    clubCode: string;
+    clubLabel: string | null;
+    sexScope: string;
+    sexScopeLabel: string;
+  };
 } 

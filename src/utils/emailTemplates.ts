@@ -1,5 +1,6 @@
 import {
   escapeHtml,
+  renderCenterBrandedEmailLayout,
   renderStpEmailLayout,
   stpButton,
   stpHeading,
@@ -293,6 +294,83 @@ export const staffAssociationRejectedEmail = (
         ${stpParagraph(`Tu solicitud para unirte a <strong>${escapeHtml(companyName)}</strong> no fue aprobada en este momento.`)}
         ${responseBlock}
         ${stpParagraph('Podés contactar al director del centro si tenés dudas.', { muted: true, marginBottom: '0' })}
+      `,
+    }),
+  };
+};
+
+export const clubAnalyticsAccessEmail = (input: {
+  email: string;
+  name: string;
+  centerName: string;
+  centerLogoUrl?: string | null;
+  clubLabel: string;
+  sexScopeLabel: string;
+  loginUrl: string;
+  password?: string | null;
+  from: string;
+  showPoweredByStp?: boolean;
+}) => {
+  if (!input.email?.trim()) {
+    throw new Error('Email is required for club analytics access email');
+  }
+
+  const safeEmail = escapeHtml(input.email.trim());
+  const passwordBlock = input.password
+    ? `
+      ${stpInfoBox(`
+        <p style="margin: 0 0 10px; color: ${STP_EMAIL_COLORS.secondary}; font-size: 15px; font-weight: 700;">Tus credenciales</p>
+        <p style="margin: 0 0 8px; color: ${STP_EMAIL_COLORS.text}; font-size: 14px; text-align: left;">
+          <strong>Email:</strong> ${safeEmail}
+        </p>
+        <p style="margin: 0; color: ${STP_EMAIL_COLORS.text}; font-size: 14px; text-align: left;">
+          <strong>Contraseña temporal:</strong> ${escapeHtml(input.password)}
+        </p>
+      `)}
+    `
+    : stpParagraph(
+        `Ingresá con el email <strong>${safeEmail}</strong> y la contraseña que te asignó el director.`,
+        { align: 'left' },
+      );
+
+  return {
+    to: input.email.trim(),
+    subject: `Acceso al portal de analytics — ${input.centerName}`,
+    from: input.from,
+    html: renderCenterBrandedEmailLayout({
+      title: 'Acceso al portal de analytics',
+      preheader: `Acceso a analytics de ${input.clubLabel}`,
+      centerName: input.centerName,
+      centerLogoUrl: input.centerLogoUrl,
+      showPoweredByStp: input.showPoweredByStp !== false,
+      bodyHtml: `
+        ${stpHeading(`¡Hola ${input.name}!`)}
+        ${stpParagraph(
+          `Te otorgaron acceso al <strong>portal de analytics</strong> de <strong>${escapeHtml(input.centerName)}</strong>.`,
+        )}
+        ${stpInfoBox(`
+          <p style="margin: 0 0 8px; color: ${STP_EMAIL_COLORS.secondary}; font-size: 15px; font-weight: 700;">Tu alcance</p>
+          <p style="margin: 0 0 6px; color: ${STP_EMAIL_COLORS.text}; font-size: 14px; text-align: left;">
+            <strong>Club:</strong> ${escapeHtml(input.clubLabel)}
+          </p>
+          <p style="margin: 0; color: ${STP_EMAIL_COLORS.text}; font-size: 14px; text-align: left;">
+            <strong>Categoría:</strong> ${escapeHtml(input.sexScopeLabel)}
+          </p>
+        `)}
+        ${stpInfoBox(`
+          <p style="margin: 0 0 10px; color: ${STP_EMAIL_COLORS.secondary}; font-size: 15px; font-weight: 700;">Cómo ingresar</p>
+          <ol style="margin: 0; padding-left: 20px; color: ${STP_EMAIL_COLORS.text}; font-size: 14px; line-height: 1.7; text-align: left;">
+            <li>Abrí el portal: ${stpLink(input.loginUrl)}</li>
+            <li>Ingresá con tu email y la contraseña indicada abajo</li>
+            <li>Vas a ver el plantel y las estadísticas de tu club</li>
+          </ol>
+        `)}
+        ${passwordBlock}
+        ${stpButton(input.loginUrl, 'Ingresar al portal')}
+        ${stpParagraph(
+          'La contraseña fue asignada por el director del centro. Si no la reconocés, pedile que te reenvíe el acceso.',
+          { muted: true, marginBottom: '0' },
+        )}
       `,
     }),
   };

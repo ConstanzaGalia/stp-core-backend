@@ -4,7 +4,15 @@ export enum UserRole {
   TRAINER = 'TRAINER',
   SUB_TRAINER = 'SUB_TRAINER',
   SECRETARIA = 'SECRETARIA',
+  /** Entrenador con acceso solo al portal de analytics de club (ATAH). */
+  TRAINER_ONLY_ANALYTICS = 'TRAINER_ONLY_ANALYTICS',
   ATHLETE = 'ATHLETE',
+}
+
+export enum ClubAnalyticsSexScope {
+  DAMAS = 'damas',
+  CABALLEROS = 'caballeros',
+  AMBOS = 'ambos',
 }
 
 export enum CompanyAccountType {

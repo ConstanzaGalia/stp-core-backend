@@ -160,6 +160,97 @@ export function renderStpEmailLayout(options: {
   `;
 }
 
+/**
+ * Membrete tipo informe: logo del centro + Powered by STP.
+ */
+export function renderCenterBrandedEmailLayout(options: {
+  title: string;
+  bodyHtml: string;
+  preheader?: string;
+  centerName: string;
+  centerLogoUrl?: string | null;
+  showPoweredByStp?: boolean;
+}): string {
+  const preheader = options.preheader
+    ? escapeHtml(options.preheader)
+    : escapeHtml(options.title);
+  const centerName = escapeHtml(options.centerName);
+  const centerLogo =
+    options.centerLogoUrl?.trim() ||
+    process.env.EMAIL_CENTER_LOGO_URL?.trim() ||
+    '';
+  const showPoweredBy = options.showPoweredByStp !== false;
+  const stpLogoUrl = getEmailLogoUrl();
+
+  const centerLogoBlock = centerLogo
+    ? `<img src="${escapeHtml(centerLogo)}" alt="${centerName}" width="120" style="display: block; max-width: 120px; height: auto; border: 0;">`
+    : `<p style="margin: 0; color: ${STP_EMAIL_COLORS.secondary}; font-size: 20px; font-weight: 700;">${centerName}</p>`;
+
+  const poweredByBlock = showPoweredBy
+    ? `
+      <td align="right" style="vertical-align: middle;">
+        <p style="margin: 0 0 6px; color: ${STP_EMAIL_COLORS.textMuted}; font-size: 10px; text-transform: uppercase; letter-spacing: 0.08em;">Powered by</p>
+        <img src="${stpLogoUrl}" alt="STP" width="90" style="display: block; margin-left: auto; max-width: 90px; height: auto; border: 0;">
+      </td>
+    `
+    : '';
+
+  return `
+    <!DOCTYPE html>
+    <html lang="es">
+      <head>
+        <meta charset="utf-8">
+        <meta name="viewport" content="width=device-width, initial-scale=1.0">
+        <title>${escapeHtml(options.title)} - ${centerName}</title>
+      </head>
+      <body style="margin: 0; padding: 0; background-color: ${STP_EMAIL_COLORS.background}; font-family: Arial, Helvetica, sans-serif;">
+        <div style="display: none; max-height: 0; overflow: hidden; opacity: 0; color: transparent;">
+          ${preheader}
+        </div>
+        <table role="presentation" width="100%" cellspacing="0" cellpadding="0" border="0" style="background-color: ${STP_EMAIL_COLORS.background}; padding: 32px 16px;">
+          <tr>
+            <td align="center">
+              <table role="presentation" width="100%" cellspacing="0" cellpadding="0" border="0" style="max-width: 600px; background-color: ${STP_EMAIL_COLORS.surface}; border-radius: 12px; overflow: hidden; border: 1px solid ${STP_EMAIL_COLORS.border};">
+                <tr>
+                  <td style="height: 4px; background-color: ${STP_EMAIL_COLORS.secondary}; font-size: 0; line-height: 0;">&nbsp;</td>
+                </tr>
+                <tr>
+                  <td style="padding: 28px 32px 20px; border-bottom: 1px solid ${STP_EMAIL_COLORS.border};">
+                    <table role="presentation" width="100%" cellspacing="0" cellpadding="0" border="0">
+                      <tr>
+                        <td align="left" style="vertical-align: middle;">
+                          ${centerLogoBlock}
+                          ${centerLogo ? `<p style="margin: 8px 0 0; color: ${STP_EMAIL_COLORS.secondary}; font-size: 14px; font-weight: 600;">${centerName}</p>` : ''}
+                        </td>
+                        ${poweredByBlock}
+                      </tr>
+                    </table>
+                  </td>
+                </tr>
+                <tr>
+                  <td style="padding: 28px 32px 32px;">
+                    ${options.bodyHtml}
+                  </td>
+                </tr>
+                <tr>
+                  <td style="padding: 20px 32px 28px; border-top: 1px solid ${STP_EMAIL_COLORS.border}; text-align: center;">
+                    <p style="margin: 0 0 6px; color: ${STP_EMAIL_COLORS.textMuted}; font-size: 12px;">
+                      © ${centerName}${showPoweredBy ? ' · Powered by STP' : ''}
+                    </p>
+                    <p style="margin: 0; color: ${STP_EMAIL_COLORS.textMuted}; font-size: 12px;">
+                      Este es un email automático, por favor no respondas a este mensaje.
+                    </p>
+                  </td>
+                </tr>
+              </table>
+            </td>
+          </tr>
+        </table>
+      </body>
+    </html>
+  `;
+}
+
 export function buildTestEmailHtml(): string {
   return renderStpEmailLayout({
     title: 'Test de email STP',

@@ -4,6 +4,7 @@ import { PhysicalEvaluation } from 'src/entities/physical-evaluation.entity';
 import { PhysicalEvaluationTest } from 'src/entities/physical-evaluation-test.entity';
 import { PhysicalEvaluationMeasurement } from 'src/entities/physical-evaluation-measurement.entity';
 import { AthleteEvaluation } from 'src/entities/athlete-evaluation.entity';
+import { ClubAnalyticsTrainer } from 'src/entities/club-analytics-trainer.entity';
 import { EvaluationProtocol } from 'src/entities/evaluation-protocol.entity';
 import { EvaluationCriteriaSet } from 'src/entities/evaluation-criteria-set.entity';
 import { User } from 'src/entities/user.entity';
@@ -42,6 +43,7 @@ import { PerformanceClassificationService } from './performance-classification.s
       EvaluationCriteriaSet,
       User,
       AthleteEvaluation,
+      ClubAnalyticsTrainer,
     ]),
     CompanyModule,
     AthletesModule,

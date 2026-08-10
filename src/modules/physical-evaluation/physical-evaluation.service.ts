@@ -13,6 +13,11 @@ import { PhysicalEvaluationMeasurement } from 'src/entities/physical-evaluation-
 import { EvaluationCriteriaSet } from 'src/entities/evaluation-criteria-set.entity';
 import { AthleteEvaluation } from 'src/entities/athlete-evaluation.entity';
 import { UserRole } from 'src/common/enums/enums';
+import { ClubAnalyticsTrainer } from 'src/entities/club-analytics-trainer.entity';
+import {
+  athleteMatchesClubCode,
+  sexScopeMatchesAthlete,
+} from 'src/common/constants/atah-clubs';
 import { CompanyService } from '../company/company.service';
 import { AthletesService } from '../athletes/athletes.service';
 import { PhysicalEvaluationAnalysisService } from './physical-evaluation-analysis.service';
@@ -77,6 +82,8 @@ export class PhysicalEvaluationService {
     private readonly legacyEvalRepo: Repository<AthleteEvaluation>,
     @InjectRepository(User)
     private readonly userRepo: Repository<User>,
+    @InjectRepository(ClubAnalyticsTrainer)
+    private readonly clubAnalyticsAccessRepo: Repository<ClubAnalyticsTrainer>,
     private readonly analysisService: PhysicalEvaluationAnalysisService,
     private readonly companyService: CompanyService,
     private readonly athletesService: AthletesService,
@@ -202,6 +209,36 @@ export class PhysicalEvaluationService {
       const target = await this.userRepo.findOne({ where: { id: athleteUserId } });
       if (!target) throw new NotFoundException('Atleta no encontrado');
       if (target.role !== UserRole.ATHLETE) throw new BadRequestException('El usuario indicado no es un atleta');
+      return target;
+    }
+
+    if (actor.role === UserRole.TRAINER_ONLY_ANALYTICS) {
+      if (write) {
+        throw new ForbiddenException('Solo lectura en el portal analytics de club');
+      }
+      const access = await this.clubAnalyticsAccessRepo.findOne({
+        where: { userId: actor.id, active: true },
+        relations: ['company'],
+      });
+      if (!access?.company) {
+        throw new ForbiddenException('No tenés un acceso analytics activo');
+      }
+      const target = await this.userRepo.findOne({ where: { id: athleteUserId } });
+      if (!target) throw new NotFoundException('Atleta no encontrado');
+      if (target.role !== UserRole.ATHLETE) {
+        throw new BadRequestException('El usuario indicado no es un atleta');
+      }
+      const subs = await this.athletesService.getMySubscribedCenters(athleteUserId);
+      const inCompany = subs.some((inv) => inv.company?.id === access.companyId);
+      if (!inCompany) {
+        throw new ForbiddenException('No tenés acceso a evaluaciones de este atleta');
+      }
+      if (
+        !athleteMatchesClubCode(target.clubName, access.clubCode, access.company.name) ||
+        !sexScopeMatchesAthlete(access.sexScope, target.sexo)
+      ) {
+        throw new ForbiddenException('No tenés acceso a evaluaciones de este atleta');
+      }
       return target;
     }
 

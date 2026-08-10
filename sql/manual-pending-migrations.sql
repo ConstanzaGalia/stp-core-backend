@@ -85,4 +85,9 @@ ALTER TABLE "user"
 COMMENT ON COLUMN "user".evaluation_portal_only IS
   'Si true, el atleta usa el portal Analytics de evaluaciones (layout reducido)';
 
+-- 9) Portal analytics entrenadores de club (ATAH)
+--    Ejecutar también: sql/add-club-analytics-trainer.sql
+--    Normalización opcional: sql/normalize-atah-club-names.sql
+ALTER TYPE user_role_enum ADD VALUE IF NOT EXISTS 'TRAINER_ONLY_ANALYTICS';
+
 

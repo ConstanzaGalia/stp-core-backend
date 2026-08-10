@@ -64,11 +64,16 @@ export class AthleteEvaluationService {
 
   /** Lectura de evaluaciones / perfil STP: el propio atleta o staff con centro compartido. */
   private async assertCanReadAthlete(actor: User, athleteUserId: string): Promise<void> {
-    await this.loadAthleteOrThrow(athleteUserId);
     if (actor.role === UserRole.ATHLETE) {
+      await this.loadAthleteOrThrow(athleteUserId);
       if (actor.id !== athleteUserId) throw new ForbiddenException('No puedes ver datos de otro atleta');
       return;
     }
+    if (actor.role === UserRole.TRAINER_ONLY_ANALYTICS) {
+      await this.physicalEvaluationService.assertCanAccessAthlete(actor, athleteUserId, false);
+      return;
+    }
+    await this.loadAthleteOrThrow(athleteUserId);
     if (!this.isStaff(actor)) throw new ForbiddenException('Sin permiso');
     if (actor.role === UserRole.STP_ADMIN) return;
     await this.assertStaffSharesCenterWithAthlete(actor, athleteUserId);

@@ -30,6 +30,8 @@ import { UpdateTrainerProfileDto } from './dto/update-trainer-profile.dto';
 import { UpdateUserProfileDto } from './dto/update-user-profile.dto';
 import { TrainerProfileResponseDto } from './dto/trainer-profile-response.dto';
 import { ResendVerificationDto } from './dto/resend-verification.dto';
+import { ClubAnalyticsTrainer } from 'src/entities/club-analytics-trainer.entity';
+import { getAtahClubLabel, sexScopeLabel } from 'src/common/constants/atah-clubs';
 
 const DEFAULT_OTP_EXPIRES_MINUTES = 15;
 const DEFAULT_RESET_TOKEN_EXPIRES_MINUTES = 60;
@@ -38,6 +40,8 @@ const DEFAULT_RESET_TOKEN_EXPIRES_MINUTES = 60;
 export class AuthService {
   constructor(
     @InjectRepository(User) private readonly userRepository: Repository<User>,
+    @InjectRepository(ClubAnalyticsTrainer)
+    private readonly clubAnalyticsTrainerRepository: Repository<ClubAnalyticsTrainer>,
     private encryptService: EncryptService,
     private jwtService: JwtService,
   ) {}
@@ -70,6 +74,24 @@ export class AuthService {
       role: user.role,
       isActive: user.isActive,
       evaluationPortalOnly: user.evaluationPortalOnly === true,
+    };
+  }
+
+  private async resolveClubAnalyticsProfile(userId: string, role: UserRole) {
+    if (role !== UserRole.TRAINER_ONLY_ANALYTICS) return undefined;
+    const access = await this.clubAnalyticsTrainerRepository.findOne({
+      where: { userId, active: true },
+      relations: ['company'],
+    });
+    if (!access) return undefined;
+    return {
+      accessId: access.id,
+      companyId: access.companyId,
+      companyName: access.company?.name ?? null,
+      clubCode: access.clubCode,
+      clubLabel: getAtahClubLabel(access.clubCode),
+      sexScope: access.sexScope,
+      sexScopeLabel: sexScopeLabel(access.sexScope),
     };
   }
 
@@ -117,6 +139,10 @@ export class AuthService {
       throw new UnauthorizedException('Please check your credentials');
     }
     const token = this.signTokenForUser(userFound);
+    const clubAnalytics = await this.resolveClubAnalyticsProfile(
+      userFound.id,
+      userFound.role,
+    );
     return {
       id: userFound.id,
       token,
@@ -125,6 +151,7 @@ export class AuthService {
       lastName: userFound.lastName,
       role: userFound.role,
       evaluationPortalOnly: userFound.evaluationPortalOnly === true,
+      ...(clubAnalytics ? { clubAnalytics } : {}),
     };
   }
 
