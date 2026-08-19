@@ -302,6 +302,7 @@ export class PaymentsService {
       status: PaymentStatus.PENDING,
       dueDate,
       instalmentNumber: 1, // Siempre 1 por período
+      concept: PaymentConcept.SUBSCRIPTION,
       user: { id: subscription.user.id },
       company: { id: subscription.company.id },
       paymentPlan: { id: paymentPlan.id },
@@ -1648,6 +1649,7 @@ export class PaymentsService {
           'user',
           'paymentPlan',
           'payments',
+          'payments.paymentPlan',
         ],
         order: {
           user: { name: 'ASC' }
@@ -1655,7 +1657,7 @@ export class PaymentsService {
       }),
       this.paymentRepository.find({
         where: { company: { id: companyId } },
-        relations: ['user'],
+        relations: ['user', 'paymentPlan'],
       }),
     ]);
 
@@ -1688,7 +1690,9 @@ export class PaymentsService {
       const mergedPayments = this.mergePaymentsById(subscriptionPayments, userAllPayments);
 
       const pendingPayment = subscriptionPayments.find(
-        p => p.status === PaymentStatus.PENDING || p.status === PaymentStatus.OVERDUE
+        p =>
+          (p.status === PaymentStatus.PENDING || p.status === PaymentStatus.OVERDUE)
+          && this.isMonthlySubscriptionConcept(p.concept),
       );
       
       const allPayments = mergedPayments
@@ -1706,6 +1710,7 @@ export class PaymentsService {
           notes: payment.notes,
           instalmentNumber: payment.instalmentNumber,
           concept: payment.concept,
+          planName: payment.paymentPlan?.name ?? null,
           pendingBalance: payment.pendingBalance != null ? Number(payment.pendingBalance) : null,
           sortDate: payment.paidDate || payment.dueDate
         }))
@@ -1746,6 +1751,7 @@ export class PaymentsService {
           notes: payment.notes,
           instalmentNumber: payment.instalmentNumber,
           concept: payment.concept,
+          planName: payment.planName,
           pendingBalance: payment.pendingBalance != null ? Number(payment.pendingBalance) : null,
           isOverdue: payment.dueDate
             ? new Date(payment.dueDate) < new Date()
@@ -1826,6 +1832,7 @@ export class PaymentsService {
         notes: payment.notes,
         instalmentNumber: payment.instalmentNumber,
         concept: payment.concept,
+        planName: payment.paymentPlan?.name ?? 'Matrícula',
         pendingBalance: payment.pendingBalance != null ? Number(payment.pendingBalance) : null,
         isOverdue: payment.dueDate ? new Date(payment.dueDate) < new Date() && payment.status === PaymentStatus.PENDING : false,
         isSuspended: false
@@ -2048,38 +2055,15 @@ export class PaymentsService {
       where: { id: subscription.id },
       relations: ['user', 'paymentPlan', 'company']
     });
-
-    // 4. Si existe una suscripción activa, siempre generar un nuevo pago mensual
-    // Esto asegura que cada pago mensual tenga su propio pago asociado
-    if (existingSubscription) {
-      // Generar nuevo pago mensual para el nuevo período
-      await this.generateMonthlyPayment(subscription);
+    if (!subscription) {
+      throw new NotFoundException('Subscription not found');
     }
 
-    // 5. Buscar el pago pendiente (puede ser el recién generado o uno existente)
-    let pendingPayments = await this.paymentRepository.find({
-      where: {
-        subscription: { id: subscription.id },
-        status: PaymentStatus.PENDING
-      },
-      order: { dueDate: 'DESC' } // Obtener el más reciente por fecha de vencimiento
-    });
-
-    let pendingPayment = pendingPayments.length > 0 ? pendingPayments[0] : null;
-
-    // Si no se encuentra, esperar un poco y reintentar (para suscripciones nuevas)
+    // 4. Completar una cuota mensual (crear una si no hay pendiente de suscripción).
+    // Nunca reutilizar un pendiente de matrícula u otro concepto.
+    let pendingPayment = await this.findPendingMonthlyPayment(subscription.id);
     if (!pendingPayment) {
-      await new Promise(resolve => setTimeout(resolve, 100));
-      
-      pendingPayments = await this.paymentRepository.find({
-        where: {
-          subscription: { id: subscription.id },
-          status: PaymentStatus.PENDING
-        },
-        order: { dueDate: 'DESC' }
-      });
-
-      pendingPayment = pendingPayments.length > 0 ? pendingPayments[0] : null;
+      pendingPayment = await this.generateMonthlyPayment(subscription);
     }
 
     if (!pendingPayment) {
@@ -2617,6 +2601,22 @@ export class PaymentsService {
     };
   }
 
+  /** Cuota mensual: no matrícula ni otros conceptos. Pagos viejos sin concept cuentan como cuota. */
+  private isMonthlySubscriptionConcept(concept?: PaymentConcept | string | null): boolean {
+    return concept == null || concept === PaymentConcept.SUBSCRIPTION;
+  }
+
+  private async findPendingMonthlyPayment(subscriptionId: string): Promise<Payment | null> {
+    const pendingPayments = await this.paymentRepository.find({
+      where: {
+        subscription: { id: subscriptionId },
+        status: PaymentStatus.PENDING,
+      },
+      order: { dueDate: 'DESC' },
+    });
+    return pendingPayments.find((p) => this.isMonthlySubscriptionConcept(p.concept)) ?? null;
+  }
+
   /** Une pagos de suscripción con pagos directos (p. ej. matrícula sin subscriptionId), sin duplicar por id. */
   private mergePaymentsById(primary: Payment[], secondary: Payment[]): Payment[] {
     const byId = new Map<string, Payment>();
@@ -2979,6 +2979,7 @@ export class PaymentsService {
         notes: payment.notes,
         instalmentNumber: payment.instalmentNumber,
         concept: payment.concept,
+        planName: payment.paymentPlan?.name ?? null,
         sortDate: payment.paidDate || payment.dueDate,
       }))
       .sort((a, b) => {
@@ -3023,7 +3024,9 @@ export class PaymentsService {
 
     const pendingPaymentSource = hasActiveSubscription ? subscriptionPaymentList : directPayments;
     const pendingPayment = pendingPaymentSource?.find(
-      p => p.status === PaymentStatus.PENDING || p.status === PaymentStatus.OVERDUE,
+      p =>
+        (p.status === PaymentStatus.PENDING || p.status === PaymentStatus.OVERDUE)
+        && this.isMonthlySubscriptionConcept(p.concept),
     ) ?? null;
 
     const plan = paidPeriodAccess.plan ?? updatedSubscription?.paymentPlan ?? null;
