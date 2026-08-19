@@ -19,7 +19,11 @@ import { WaitlistReservation, WaitlistStatus } from '../../entities/waitlist-res
 import { AvailableClass, AvailableClassReason, AvailableClassStatus } from '../../entities/available-class.entity';
 import {
   endOfDateOnlyLocal,
+  isAtLeastHoursBeforeSlot,
+  isSlotInThePast,
+  slotInstantInArgentina,
   startOfDateOnlyLocal,
+  toDateOnlyKey,
 } from 'src/common/utils/date-only.util';
 
 export interface RecurringGenerationSummary {
@@ -204,11 +208,7 @@ export class ReservationsService {
 
     // 4. Validar que el time slot esté disponible
     if (timeSlot.isAvailable()) {
-      const now = new Date();
-      const slotDateTime = new Date(timeSlot.date);
-      const [slotHour, slotMinute] = timeSlot.startTime.split(':').map(Number);
-      slotDateTime.setHours(slotHour || 0, slotMinute || 0, 0, 0);
-      if (slotDateTime <= now) {
+      if (isSlotInThePast(timeSlot.date, timeSlot.startTime)) {
         throw new BadRequestException('No puedes reservar un turno en el pasado');
       }
 
@@ -304,16 +304,7 @@ export class ReservationsService {
       throw new ForbiddenException('Solo puedes cancelar tus propias reservas');
     }
 
-    // Verificar que la cancelación sea al menos 2 horas antes
-    const timeSlotDate = new Date(reservation.timeSlot.date);
-    const timeSlotTime = reservation.timeSlot.startTime;
-    const [hours, minutes] = timeSlotTime.split(':').map(Number);
-    timeSlotDate.setHours(hours, minutes, 0, 0);
-
-    const now = new Date();
-    const twoHoursBefore = new Date(timeSlotDate.getTime() - 2 * 60 * 60 * 1000);
-
-    if (now >= twoHoursBefore) {
+    if (!isAtLeastHoursBeforeSlot(reservation.timeSlot.date, reservation.timeSlot.startTime, 2)) {
       throw new BadRequestException('Solo puedes cancelar tu reserva con al menos 2 horas de anticipación');
     }
 
@@ -346,7 +337,7 @@ export class ReservationsService {
   /**
    * Validar si se puede modificar una reserva
    * Reglas:
-   * - 2 horas de anticipación antes del horario
+   * - 1 hora de anticipación antes del horario (hora de Argentina)
    * - Si newTimeSlotId está presente, validar que esté en la misma semana
    * - Si tiene plan de 3x semana, no puede tener más de 3 reservas en la semana
    */
@@ -369,15 +360,12 @@ export class ReservationsService {
     }
 
     const timeSlot = reservation.timeSlot;
-    const timeSlotDate = new Date(timeSlot.date);
-    const [hours, minutes] = timeSlot.startTime.split(':').map(Number);
-    timeSlotDate.setHours(hours || 0, minutes || 0, 0, 0);
+    const dateKey = toDateOnlyKey(timeSlot.date);
+    const timeSlotDate = dateKey
+      ? new Date(`${dateKey}T12:00:00.000Z`)
+      : new Date(timeSlot.date);
 
-    const now = new Date();
-    const oneHourBefore = new Date(timeSlotDate.getTime() - 1 * 60 * 60 * 1000);
-
-    // Validar anticipación de 1 hora
-    if (now >= oneHourBefore) {
+    if (!isAtLeastHoursBeforeSlot(timeSlot.date, timeSlot.startTime, 1)) {
       return {
         canModify: false,
         reason: 'Solo puedes modificar tu reserva con al menos 1 hora de anticipación',
@@ -1328,25 +1316,23 @@ export class ReservationsService {
         if (!reservation.timeSlot || !reservation.timeSlot.date) {
           return false;
         }
-        const startDateTime = new Date(reservation.timeSlot.date);
-        const [hour, minute] = (reservation.timeSlot.startTime ?? '00:00').split(':').map(Number);
-        startDateTime.setHours(hour || 0, minute || 0, 0, 0);
-        return startDateTime >= now;
+        const startDateTime = slotInstantInArgentina(
+          reservation.timeSlot.date,
+          reservation.timeSlot.startTime,
+        );
+        return startDateTime ? startDateTime >= now : false;
       })
       .sort((a, b) => {
-        const dateA = new Date(a.timeSlot.date);
-        const dateB = new Date(b.timeSlot.date);
-        const [hourA, minuteA] = (a.timeSlot.startTime ?? '00:00').split(':').map(Number);
-        const [hourB, minuteB] = (b.timeSlot.startTime ?? '00:00').split(':').map(Number);
-        dateA.setHours(hourA || 0, minuteA || 0, 0, 0);
-        dateB.setHours(hourB || 0, minuteB || 0, 0, 0);
-        return dateA.getTime() - dateB.getTime();
+        const dateA = slotInstantInArgentina(a.timeSlot.date, a.timeSlot.startTime);
+        const dateB = slotInstantInArgentina(b.timeSlot.date, b.timeSlot.startTime);
+        return (dateA?.getTime() ?? 0) - (dateB?.getTime() ?? 0);
       });
 
     return upcoming.map(reservation => {
-      const timeSlotDate = new Date(reservation.timeSlot.date);
-      const [hours, minutes] = (reservation.timeSlot.startTime ?? '00:00').split(':').map(Number);
-      timeSlotDate.setHours(hours || 0, minutes || 0, 0, 0);
+      const timeSlotDate = slotInstantInArgentina(
+        reservation.timeSlot.date,
+        reservation.timeSlot.startTime,
+      ) ?? new Date(reservation.timeSlot.date);
 
       const twoHoursBefore = new Date(timeSlotDate.getTime() - 2 * 60 * 60 * 1000);
 
@@ -2092,11 +2078,8 @@ export class ReservationsService {
         const slotDate = new Date(currentDate);
         slotDate.setHours(0, 0, 0, 0);
 
-        const slotDateTime = new Date(slotDate);
-        const [startHour, startMinute] = recurringStartTime.split(':').map(Number);
-        slotDateTime.setHours(startHour || 0, startMinute || 0, 0, 0);
-        if (slotDateTime <= nowGlobal) {
-          this.logger.verbose(`generateRecurringReservations -> skip past slot date=${slotDateTime.toISOString()}`);
+        if (isSlotInThePast(slotDate, recurringStartTime, nowGlobal)) {
+          this.logger.verbose(`generateRecurringReservations -> skip past slot date=${slotDate.toISOString()} start=${recurringStartTime}`);
           skippedPastDates.push(slotDate.toISOString().split('T')[0]);
           currentDate.setDate(currentDate.getDate() + 1);
           continue;

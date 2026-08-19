@@ -21,6 +21,10 @@ import { MailingService } from '../mailer/mailing.service';
 import { EncryptService } from '../../services/bcrypt.service';
 import { inviteStudentEmail, approvalStudentEmail } from '../../utils/emailTemplates';
 import { CreateAthleteDto } from './dto/create-athlete.dto';
+import {
+  monthDayFromDateOnly,
+  monthDayInArgentina,
+} from '../../common/utils/date-only.util';
 
 const DEFAULT_ATHLETE_PASSWORD = 'EntrenamientoSTP1@';
 
@@ -600,15 +604,11 @@ export class AthletesService {
     actor?: User,
   ): Promise<{ id: string; name: string; lastName: string }[]> {
     const athletes = await this.getCompanyAthletes(companyId, actor);
-    const today = new Date();
-    const todayMMDD = `${String(today.getUTCMonth() + 1).padStart(2, '0')}-${String(today.getUTCDate()).padStart(2, '0')}`;
+    const todayMMDD = monthDayInArgentina();
     return athletes
       .filter((inv) => {
-        const dob = inv.user?.dateOfBirth;
-        if (!dob) return false;
-        const d = dob instanceof Date ? dob : new Date(dob);
-        const dobMMDD = `${String(d.getUTCMonth() + 1).padStart(2, '0')}-${String(d.getUTCDate()).padStart(2, '0')}`;
-        return dobMMDD === todayMMDD;
+        const dobMMDD = monthDayFromDateOnly(inv.user?.dateOfBirth);
+        return Boolean(dobMMDD && dobMMDD === todayMMDD);
       })
       .map((inv) => ({
         id: inv.user!.id,
