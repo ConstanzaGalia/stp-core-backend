@@ -54,4 +54,9 @@ export class CompletePaymentDto {
   @Min(0)
   @IsOptional()
   pendingBalance?: number;
+
+  /** Si es true, aplica el recargo por mora del plan. Si no se envía, no se cobra mora. */
+  @IsBoolean()
+  @IsOptional()
+  applyLateFee?: boolean;
 }

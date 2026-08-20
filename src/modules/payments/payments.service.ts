@@ -1413,11 +1413,7 @@ export class PaymentsService {
       const gracePeriod = payment.subscription.paymentPlan.gracePeriodDays || 0;
       
       if (daysLate > gracePeriod) {
-        const lateFee = (payment.amount * payment.subscription.paymentPlan.lateFeePercentage) / 100;
-        payment.lateFee = lateFee;
-        payment.totalAmount = payment.amount + lateFee;
         payment.status = PaymentStatus.OVERDUE;
-        
         await this.paymentRepository.save(payment);
       }
     }
@@ -1985,7 +1981,7 @@ export class PaymentsService {
 
   // ===== PAGO COMPLETO (SUSCRIPCIÓN + PAGO) =====
   async completePayment(completePaymentDto: CompletePaymentDto): Promise<{ subscription: UserPaymentSubscription; payment: Payment; reservationsGenerated?: boolean }> {
-    const { paymentId: completedPaymentId, userId, paymentPlanId, companyId, amount, paymentMethod, discount, transactionId, notes, startDate, paidDate, keepPending, pendingBalance: dtoPendingBalance } = completePaymentDto;
+    const { paymentId: completedPaymentId, userId, paymentPlanId, companyId, amount, paymentMethod, discount, transactionId, notes, startDate, paidDate, keepPending, pendingBalance: dtoPendingBalance, applyLateFee } = completePaymentDto;
 
     // Completar un pago específico por ID (ej. matrícula u otro pago ya creado)
     if (completedPaymentId) {
@@ -2070,16 +2066,12 @@ export class PaymentsService {
       throw new BadRequestException('No pending payments found for this subscription');
     }
 
-    // Calcular recargo por mora si aplica
-    let lateFee = 0;
-    if (pendingPayment.dueDate < new Date()) {
-      const daysLate = Math.floor((new Date().getTime() - pendingPayment.dueDate.getTime()) / (1000 * 60 * 60 * 24));
-      const gracePeriod = subscription.paymentPlan.gracePeriodDays || 0;
-      
-      if (daysLate > gracePeriod) {
-        lateFee = (pendingPayment.amount * subscription.paymentPlan.lateFeePercentage) / 100;
-      }
-    }
+    const lateFee = this.resolveAppliedLateFee({
+      applyLateFee,
+      amount: Number(amount),
+      concept: pendingPayment.concept,
+      lateFeePercentage: subscription.paymentPlan?.lateFeePercentage,
+    });
 
     // Actualizar el pago — si keepPending=true se deja como PENDING (el alumno viene pero paga después)
     if (!keepPending) {
@@ -2094,7 +2086,7 @@ export class PaymentsService {
         paymentDate.getMonth() + 1,
         paymentDate.getDate()
       );
-      pendingPayment.lateFee = amount === 0 ? 0 : lateFee;
+      pendingPayment.lateFee = lateFee;
       pendingPayment.discount = discount || 0;
       pendingPayment.totalAmount = pendingPayment.amount + pendingPayment.lateFee - (discount || 0);
       pendingPayment.transactionId = transactionId;
@@ -2246,7 +2238,7 @@ export class PaymentsService {
     if (!paymentUserId || !paymentCompanyId || paymentUserId !== dto.userId || paymentCompanyId !== dto.companyId) {
       throw new BadRequestException('Payment does not belong to this user and company');
     }
-    if (payment.status !== PaymentStatus.PENDING) {
+    if (payment.status !== PaymentStatus.PENDING && payment.status !== PaymentStatus.OVERDUE) {
       throw new BadRequestException('Payment is not pending');
     }
 
@@ -2255,15 +2247,12 @@ export class PaymentsService {
     const amountToUse = dto.amount !== undefined && dto.amount !== null ? Number(dto.amount) : Number(payment.amount);
     payment.amount = amountToUse;
 
-    let lateFee = 0;
-    if (amountToUse > 0 && payment.subscription?.paymentPlan && payment.dueDate && payment.dueDate < new Date()) {
-      const daysLate = Math.floor((new Date().getTime() - payment.dueDate.getTime()) / (1000 * 60 * 60 * 24));
-      const plan = payment.subscription.paymentPlan;
-      const gracePeriod = plan?.gracePeriodDays || 0;
-      if (daysLate > gracePeriod && plan?.lateFeePercentage) {
-        lateFee = (amountToUse * plan.lateFeePercentage) / 100;
-      }
-    }
+    const lateFee = this.resolveAppliedLateFee({
+      applyLateFee: dto.applyLateFee,
+      amount: amountToUse,
+      concept: payment.concept,
+      lateFeePercentage: payment.subscription?.paymentPlan?.lateFeePercentage,
+    });
     payment.status = PaymentStatus.PAID;
     payment.paymentMethod = dto.paymentMethod;
     payment.paidDate = paymentDate;
@@ -2275,7 +2264,7 @@ export class PaymentsService {
         paymentDate.getDate()
       );
     }
-    payment.lateFee = payment.amount === 0 ? 0 : lateFee;
+    payment.lateFee = lateFee;
     payment.discount = dto.discount ?? 0;
     payment.totalAmount = Number(payment.amount) + payment.lateFee - (dto.discount ?? 0);
     payment.transactionId = dto.transactionId ?? payment.transactionId;
@@ -2606,11 +2595,26 @@ export class PaymentsService {
     return concept == null || concept === PaymentConcept.SUBSCRIPTION;
   }
 
+  /** Recargo por mora: solo si el entrenador lo confirma. Nunca se aplica a matrícula ni otros conceptos. */
+  private resolveAppliedLateFee(options: {
+    applyLateFee?: boolean;
+    amount: number;
+    concept?: PaymentConcept | string | null;
+    lateFeePercentage?: number | string | null;
+  }): number {
+    if (!options.applyLateFee) return 0;
+    if (!this.isMonthlySubscriptionConcept(options.concept)) return 0;
+    const amount = Number(options.amount);
+    const percentage = Number(options.lateFeePercentage);
+    if (!(amount > 0) || !(percentage > 0)) return 0;
+    return parseFloat(((amount * percentage) / 100).toFixed(2));
+  }
+
   private async findPendingMonthlyPayment(subscriptionId: string): Promise<Payment | null> {
     const pendingPayments = await this.paymentRepository.find({
       where: {
         subscription: { id: subscriptionId },
-        status: PaymentStatus.PENDING,
+        status: In([PaymentStatus.PENDING, PaymentStatus.OVERDUE]),
       },
       order: { dueDate: 'DESC' },
     });
