@@ -90,4 +90,7 @@ COMMENT ON COLUMN "user".evaluation_portal_only IS
 --    Normalización opcional: sql/normalize-atah-club-names.sql
 ALTER TYPE user_role_enum ADD VALUE IF NOT EXISTS 'TRAINER_ONLY_ANALYTICS';
 
+-- 10) Functional Screening Biomecánico STP
+--     Ejecutar también: sql/create-biomechanical-screening.sql
+
 

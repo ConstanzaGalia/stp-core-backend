@@ -18,6 +18,9 @@ import { PhysicalEvaluationTest } from './entities/physical-evaluation-test.enti
 import { PhysicalEvaluationMeasurement } from './entities/physical-evaluation-measurement.entity';
 import { EvaluationProtocol } from './entities/evaluation-protocol.entity';
 import { EvaluationCriteriaSet } from './entities/evaluation-criteria-set.entity';
+import { BiomechanicalScreeningProtocol } from './entities/biomechanical-screening-protocol.entity';
+import { BiomechanicalScreeningSession } from './entities/biomechanical-screening-session.entity';
+import { BiomechanicalScreeningTestResult } from './entities/biomechanical-screening-test-result.entity';
 import { Exercise } from './entities/excercise.entity';
 import { Expense } from './entities/expense.entity';
 import { FixedExpenseTemplate } from './entities/fixed-expense-template.entity';
@@ -62,6 +65,9 @@ export const TYPEORM_ENTITIES = [
   PhysicalEvaluationMeasurement,
   EvaluationProtocol,
   EvaluationCriteriaSet,
+  BiomechanicalScreeningProtocol,
+  BiomechanicalScreeningSession,
+  BiomechanicalScreeningTestResult,
   AthleteInvitation,
   AthleteSchedule,
   Division,
