@@ -128,3 +128,7 @@ CREATE TABLE IF NOT EXISTS athlete_objective (
 CREATE INDEX IF NOT EXISTS idx_athlete_objective_user
   ON athlete_objective ("userId");
 
+-- 13) Condiciones clínicas permanentes (migración 175080)
+ALTER TABLE injury
+  ADD COLUMN IF NOT EXISTS permanente BOOLEAN NOT NULL DEFAULT false;
+

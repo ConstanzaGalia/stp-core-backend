@@ -1,4 +1,4 @@
-import { Injectable, NotFoundException } from '@nestjs/common';
+import { BadRequestException, Injectable, NotFoundException } from '@nestjs/common';
 import { InjectRepository } from '@nestjs/typeorm';
 import { Repository, In } from 'typeorm';
 import { Injury, InjuryKind, InjuryStatus } from 'src/entities/injury.entity';
@@ -21,14 +21,20 @@ export class InjuriesService {
     const user = await this.userRepo.findOneBy({ id: userId });
     if (!user) throw new NotFoundException(`User ${userId} not found`);
 
-    const alreadyEnded = !!dto.fechaResolucion;
+    const permanente = !!dto.permanente;
+    if (permanente && dto.fechaResolucion) {
+      throw new BadRequestException('Una condición permanente no puede tener fecha de fin');
+    }
+
+    const alreadyEnded = !permanente && !!dto.fechaResolucion;
     const injury = this.injuryRepo.create({
       user,
       tipo: dto.tipo,
       kind: dto.kind ?? InjuryKind.LESION,
       estado: alreadyEnded ? InjuryStatus.RESUELTA : InjuryStatus.ACTIVA,
-      fechaInicio: dto.fechaInicio,
+      fechaInicio: this.parseDateOnly(dto.fechaInicio),
       fechaResolucion: alreadyEnded ? this.parseDateOnly(dto.fechaResolucion!) : null,
+      permanente,
       notas: dto.notas,
     });
 
@@ -54,6 +60,12 @@ export class InjuriesService {
       relations: ['restrictionTags'],
     });
     if (!injury) throw new NotFoundException(`Injury ${injuryId} not found`);
+
+    if (injury.permanente && dto.estado === InjuryStatus.RESUELTA) {
+      throw new BadRequestException(
+        'No se puede finalizar una condición permanente. Desmarcá "permanente" primero.',
+      );
+    }
 
     const previousStatus = injury.estado;
     injury.estado = dto.estado;
@@ -84,15 +96,41 @@ export class InjuriesService {
       injury.fechaInicio = this.parseDateOnly(dto.fechaInicio);
     }
 
-    if (dto.restrictionTagIds !== undefined && injury.estado !== InjuryStatus.RESUELTA) {
-      injury.restrictionTags = dto.restrictionTagIds.length
-        ? await this.safetyTagRepo.findBy({ id: In(dto.restrictionTagIds) })
-        : [];
+    if (dto.permanente !== undefined) {
+      injury.permanente = dto.permanente;
+      if (dto.permanente) {
+        injury.fechaResolucion = null;
+        if (injury.estado === InjuryStatus.RESUELTA) {
+          injury.estado = InjuryStatus.ACTIVA;
+        }
+      }
     }
 
     if (dto.fechaResolucion !== undefined) {
-      injury.fechaResolucion = this.parseDateOnly(dto.fechaResolucion);
-      injury.estado = InjuryStatus.RESUELTA;
+      const clearing =
+        dto.fechaResolucion === null ||
+        dto.fechaResolucion === '' ||
+        (typeof dto.fechaResolucion === 'string' && !dto.fechaResolucion.trim());
+
+      if (clearing || injury.permanente) {
+        injury.fechaResolucion = null;
+        if (injury.estado === InjuryStatus.RESUELTA) {
+          injury.estado = InjuryStatus.ACTIVA;
+        }
+      } else {
+        if (injury.permanente) {
+          throw new BadRequestException('Una condición permanente no puede tener fecha de fin');
+        }
+        injury.fechaResolucion = this.parseDateOnly(dto.fechaResolucion);
+        injury.estado = InjuryStatus.RESUELTA;
+      }
+    }
+
+    const canEditTags = injury.estado !== InjuryStatus.RESUELTA;
+    if (dto.restrictionTagIds !== undefined && canEditTags) {
+      injury.restrictionTags = dto.restrictionTagIds.length
+        ? await this.safetyTagRepo.findBy({ id: In(dto.restrictionTagIds) })
+        : [];
     }
 
     return this.injuryRepo.save(injury);

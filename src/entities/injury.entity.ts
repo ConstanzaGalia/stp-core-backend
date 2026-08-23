@@ -36,7 +36,14 @@ export class Injury {
   fechaInicio: Date;
 
   @Column({ type: 'date', nullable: true, name: 'fecha_resolucion' })
-  fechaResolucion: Date;
+  fechaResolucion: Date | null;
+
+  /**
+   * Condición crónica / permanente: permanece activa sin fecha de fin
+   * y debe quedar visible para el entrenador en la planificación.
+   */
+  @Column({ type: 'boolean', default: false })
+  permanente: boolean;
 
   @ManyToMany(() => SafetyTag)
   @JoinTable({ name: 'injury_restriction_tags' })

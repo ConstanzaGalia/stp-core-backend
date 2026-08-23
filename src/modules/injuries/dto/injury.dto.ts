@@ -6,6 +6,7 @@ import {
   IsNumber,
   IsEnum,
   IsDateString,
+  IsBoolean,
   ValidateIf,
 } from 'class-validator';
 import { InjuryKind, InjuryStatus } from 'src/entities/injury.entity';
@@ -27,10 +28,17 @@ export class CreateInjuryDto {
   @IsString()
   notas?: string;
 
-  /** Si se informa, el registro se crea ya finalizado con esta fecha de fin. */
+  /**
+   * Si se informa (y no es permanente), el registro se crea ya finalizado.
+   */
   @IsOptional()
   @IsDateString()
   fechaResolucion?: string;
+
+  /** Condición crónica / permanente sin fecha de fin. */
+  @IsOptional()
+  @IsBoolean()
+  permanente?: boolean;
 
   @IsOptional()
   @IsArray()
@@ -47,7 +55,7 @@ export class UpdateInjuryStatusDto {
   @IsString()
   notas?: string;
 
-  /** Fecha de fin / resolución. Obligatoria al marcar resuelta si se envía explícitamente. */
+  /** Fecha de fin / resolución al marcar resuelta. */
   @ValidateIf((dto) => dto.estado === InjuryStatus.RESUELTA)
   @IsOptional()
   @IsDateString()
@@ -71,9 +79,17 @@ export class UpdateInjuryDto {
   @IsString()
   notas?: string;
 
+  /**
+   * Fecha de fin. Enviar `null` o `""` para borrarla y reactivar el registro.
+   */
   @IsOptional()
+  @ValidateIf((_, value) => value !== null && value !== '')
   @IsDateString()
-  fechaResolucion?: string;
+  fechaResolucion?: string | null;
+
+  @IsOptional()
+  @IsBoolean()
+  permanente?: boolean;
 
   @IsOptional()
   @IsArray()
