@@ -1,7 +1,7 @@
-import { Controller, Post, Get, Patch, Body, Param, UseGuards } from '@nestjs/common';
+import { Controller, Post, Get, Patch, Delete, Body, Param, UseGuards } from '@nestjs/common';
 import { AuthGuard } from '@nestjs/passport';
 import { InjuriesService } from './injuries.service';
-import { CreateInjuryDto, UpdateInjuryStatusDto } from './dto/injury.dto';
+import { CreateInjuryDto, UpdateInjuryDto, UpdateInjuryStatusDto } from './dto/injury.dto';
 
 @Controller('injuries')
 @UseGuards(AuthGuard('jwt'))
@@ -27,6 +27,19 @@ export class InjuriesController {
     @Body() dto: UpdateInjuryStatusDto,
   ) {
     return this.service.updateStatus(injuryId, dto);
+  }
+
+  @Patch(':injuryId')
+  update(
+    @Param('injuryId') injuryId: string,
+    @Body() dto: UpdateInjuryDto,
+  ) {
+    return this.service.update(injuryId, dto);
+  }
+
+  @Delete(':injuryId')
+  remove(@Param('injuryId') injuryId: string) {
+    return this.service.remove(injuryId);
   }
 
   @Get(':userId/active-tags')

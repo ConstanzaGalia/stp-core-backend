@@ -26,6 +26,7 @@ import { Expense } from './entities/expense.entity';
 import { FixedExpenseTemplate } from './entities/fixed-expense-template.entity';
 import { FixedExpenseMonthStatus } from './entities/fixed-expense-month-status.entity';
 import { Injury } from './entities/injury.entity';
+import { AthleteObjective } from './entities/athlete-objective.entity';
 import { MovementPattern } from './entities/movement-pattern.entity';
 import { SafetyTag } from './entities/safety-tag.entity';
 import { ExtraIncome } from './entities/extra-income.entity';
@@ -82,6 +83,7 @@ export const TYPEORM_ENTITIES = [
   FixedExpenseTemplate,
   FixedExpenseMonthStatus,
   Injury,
+  AthleteObjective,
   MovementPattern,
   SafetyTag,
   ExtraIncome,

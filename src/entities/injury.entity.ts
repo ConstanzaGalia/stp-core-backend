@@ -8,6 +8,13 @@ export enum InjuryStatus {
   RESUELTA = 'resuelta',
 }
 
+/** Lesión aguda, afección/condición crónica u otro antecedente clínico relevante. */
+export enum InjuryKind {
+  LESION = 'lesion',
+  AFECCION = 'afeccion',
+  OTRO = 'otro',
+}
+
 @Entity('injury')
 export class Injury {
   @PrimaryGeneratedColumn('uuid')
@@ -18,6 +25,9 @@ export class Injury {
 
   @Column()
   tipo: string;
+
+  @Column({ type: 'enum', enum: InjuryKind, default: InjuryKind.LESION })
+  kind: InjuryKind;
 
   @Column({ type: 'enum', enum: InjuryStatus, default: InjuryStatus.ACTIVA })
   estado: InjuryStatus;

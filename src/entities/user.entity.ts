@@ -16,6 +16,7 @@ import { AthleteEvaluation } from './athlete-evaluation.entity';
 import { PhysicalEvaluation } from './physical-evaluation.entity';
 import { BiomechanicalScreeningSession } from './biomechanical-screening-session.entity';
 import { Injury } from './injury.entity';
+import { AthleteObjective } from './athlete-objective.entity';
 
 @Entity('user')
 export class User {
@@ -173,6 +174,9 @@ export class User {
 
   @OneToMany(() => Injury, injury => injury.user)
   injuries: Injury[];
+
+  @OneToMany(() => AthleteObjective, (objective) => objective.user)
+  athleteObjectives: AthleteObjective[];
 
   @CreateDateColumn({ type: "timestamp", default: () => "CURRENT_TIMESTAMP(6)" })
   public created_at: Date;

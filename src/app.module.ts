@@ -16,6 +16,7 @@ import { AthleteEvaluationModule } from './modules/athlete-evaluation/athlete-ev
 import { PhysicalEvaluationModule } from './modules/physical-evaluation/physical-evaluation.module';
 import { BiomechanicalScreeningModule } from './modules/biomechanical-screening/biomechanical-screening.module';
 import { InjuriesModule } from './modules/injuries/injuries.module';
+import { AthleteObjectivesModule } from './modules/athlete-objectives/athlete-objectives.module';
 import { ProductsModule } from './modules/products/products.module';
 import { HealthModule } from './modules/health/health.module';
 import { TrainingPlannerModule } from './modules/training-planner/training-planner.module';
@@ -111,6 +112,7 @@ function resolvePostgresPoolMax(config: ConfigService): number {
     PhysicalEvaluationModule,
     BiomechanicalScreeningModule,
     InjuriesModule,
+    AthleteObjectivesModule,
     ProductsModule,
     TrainingPlannerModule,
     StaffSchedulingModule,

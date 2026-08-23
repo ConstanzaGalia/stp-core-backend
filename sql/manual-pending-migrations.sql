@@ -93,4 +93,38 @@ ALTER TYPE user_role_enum ADD VALUE IF NOT EXISTS 'TRAINER_ONLY_ANALYTICS';
 -- 10) Functional Screening Biomecánico STP
 --     Ejecutar también: sql/create-biomechanical-screening.sql
 
+-- 11) Historial clínico: tipo lesión/afección (migración 175060)
+DO $$
+BEGIN
+  IF NOT EXISTS (SELECT 1 FROM pg_type WHERE typname = 'injury_kind_enum') THEN
+    CREATE TYPE injury_kind_enum AS ENUM ('lesion', 'afeccion', 'otro');
+  END IF;
+END $$;
+
+ALTER TABLE injury
+  ADD COLUMN IF NOT EXISTS kind injury_kind_enum NOT NULL DEFAULT 'lesion';
+
+-- 12) Objetivos del atleta (migración 175070)
+DO $$
+BEGIN
+  IF NOT EXISTS (SELECT 1 FROM pg_type WHERE typname = 'athlete_objective_type_enum') THEN
+    CREATE TYPE athlete_objective_type_enum AS ENUM ('single_date', 'date_range', 'annual');
+  END IF;
+END $$;
+
+CREATE TABLE IF NOT EXISTS athlete_objective (
+  id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+  "userId" UUID NOT NULL REFERENCES "user"(id) ON DELETE CASCADE,
+  title VARCHAR(255) NOT NULL,
+  description TEXT,
+  type athlete_objective_type_enum NOT NULL,
+  target_date DATE,
+  start_date DATE,
+  end_date DATE,
+  "createdAt" TIMESTAMP NOT NULL DEFAULT now(),
+  "updatedAt" TIMESTAMP NOT NULL DEFAULT now()
+);
+
+CREATE INDEX IF NOT EXISTS idx_athlete_objective_user
+  ON athlete_objective ("userId");
 
