@@ -30,6 +30,7 @@ import { User } from 'src/entities/user.entity';
 import { UserRole } from 'src/common/enums/enums';
 import { UpdateCompanySubscriptionDto } from './dto/update-company-subscription.dto';
 import { UpdateCompanyModulesDto } from './dto/update-company-modules.dto';
+import { UpdateCompanyAccountTypeDto } from './dto/update-company-account-type.dto';
 import { SkipCompanySubscriptionCheck } from 'src/common/decorators/skip-company-subscription-check.decorator';
 import { ParseSanitizedUUIDPipe } from 'src/common/pipes/parse-sanitized-uuid.pipe';
 
@@ -98,6 +99,17 @@ export class CompanyController {
     @GetUser() user: User,
   ) {
     return this.companyService.setCompanyEnabledModules(id, dto, user);
+  }
+
+  @Patch('admin/:id/account-type')
+  @UseGuards(AuthGuard('jwt'))
+  @SkipCompanySubscriptionCheck()
+  public async setCompanyAccountType(
+    @Param('id') id: string,
+    @Body() dto: UpdateCompanyAccountTypeDto,
+    @GetUser() user: User,
+  ) {
+    return this.companyService.setCompanyAccountType(id, dto, user);
   }
 
   @Get()

@@ -30,6 +30,7 @@ import { getStpOperatingCompanyId } from 'src/common/constants/stp-operating-com
 import { assertStpAdmin } from 'src/common/helpers/company-access.helper';
 import { UpdateCompanySubscriptionDto } from './dto/update-company-subscription.dto';
 import { UpdateCompanyModulesDto } from './dto/update-company-modules.dto';
+import { UpdateCompanyAccountTypeDto } from './dto/update-company-account-type.dto';
 
 const STAFF_ROLES = [
   UserRole.TRAINER,
@@ -237,6 +238,22 @@ export class CompanyService {
 
     company.enabledModules =
       dto.enabledModules.length > 0 ? [...dto.enabledModules] : null;
+    return this.companyRepository.save(company);
+  }
+
+  public async setCompanyAccountType(
+    companyId: string,
+    dto: UpdateCompanyAccountTypeDto,
+    admin: User,
+  ): Promise<Company> {
+    assertStpAdmin(admin);
+
+    const company = await this.companyRepository.findOne({ where: { id: companyId } });
+    if (!company) {
+      throw new NotFoundException('Company not found');
+    }
+
+    company.accountType = dto.accountType;
     return this.companyRepository.save(company);
   }
 
