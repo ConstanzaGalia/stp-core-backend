@@ -13,6 +13,7 @@ export const CONFIGURABLE_CENTER_MODULE_IDS = [
   'estadisticas',
   'divisiones',
   'posiciones',
+  'criterios-evaluacion',
 ] as const;
 
 export type ConfigurableCenterModuleId = (typeof CONFIGURABLE_CENTER_MODULE_IDS)[number];
