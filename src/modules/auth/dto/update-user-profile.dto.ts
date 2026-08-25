@@ -32,4 +32,8 @@ export class UpdateUserProfileDto {
   @IsDateString()
   @IsOptional()
   dateOfBirth?: string; // Fecha de nacimiento (YYYY-MM-DD)
+
+  @IsString()
+  @IsOptional()
+  dni?: string;
 }

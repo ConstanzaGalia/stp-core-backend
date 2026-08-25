@@ -14,6 +14,7 @@ export const CONFIGURABLE_CENTER_MODULE_IDS = [
   'estadisticas',
   'divisiones',
   'posiciones',
+  'competencias',
   'criterios-evaluacion',
 ] as const;
 

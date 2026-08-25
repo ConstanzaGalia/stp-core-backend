@@ -65,6 +65,10 @@ export class User {
   dateOfBirth?: Date;
 
   @ApiProperty()
+  @Column({ nullable: true, length: 20 })
+  dni?: string | null;
+
+  @ApiProperty()
   @Column({name: 'specialty', nullable: true, length: 200})
   specialty?: string;
 

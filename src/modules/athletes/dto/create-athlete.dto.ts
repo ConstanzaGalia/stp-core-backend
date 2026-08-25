@@ -25,6 +25,10 @@ export class CreateAthleteDto {
 
   @IsOptional()
   @IsString()
+  dni?: string;
+
+  @IsOptional()
+  @IsString()
   phoneNumber?: string;
 
   /** Si es true, el participante solo se gestiona desde el hub de evaluaciones (no en roster de alumnos). */

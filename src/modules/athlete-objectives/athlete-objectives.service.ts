@@ -40,10 +40,19 @@ export class AthleteObjectivesService {
   async findByUser(userId: string): Promise<AthleteObjective[]> {
     const objectives = await this.objectiveRepo.find({
       where: { user: { id: userId } },
+      relations: ['competition'],
       order: { createdAt: 'DESC' },
     });
 
     return objectives.sort((a, b) => this.sortKey(a) - this.sortKey(b));
+  }
+
+  private assertNotLinked(objective: AthleteObjective): void {
+    if (objective.competitionId) {
+      throw new BadRequestException(
+        'Este objetivo está vinculado a una competencia del club y solo puede editarse desde Competencias',
+      );
+    }
   }
 
   async update(objectiveId: string, dto: UpdateAthleteObjectiveDto): Promise<AthleteObjective> {
@@ -52,6 +61,7 @@ export class AthleteObjectivesService {
       relations: ['user'],
     });
     if (!objective) throw new NotFoundException(`Objective ${objectiveId} not found`);
+    this.assertNotLinked(objective);
 
     const nextType = dto.type ?? objective.type;
 
@@ -78,6 +88,7 @@ export class AthleteObjectivesService {
   async remove(objectiveId: string): Promise<void> {
     const objective = await this.objectiveRepo.findOneBy({ id: objectiveId });
     if (!objective) throw new NotFoundException(`Objective ${objectiveId} not found`);
+    this.assertNotLinked(objective);
     await this.objectiveRepo.remove(objective);
   }
 

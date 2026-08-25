@@ -492,6 +492,7 @@ export class AuthService {
       city: user.city,
       imageProfile: user.imageProfile,
       dateOfBirth: user.dateOfBirth,
+      dni: user.dni ?? null,
       peso: user.peso ?? null,
       altura: user.altura ?? null,
       sexo: user.sexo ?? null,
@@ -694,6 +695,10 @@ export class AuthService {
         user.dateOfBirth = new Date(updateUserProfileDto.dateOfBirth);
       }
     }
+    if (updateUserProfileDto.dni !== undefined) {
+      const trimmed = updateUserProfileDto.dni.trim();
+      user.dni = trimmed || null;
+    }
 
     // Guardar los cambios
     const updatedUser = await this.userRepository.save(user);
@@ -711,6 +716,7 @@ export class AuthService {
       city: updatedUser.city,
       imageProfile: updatedUser.imageProfile,
       dateOfBirth: updatedUser.dateOfBirth,
+      dni: updatedUser.dni ?? null,
       createdAt: updatedUser.created_at,
       updatedAt: updatedUser.updated_at,
     };

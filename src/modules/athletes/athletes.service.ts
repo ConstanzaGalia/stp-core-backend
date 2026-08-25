@@ -286,7 +286,7 @@ export class AthletesService {
     companyId: string,
     createAthleteDto: CreateAthleteDto,
   ): Promise<{ user: User; invitation: AthleteInvitation }> {
-    const { name, lastName, email, isOnline = false, dateOfBirth, phoneNumber, evaluationPortalOnly } = createAthleteDto;
+    const { name, lastName, email, isOnline = false, dateOfBirth, dni, phoneNumber, evaluationPortalOnly } = createAthleteDto;
 
     // Verificar que el centro existe
     const company = await this.companyRepository.findOne({
@@ -339,6 +339,7 @@ export class AthletesService {
       return !isNaN(num) ? num : undefined;
     })() : undefined;
 
+    const trimmedDni = dni?.trim() || undefined;
     const newUser = this.userRepository.create({
       name,
       lastName,
@@ -349,6 +350,7 @@ export class AthletesService {
       activeToken: null,
       evaluationPortalOnly: evaluationPortalOnly === true,
       ...(dateOfBirth && { dateOfBirth: new Date(dateOfBirth) }),
+      ...(trimmedDni && { dni: trimmedDni }),
       ...(parsedPhone !== undefined && { phoneNumber: parsedPhone }),
     });
     const savedUser = await this.userRepository.save(newUser);

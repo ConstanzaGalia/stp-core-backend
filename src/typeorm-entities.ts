@@ -27,6 +27,11 @@ import { FixedExpenseTemplate } from './entities/fixed-expense-template.entity';
 import { FixedExpenseMonthStatus } from './entities/fixed-expense-month-status.entity';
 import { Injury } from './entities/injury.entity';
 import { AthleteObjective } from './entities/athlete-objective.entity';
+import { Competition } from './entities/competition.entity';
+import { CompetitionDivision } from './entities/competition-division.entity';
+import { CompetitionParticipant } from './entities/competition-participant.entity';
+import { CompetitionParticipantMatch } from './entities/competition-participant-match.entity';
+import { CompetitionMatch } from './entities/competition-match.entity';
 import { MovementPattern } from './entities/movement-pattern.entity';
 import { SafetyTag } from './entities/safety-tag.entity';
 import { ExtraIncome } from './entities/extra-income.entity';
@@ -84,6 +89,11 @@ export const TYPEORM_ENTITIES = [
   FixedExpenseMonthStatus,
   Injury,
   AthleteObjective,
+  Competition,
+  CompetitionDivision,
+  CompetitionParticipant,
+  CompetitionParticipantMatch,
+  CompetitionMatch,
   MovementPattern,
   SafetyTag,
   ExtraIncome,

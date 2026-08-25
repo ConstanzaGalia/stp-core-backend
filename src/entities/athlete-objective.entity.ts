@@ -2,11 +2,13 @@ import {
   Column,
   CreateDateColumn,
   Entity,
+  JoinColumn,
   ManyToOne,
   PrimaryGeneratedColumn,
   UpdateDateColumn,
 } from 'typeorm';
 import { User } from './user.entity';
+import { Competition } from './competition.entity';
 
 export enum AthleteObjectiveType {
   SINGLE_DATE = 'single_date',
@@ -42,6 +44,14 @@ export class AthleteObjective {
   /** Fin de rango. */
   @Column({ type: 'date', nullable: true, name: 'end_date' })
   endDate: Date | null;
+
+  /** Objetivo generado automáticamente desde una competencia del club. */
+  @ManyToOne(() => Competition, { nullable: true, onDelete: 'CASCADE' })
+  @JoinColumn({ name: 'competition_id' })
+  competition: Competition | null;
+
+  @Column({ name: 'competition_id', type: 'uuid', nullable: true })
+  competitionId: string | null;
 
   @CreateDateColumn()
   createdAt: Date;
