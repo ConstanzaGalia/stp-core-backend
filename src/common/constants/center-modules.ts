@@ -2,6 +2,7 @@
 export const CONFIGURABLE_CENTER_MODULE_IDS = [
   'atletas',
   'evaluaciones-centro',
+  'evaluaciones-atletas',
   'entrenadores',
   'ejercicios',
   'turnos',
