@@ -42,6 +42,7 @@ const SAFETY_TAGS: { key: string; description: string; bodyZone: BodyZone }[] = 
   { key: 'no_flexion_profunda_rodilla', description: 'Evita sentadillas profundas', bodyZone: BodyZone.TREN_INFERIOR },
   { key: 'no_unilateral', description: 'Problemas de cadera, evita ejercicios unilaterales', bodyZone: BodyZone.TREN_INFERIOR },
   { key: 'no_flexion_cadera', description: 'Evita flexión de cadera bajo carga', bodyZone: BodyZone.TREN_INFERIOR },
+  { key: 'no_rotacion_cadera', description: 'Evita rotación de cadera bajo carga', bodyZone: BodyZone.TREN_INFERIOR },
   // Tren Superior
   { key: 'no_rango_overhead', description: 'Evita movimientos por encima de la cabeza', bodyZone: BodyZone.TREN_SUPERIOR },
   { key: 'no_traccion_colgada', description: 'Evita dominadas y colgarse', bodyZone: BodyZone.TREN_SUPERIOR },
