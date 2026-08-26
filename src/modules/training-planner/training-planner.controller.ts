@@ -9,6 +9,7 @@ import {
   Param,
   Query,
   UseGuards,
+  ForbiddenException,
 } from '@nestjs/common';
 import { AuthGuard } from '@nestjs/passport';
 import { UserRole } from 'src/common/enums/enums';
@@ -21,6 +22,14 @@ import { TrainingPlannerService } from './training-planner.service';
 export class TrainingPlannerController {
   constructor(private readonly service: TrainingPlannerService) {}
 
+  private assertCanModify(user: User): void {
+    if (user.role === UserRole.SECRETARIA) {
+      throw new ForbiddenException(
+        'El rol Secretaría solo puede consultar entrenamientos.',
+      );
+    }
+  }
+
   // ── Training Profile ──────────────────────────────────────────────────────
 
   /** GET /training-planner/profiles/:athleteId */
@@ -31,7 +40,12 @@ export class TrainingPlannerController {
 
   /** PUT /training-planner/profiles/:athleteId */
   @Put('profiles/:athleteId')
-  saveProfile(@Param('athleteId') athleteId: string, @Body() body: any) {
+  saveProfile(
+    @Param('athleteId') athleteId: string,
+    @Body() body: any,
+    @GetUser() user: User,
+  ) {
+    this.assertCanModify(user);
     return this.service.saveProfile(athleteId, body);
   }
 
@@ -51,13 +65,19 @@ export class TrainingPlannerController {
 
   /** POST /training-planner/macro-plans */
   @Post('macro-plans')
-  saveMacroPlan(@Body() body: any) {
+  saveMacroPlan(@Body() body: any, @GetUser() user: User) {
+    this.assertCanModify(user);
     return this.service.saveMacroPlan(body);
   }
 
   /** PUT /training-planner/macro-plans/:id/weeks */
   @Put('macro-plans/:id/weeks')
-  updateMacroPlanWeeks(@Param('id') id: string, @Body() body: any) {
+  updateMacroPlanWeeks(
+    @Param('id') id: string,
+    @Body() body: any,
+    @GetUser() user: User,
+  ) {
+    this.assertCanModify(user);
     return this.service.updateMacroPlanWeeks(id, body);
   }
 
@@ -81,7 +101,8 @@ export class TrainingPlannerController {
 
   /** POST /training-planner/weekly-templates */
   @Post('weekly-templates')
-  saveWeeklyTemplate(@Body() body: any) {
+  saveWeeklyTemplate(@Body() body: any, @GetUser() user: User) {
+    this.assertCanModify(user);
     return this.service.saveWeeklyTemplate(body);
   }
 
@@ -112,12 +133,14 @@ export class TrainingPlannerController {
   /** POST /training-planner/sessions — create or upsert */
   @Post('sessions')
   saveSession(@Body() body: any, @GetUser() user: User) {
+    this.assertCanModify(user);
     return this.service.saveSession(body, user);
   }
 
   /** PUT /training-planner/sessions/:id — explicit update */
   @Put('sessions/:id')
   updateSession(@Param('id') id: string, @Body() body: any, @GetUser() user: User) {
+    this.assertCanModify(user);
     return this.service.saveSession({ ...body, id }, user);
   }
 
@@ -126,13 +149,20 @@ export class TrainingPlannerController {
   deleteSession(
     @Param('id') id: string,
     @Query('athleteId') athleteId: string,
+    @GetUser() user: User,
   ) {
+    this.assertCanModify(user);
     return this.service.deleteSession(athleteId, id);
   }
 
   /** PATCH /training-planner/sessions/:id/feedback/draft — borrador parcial */
   @Patch('sessions/:id/feedback/draft')
-  saveFeedbackDraft(@Param('id') sessionId: string, @Body() body: any) {
+  saveFeedbackDraft(
+    @Param('id') sessionId: string,
+    @Body() body: any,
+    @GetUser() user: User,
+  ) {
+    this.assertCanModify(user);
     return this.service.mergeSessionFeedback(sessionId, {
       ...body,
       mode: 'draft',
@@ -141,7 +171,12 @@ export class TrainingPlannerController {
 
   /** POST /training-planner/sessions/:id/feedback/block — envío por circuito */
   @Post('sessions/:id/feedback/block')
-  submitBlockFeedback(@Param('id') sessionId: string, @Body() body: any) {
+  submitBlockFeedback(
+    @Param('id') sessionId: string,
+    @Body() body: any,
+    @GetUser() user: User,
+  ) {
+    this.assertCanModify(user);
     return this.service.mergeSessionFeedback(sessionId, {
       ...body,
       mode: 'block',
@@ -150,7 +185,12 @@ export class TrainingPlannerController {
 
   /** POST /training-planner/sessions/:id/feedback — envío final de sesión */
   @Post('sessions/:id/feedback')
-  submitFeedback(@Param('id') sessionId: string, @Body() body: any) {
+  submitFeedback(
+    @Param('id') sessionId: string,
+    @Body() body: any,
+    @GetUser() user: User,
+  ) {
+    this.assertCanModify(user);
     // Compat: si el body trae blocks/feedbackStatus (payload viejo de sesión completa), usar saveSession
     if (body?.blocks != null || body?.feedbackStatus != null) {
       return this.service.saveSession({ ...body, id: sessionId });
@@ -163,13 +203,19 @@ export class TrainingPlannerController {
 
   /** POST /training-planner/sessions/:id/feedback/withdraw — deshacer envío (solo pending_review) */
   @Post('sessions/:id/feedback/withdraw')
-  withdrawFeedback(@Param('id') sessionId: string, @Body() body: any) {
+  withdrawFeedback(
+    @Param('id') sessionId: string,
+    @Body() body: any,
+    @GetUser() user: User,
+  ) {
+    this.assertCanModify(user);
     return this.service.withdrawSessionFeedback(sessionId, body?.athleteId);
   }
 
   /** POST /training-planner/sessions/:id/review */
   @Post('sessions/:id/review')
   reviewFeedback(@Param('id') sessionId: string, @Body() body: any, @GetUser() user: User) {
+    this.assertCanModify(user);
     return this.service.saveSession({ ...body, id: sessionId }, user);
   }
 }
