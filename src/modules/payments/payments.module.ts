@@ -1,6 +1,7 @@
 import { Module, forwardRef } from '@nestjs/common';
 import { TypeOrmModule } from '@nestjs/typeorm';
 import { PaymentsController } from './payments.controller';
+import { PaymentsPublicController } from './payments-public.controller';
 import { PaymentsService } from './payments.service';
 import { Payment } from '../../entities/payment.entity';
 import { PaymentPlan } from '../../entities/payment-plan.entity';
@@ -40,7 +41,7 @@ import { CompanyModule } from '../company/company.module';
     MailingModule,
     CompanyModule
   ],
-  controllers: [PaymentsController],
+  controllers: [PaymentsController, PaymentsPublicController],
   providers: [
     PaymentsService,
     {

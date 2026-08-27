@@ -23,6 +23,15 @@ import { ScheduleConfig } from '../../entities/schedule-config.entity';
 import { ScheduleException } from '../../entities/schedule-exception.entity';
 import { TimeSlotGeneration } from '../../entities/time-slot-generation.entity';
 import { WaitlistReservation } from '../../entities/waitlist-reservation.entity';
+import { getStpOperatingCompanyId } from '../../common/constants/stp-operating-company';
+
+export type PublicOperatingPlan = {
+  id: string;
+  name: string;
+  description: string | null;
+  amount: number;
+  classesPerWeek: number;
+};
 
 export type CanBookClassReason =
   | 'NO_SUBSCRIPTION'
@@ -163,6 +172,23 @@ export class PaymentsService {
       where: { company: { id: companyId }, isActive: true },
       order: { classesPerWeek: 'ASC' }
     });
+  }
+
+  /** Planes activos del centro STP, solo campos públicos para la landing. */
+  async getPublicOperatingPlans(): Promise<PublicOperatingPlan[]> {
+    const companyId = getStpOperatingCompanyId();
+    const plans = await this.paymentPlanRepository.find({
+      where: { company: { id: companyId }, isActive: true },
+      order: { classesPerWeek: 'ASC', amount: 'ASC' },
+    });
+
+    return plans.map((plan) => ({
+      id: plan.id,
+      name: plan.name,
+      description: plan.description ?? null,
+      amount: Number(plan.amount),
+      classesPerWeek: plan.classesPerWeek,
+    }));
   }
 
   async updatePaymentPlan(id: string, updateData: Partial<CreatePaymentPlanDto>): Promise<PaymentPlan> {
