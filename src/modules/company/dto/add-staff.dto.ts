@@ -1,4 +1,4 @@
-import { IsEmail, IsIn, IsOptional, IsString, MinLength } from 'class-validator';
+import { IsEmail, IsIn, IsNotEmpty, IsOptional, IsString, MinLength } from 'class-validator';
 import { UserRole } from 'src/common/enums/enums';
 
 const STAFF_ROLES = [
@@ -9,12 +9,13 @@ const STAFF_ROLES = [
 ];
 
 export class AddStaffDto {
+  @IsNotEmpty()
   @IsString()
   name: string;
 
-  @IsOptional()
+  @IsNotEmpty()
   @IsString()
-  lastName?: string;
+  lastName: string;
 
   @IsEmail()
   email: string;

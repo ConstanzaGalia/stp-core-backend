@@ -700,7 +700,7 @@ export class CompanyService {
     const passwordEncrypted = await this.encryptService.encryptedData(addStaffDto.password);
     const newUser = this.userRepository.create({
       name: addStaffDto.name,
-      lastName: addStaffDto.lastName || addStaffDto.name,
+      lastName: addStaffDto.lastName,
       email: addStaffDto.email,
       password: passwordEncrypted,
       role: addStaffDto.role,
