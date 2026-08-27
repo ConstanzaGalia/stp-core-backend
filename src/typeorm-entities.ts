@@ -42,6 +42,7 @@ import { Product } from './entities/product.entity';
 import { Reservation } from './entities/reservation.entity';
 import { Sale } from './entities/sale.entity';
 import { ScheduleConfig } from './entities/schedule-config.entity';
+import { ScheduleResource } from './entities/schedule-resource.entity';
 import { ScheduleException } from './entities/schedule-exception.entity';
 import { StaffAssociationRequest } from './entities/staff-association-request.entity';
 import { StaffCompensationProfile } from './entities/staff-compensation-profile.entity';
@@ -104,6 +105,7 @@ export const TYPEORM_ENTITIES = [
   Reservation,
   Sale,
   ScheduleConfig,
+  ScheduleResource,
   ScheduleException,
   StaffAssociationRequest,
   StaffCompensationProfile,

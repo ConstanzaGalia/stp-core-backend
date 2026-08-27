@@ -1,4 +1,4 @@
-import { IsArray, IsString, IsOptional, IsInt, Min, Max, IsEnum } from 'class-validator';
+import { IsArray, IsString, IsOptional, IsInt, Min, Max, IsEnum, IsUUID } from 'class-validator';
 import { Transform } from 'class-transformer';
 import { ScheduleStatus } from 'src/entities/athlete-schedule.entity';
 
@@ -40,5 +40,9 @@ export class UpdateRecurringReservationDto {
   @IsString()
   @IsOptional()
   notes?: string;
+
+  @IsUUID()
+  @IsOptional()
+  resourceId?: string | null;
 }
 

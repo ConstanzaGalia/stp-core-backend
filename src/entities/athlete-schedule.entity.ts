@@ -1,6 +1,7 @@
-import { Entity, PrimaryGeneratedColumn, Column, ManyToOne, OneToMany, CreateDateColumn, UpdateDateColumn } from 'typeorm';
+import { Entity, PrimaryGeneratedColumn, Column, ManyToOne, OneToMany, CreateDateColumn, UpdateDateColumn, JoinColumn } from 'typeorm';
 import { User } from './user.entity';
 import { Company } from './company.entity';
+import { ScheduleResource } from './schedule-resource.entity';
 
 export enum ScheduleFrequency {
   WEEKLY = 'weekly',
@@ -62,6 +63,13 @@ export class AthleteSchedule {
 
   @Column({ type: 'date', nullable: true })
   lastGeneratedDate: Date; // Última fecha para la que se generaron reservas
+
+  @ManyToOne(() => ScheduleResource, { nullable: true, onDelete: 'SET NULL' })
+  @JoinColumn({ name: 'resource_id' })
+  resource: ScheduleResource | null;
+
+  @Column({ name: 'resource_id', type: 'uuid', nullable: true })
+  resourceId: string | null;
 
   @ManyToOne(() => User, user => user.athleteSchedules, { onDelete: 'CASCADE' })
   user: User;

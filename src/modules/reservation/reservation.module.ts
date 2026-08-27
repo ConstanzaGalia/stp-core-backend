@@ -5,6 +5,7 @@ import { Reservation } from 'src/entities/reservation.entity';
 import { TimeSlot } from 'src/entities/timeSlot.entity';
 import { User } from 'src/entities/user.entity';
 import { ScheduleConfig } from 'src/entities/schedule-config.entity';
+import { ScheduleResource } from 'src/entities/schedule-resource.entity';
 import { ScheduleException } from 'src/entities/schedule-exception.entity';
 import { TimeSlotGeneration } from 'src/entities/time-slot-generation.entity';
 import { AthleteSchedule } from 'src/entities/athlete-schedule.entity';
@@ -21,7 +22,7 @@ import { PaymentsModule } from '../payments/payments.module';
 
 @Module({
   imports: [
-    TypeOrmModule.forFeature([Reservation, TimeSlot, User, Company, ScheduleConfig, ScheduleException, TimeSlotGeneration, AthleteSchedule, UserPaymentSubscription, ClassUsage, Payment, WaitlistReservation, AvailableClass, AthleteInvitation]), 
+    TypeOrmModule.forFeature([Reservation, TimeSlot, User, Company, ScheduleConfig, ScheduleResource, ScheduleException, TimeSlotGeneration, AthleteSchedule, UserPaymentSubscription, ClassUsage, Payment, WaitlistReservation, AvailableClass, AthleteInvitation]), 
     forwardRef(() => PaymentsModule),
   ],
   controllers: [ReservationsController],

@@ -1,5 +1,6 @@
-import { Entity, PrimaryGeneratedColumn, Column, ManyToOne, CreateDateColumn, UpdateDateColumn } from 'typeorm';
+import { Entity, PrimaryGeneratedColumn, Column, ManyToOne, JoinColumn, CreateDateColumn, UpdateDateColumn } from 'typeorm';
 import { Company } from './company.entity';
+import { ScheduleResource } from './schedule-resource.entity';
 
 @Entity('schedule_config')
 export class ScheduleConfig {
@@ -32,6 +33,13 @@ export class ScheduleConfig {
 
   @Column({ type: 'boolean', default: true })
   isActive: boolean;
+
+  @ManyToOne(() => ScheduleResource, { nullable: true, onDelete: 'CASCADE' })
+  @JoinColumn({ name: 'resource_id' })
+  resource: ScheduleResource | null;
+
+  @Column({ name: 'resource_id', type: 'uuid', nullable: true })
+  resourceId: string | null;
 
   @ManyToOne(() => Company, company => company.scheduleConfigs, { onDelete: 'CASCADE' })
   company: Company;

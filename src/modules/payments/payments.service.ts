@@ -2145,6 +2145,8 @@ export class PaymentsService {
       const timeSlotRepository = this.subscriptionRepository.manager.getRepository(TimeSlot);
       const classUsageRepository = this.subscriptionRepository.manager.getRepository(ClassUsage);
       const scheduleConfigRepository = this.subscriptionRepository.manager.getRepository(ScheduleConfig);
+      const { ScheduleResource } = await import('../../entities/schedule-resource.entity');
+      const scheduleResourceRepository = this.subscriptionRepository.manager.getRepository(ScheduleResource);
       const scheduleExceptionRepository = this.subscriptionRepository.manager.getRepository(ScheduleException);
       const timeSlotGenerationRepository = this.subscriptionRepository.manager.getRepository(TimeSlotGeneration);
       const waitlistRepository = this.subscriptionRepository.manager.getRepository(WaitlistReservation);
@@ -2166,6 +2168,7 @@ export class PaymentsService {
         timeSlotRepository,
         this.companyRepository,
         scheduleConfigRepository,
+        scheduleResourceRepository,
         scheduleExceptionRepository,
         timeSlotGenerationRepository,
         athleteScheduleRepository,
@@ -2304,6 +2307,8 @@ export class PaymentsService {
       const timeSlotRepository = this.subscriptionRepository.manager.getRepository(TimeSlot);
       const classUsageRepository = this.subscriptionRepository.manager.getRepository(ClassUsage);
       const scheduleConfigRepository = this.subscriptionRepository.manager.getRepository(ScheduleConfig);
+      const { ScheduleResource } = await import('../../entities/schedule-resource.entity');
+      const scheduleResourceRepository = this.subscriptionRepository.manager.getRepository(ScheduleResource);
       const scheduleExceptionRepository = this.subscriptionRepository.manager.getRepository(ScheduleException);
       const timeSlotGenerationRepository = this.subscriptionRepository.manager.getRepository(TimeSlotGeneration);
       const waitlistRepository = this.subscriptionRepository.manager.getRepository(WaitlistReservation);
@@ -2314,7 +2319,7 @@ export class PaymentsService {
       const { ReservationsService } = await import('../reservation/reservation.service');
       const reservationsService = new ReservationsService(
         reservationRepository, timeSlotRepository, this.companyRepository,
-        scheduleConfigRepository, scheduleExceptionRepository, timeSlotGenerationRepository,
+        scheduleConfigRepository, scheduleResourceRepository, scheduleExceptionRepository, timeSlotGenerationRepository,
         athleteScheduleRepository, this.subscriptionRepository, classUsageRepository,
         this.paymentRepository, waitlistRepository, availableClassRepository, athleteInvitationRepository, this
       );

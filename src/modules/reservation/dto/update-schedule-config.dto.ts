@@ -1,4 +1,4 @@
-import { IsString, IsInt, IsBoolean, Min, Max, IsOptional } from 'class-validator';
+import { IsString, IsInt, IsBoolean, Min, Max, IsOptional, IsUUID } from 'class-validator';
 
 export class UpdateScheduleConfigDto {
   @IsInt()
@@ -44,4 +44,8 @@ export class UpdateScheduleConfigDto {
   @IsBoolean()
   @IsOptional()
   isActive?: boolean;
+
+  @IsUUID()
+  @IsOptional()
+  resourceId?: string | null;
 } 

@@ -9,6 +9,7 @@ import { CreateScheduleExceptionDto } from './dto/create-schedule-exception.dto'
 import { UpdateScheduleExceptionDto } from './dto/update-schedule-exception.dto';
 import { CreateRecurringReservationDto } from './dto/create-recurring-reservation.dto';
 import { UpdateRecurringReservationDto } from './dto/update-recurring-reservation.dto';
+import { CreateScheduleResourceDto, UpdateScheduleResourceDto } from './dto/schedule-resource.dto';
 import { AuthGuard } from '@nestjs/passport';
 import { GetUser } from '../auth/get-user.decorator';
 import { User } from 'src/entities/user.entity';
@@ -70,6 +71,41 @@ export class ReservationsController {
     await this.reservationsService.deleteScheduleConfig(id);
   }
 
+  @Get('schedule-resources/:companyId')
+  @UseGuards(AuthGuard('jwt'))
+  async listScheduleResources(@Param('companyId') companyId: string) {
+    return this.reservationsService.listScheduleResources(companyId);
+  }
+
+  @Post('schedule-resources/:companyId')
+  @UseGuards(AuthGuard('jwt'))
+  async createScheduleResource(
+    @Param('companyId') companyId: string,
+    @Body() dto: CreateScheduleResourceDto,
+  ) {
+    return this.reservationsService.createScheduleResource(companyId, dto);
+  }
+
+  @Put('schedule-resources/:companyId/:resourceId')
+  @UseGuards(AuthGuard('jwt'))
+  async updateScheduleResource(
+    @Param('companyId') companyId: string,
+    @Param('resourceId') resourceId: string,
+    @Body() dto: UpdateScheduleResourceDto,
+  ) {
+    return this.reservationsService.updateScheduleResource(companyId, resourceId, dto);
+  }
+
+  @Delete('schedule-resources/:companyId/:resourceId')
+  @UseGuards(AuthGuard('jwt'))
+  async deleteScheduleResource(
+    @Param('companyId') companyId: string,
+    @Param('resourceId') resourceId: string,
+  ) {
+    await this.reservationsService.deleteScheduleResource(companyId, resourceId);
+    return { success: true };
+  }
+
   @Post('generate-timeslots/:companyId')
   @UseGuards(AuthGuard('jwt'))
   async generateTimeSlotsFromConfig(
@@ -101,13 +137,14 @@ export class ReservationsController {
   @UseGuards(AuthGuard('jwt'))
   async getTimeSlots(
     @Param('companyId') companyId: string,
+    @GetUser() user: User,
     @Query('startDate') startDate?: string,
     @Query('endDate') endDate?: string,
   ) {
     const start = startOfDateOnlyLocal(startDate);
     const end = endOfDateOnlyLocal(endDate);
 
-    return this.reservationsService.getAvailableTimeSlots(companyId, start, end);
+    return this.reservationsService.getAvailableTimeSlots(companyId, start, end, user.id);
   }
 
   /**

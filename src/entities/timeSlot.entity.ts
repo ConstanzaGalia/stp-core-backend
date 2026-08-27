@@ -1,6 +1,7 @@
-import { Entity, PrimaryGeneratedColumn, Column, ManyToOne, OneToMany } from 'typeorm';
+import { Entity, PrimaryGeneratedColumn, Column, ManyToOne, OneToMany, JoinColumn } from 'typeorm';
 import { Company } from './company.entity';
 import { Reservation } from './reservation.entity';
+import { ScheduleResource } from './schedule-resource.entity';
 
 @Entity()
 export class TimeSlot {
@@ -30,6 +31,13 @@ export class TimeSlot {
 
   @Column({ type: 'boolean', default: false })
   isIntermediateSlot: boolean; // Indica si es un turno intermedio/superpuesto
+
+  @ManyToOne(() => ScheduleResource, { nullable: true, onDelete: 'SET NULL' })
+  @JoinColumn({ name: 'resource_id' })
+  resource: ScheduleResource | null;
+
+  @Column({ name: 'resource_id', type: 'uuid', nullable: true })
+  resourceId: string | null;
 
   @ManyToOne(() => Company, company => company.timeSlots, { onDelete: 'CASCADE' })
   company: Company;

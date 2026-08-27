@@ -1,4 +1,4 @@
-import { IsString, IsArray, IsInt, IsDateString, Min, Max, ArrayNotEmpty, IsOptional } from 'class-validator';
+import { IsString, IsArray, IsInt, IsDateString, Min, Max, ArrayNotEmpty, IsOptional, IsUUID } from 'class-validator';
 
 export enum RecurringFrequency {
   WEEKLY = 'weekly',
@@ -54,5 +54,9 @@ export class CreateRecurringReservationDto {
   @IsString()
   @IsOptional()
   notes?: string; // Notas opcionales para las reservas
+
+  @IsUUID()
+  @IsOptional()
+  resourceId?: string;
 }
 

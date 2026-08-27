@@ -10,6 +10,7 @@ import { Slot } from './slot.entity';
 import { TrainingPlan } from './traininPlan.entity';
 import { TimeSlot } from './timeSlot.entity';
 import { ScheduleConfig } from './schedule-config.entity';
+import { ScheduleResource } from './schedule-resource.entity';
 import { ScheduleException } from './schedule-exception.entity';
 import { TimeSlotGeneration } from './time-slot-generation.entity';
 import { AthleteInvitation } from './athlete-invitation.entity';
@@ -95,6 +96,9 @@ export class Company {
 
   @OneToMany(() => ScheduleConfig, scheduleConfig => scheduleConfig.company)
   scheduleConfigs: ScheduleConfig[];
+
+  @OneToMany(() => ScheduleResource, scheduleResource => scheduleResource.company)
+  scheduleResources: ScheduleResource[];
 
   @OneToMany(() => ScheduleException, scheduleException => scheduleException.company)
   scheduleExceptions: ScheduleException[];
