@@ -21,6 +21,11 @@ import {
 import { ScreeningScoringService } from './screening-scoring.service';
 import { ScreeningBiomechanicalProfileService } from './screening-biomechanical-profile.service';
 import type { SaveTestPayload } from './screening.types';
+import {
+  calendarDateInArgentina,
+  parseDateOnlyLocal,
+  toDateOnlyKey,
+} from 'src/common/utils/date-only.util';
 
 @Injectable()
 export class BiomechanicalScreeningService implements OnModuleInit {
@@ -115,7 +120,7 @@ export class BiomechanicalScreeningService implements OnModuleInit {
     const athlete = await this.physicalEvaluations.assertCanAccessAthlete(actor, athleteUserId, true);
     const protocol = await this.getActiveProtocol();
     const definition = protocol.definition ?? STP_FUNCTIONAL_SCREENING_V1;
-    const evaluationDate = dto.evaluationDate ? new Date(dto.evaluationDate) : new Date();
+    const evaluationDate = this.parseEvaluationDate(dto.evaluationDate);
 
     const session = this.sessionRepo.create({
       user: athlete,
@@ -265,11 +270,19 @@ export class BiomechanicalScreeningService implements OnModuleInit {
     assertOptions(payload.observations, testDef.name);
   }
 
+  private parseEvaluationDate(isoOrYmd?: string): Date {
+    const parsed = parseDateOnlyLocal(isoOrYmd ?? calendarDateInArgentina());
+    if (!parsed) throw new BadRequestException('evaluationDate inválida');
+    parsed.setHours(12, 0, 0, 0);
+    return parsed;
+  }
+
+  private formatEvaluationDate(value: Date | string | null | undefined): string {
+    return toDateOnlyKey(value) ?? String(value ?? '').slice(0, 10);
+  }
+
   private refreshReports(session: BiomechanicalScreeningSession, definition: ScreeningProtocolDefinition) {
-    const date =
-      session.evaluationDate instanceof Date
-        ? session.evaluationDate.toISOString().slice(0, 10)
-        : String(session.evaluationDate).slice(0, 10);
+    const date = this.formatEvaluationDate(session.evaluationDate);
     const computed = this.scoring.buildReports(definition, session.tests, date, session.notes);
     session.summaryReport = computed.summaryReport;
     session.fullReport = computed.fullReport;
@@ -293,7 +306,7 @@ export class BiomechanicalScreeningService implements OnModuleInit {
     const summaryReport = this.ensureBiomechanicalProfile(session, session.summaryReport);
     return {
       id: session.id,
-      evaluationDate: session.evaluationDate,
+      evaluationDate: this.formatEvaluationDate(session.evaluationDate),
       status: session.status,
       currentTestCode: session.currentTestCode,
       savedCount,
@@ -329,7 +342,7 @@ export class BiomechanicalScreeningService implements OnModuleInit {
         evaluatorName: session.evaluator
           ? `${session.evaluator.name} ${session.evaluator.lastName}`.trim()
           : null,
-        evaluationDate: session.evaluationDate,
+        evaluationDate: this.formatEvaluationDate(session.evaluationDate),
         status: session.status,
         currentTestCode: session.currentTestCode,
         notes: session.notes,
