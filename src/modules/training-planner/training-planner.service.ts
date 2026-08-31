@@ -18,6 +18,8 @@ interface SessionExerciseMeta {
   videoUrl: string | null;
   esIsometrico: boolean;
   unilateral: boolean;
+  movementPattern: string | null;
+  primaryCategory: string | null;
 }
 
 interface FeedbackExercisePayload {
@@ -536,7 +538,7 @@ export class TrainingPlannerService {
 
     const exercises = await this.exerciseRepo.find({
       where: { id: In(exerciseIds) },
-      select: ['id', 'video', 'esIsometrico', 'unilateral'],
+      relations: ['movementPattern', 'primaryCategory'],
     });
 
     for (const exercise of exercises) {
@@ -544,6 +546,8 @@ export class TrainingPlannerService {
         videoUrl: exercise.video?.trim() || null,
         esIsometrico: exercise.esIsometrico ?? false,
         unilateral: exercise.unilateral ?? false,
+        movementPattern: exercise.movementPattern?.name?.trim() || null,
+        primaryCategory: exercise.primaryCategory?.name?.trim() || null,
       });
     }
 
@@ -574,6 +578,8 @@ export class TrainingPlannerService {
             videoUrl: meta.videoUrl,
             esIsometrico: meta.esIsometrico,
             unilateral: meta.unilateral,
+            movementPattern: meta.movementPattern ?? (ex as { movementPattern?: string | null }).movementPattern ?? null,
+            primaryCategory: meta.primaryCategory,
           };
         }),
       };
