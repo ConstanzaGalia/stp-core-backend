@@ -125,7 +125,8 @@ export class PhysicalEvaluationService {
   }
 
   /**
-   * Listado para el hub staff: miembros del centro (incl. portal-only) con al menos una evaluación física "útil".
+   * Listado para el hub staff: alumnos con evaluaciones físicas útiles,
+   * más participantes solo-evaluaciones aunque todavía no tengan ninguna.
    */
   async listHubAthletesWithPhysicalEvaluations(
     actor: User,
@@ -175,25 +176,36 @@ export class PhysicalEvaluationService {
       if (!uid) continue;
       const list = byUser.get(uid) ?? [];
       const meaningful = list.filter((ev) => !isStpLegacyOnlyPhysicalEvaluation(ev));
-      if (meaningful.length === 0) continue;
-      let maxTime = 0;
-      for (const ev of meaningful) {
-        const d = ev.evaluationDate instanceof Date ? ev.evaluationDate : new Date(ev.evaluationDate);
-        const t = d.getTime();
-        if (t > maxTime) maxTime = t;
+      const portalOnly = inv.user!.evaluationPortalOnly === true;
+      if (meaningful.length === 0 && !portalOnly) continue;
+      let lastEvaluationDate = '';
+      if (meaningful.length > 0) {
+        let maxTime = 0;
+        for (const ev of meaningful) {
+          const d = ev.evaluationDate instanceof Date ? ev.evaluationDate : new Date(ev.evaluationDate);
+          const t = d.getTime();
+          if (t > maxTime) maxTime = t;
+        }
+        lastEvaluationDate = new Date(maxTime).toISOString().slice(0, 10);
       }
-      const last = new Date(maxTime);
       result.push({
         userId: uid,
         name: inv.user!.name,
         lastName: inv.user!.lastName,
         primarySport: inv.user!.primarySport ?? null,
-        evaluationPortalOnly: inv.user!.evaluationPortalOnly === true,
+        evaluationPortalOnly: portalOnly,
         evaluationCount: meaningful.length,
-        lastEvaluationDate: last.toISOString().slice(0, 10),
+        lastEvaluationDate,
       });
     }
-    result.sort((a, b) => b.lastEvaluationDate.localeCompare(a.lastEvaluationDate));
+    result.sort((a, b) => {
+      if (a.lastEvaluationDate && b.lastEvaluationDate) {
+        return b.lastEvaluationDate.localeCompare(a.lastEvaluationDate);
+      }
+      if (a.lastEvaluationDate) return -1;
+      if (b.lastEvaluationDate) return 1;
+      return `${a.lastName} ${a.name}`.localeCompare(`${b.lastName} ${b.name}`, 'es');
+    });
     return result;
   }
 

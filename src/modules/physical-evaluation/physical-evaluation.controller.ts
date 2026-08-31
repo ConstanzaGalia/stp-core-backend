@@ -15,7 +15,7 @@ import { UpdateEvaluationCriteriaDto } from './dto/update-evaluation-criteria.dt
 export class PhysicalEvaluationController {
   constructor(private readonly service: PhysicalEvaluationService) {}
 
-  /** Hub staff: atletas del centro con evaluaciones físicas relevantes (incluye portal-only). */
+  /** Hub staff: evaluaciones físicas + participantes externos (aunque no tengan tests aún). */
   @Get('hub/company/:companyId/athletes')
   listHub(@GetUser() actor: User, @Param('companyId') companyId: string) {
     return this.service.listHubAthletesWithPhysicalEvaluations(actor, companyId);
