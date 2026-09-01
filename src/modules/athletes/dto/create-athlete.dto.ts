@@ -1,4 +1,5 @@
-import { IsBoolean, IsEmail, IsNotEmpty, IsOptional, IsString, Matches } from 'class-validator';
+import { IsBoolean, IsEmail, IsIn, IsNotEmpty, IsNumber, IsOptional, IsString, Matches, Max, Min, ValidateIf } from 'class-validator';
+import { Type } from 'class-transformer';
 
 export class CreateAthleteDto {
   @IsNotEmpty()
@@ -35,4 +36,25 @@ export class CreateAthleteDto {
   @IsOptional()
   @IsBoolean()
   evaluationPortalOnly?: boolean;
+
+  @IsOptional()
+  @ValidateIf((_, v) => v != null && v !== '')
+  @IsIn(['femenino', 'masculino'])
+  sexo?: string | null;
+
+  @IsOptional()
+  @ValidateIf((_, v) => v !== null && v !== undefined)
+  @Type(() => Number)
+  @IsNumber()
+  @Min(20)
+  @Max(250)
+  peso?: number | null;
+
+  @IsOptional()
+  @ValidateIf((_, v) => v !== null && v !== undefined)
+  @Type(() => Number)
+  @IsNumber()
+  @Min(100)
+  @Max(250)
+  altura?: number | null;
 }

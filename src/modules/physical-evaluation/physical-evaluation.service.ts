@@ -137,6 +137,8 @@ export class PhysicalEvaluationService {
       name: string;
       lastName: string;
       primarySport: string | null;
+      sexo: string | null;
+      peso: number | null;
       evaluationPortalOnly: boolean;
       evaluationCount: number;
       lastEvaluationDate: string;
@@ -167,6 +169,8 @@ export class PhysicalEvaluationService {
       name: string;
       lastName: string;
       primarySport: string | null;
+      sexo: string | null;
+      peso: number | null;
       evaluationPortalOnly: boolean;
       evaluationCount: number;
       lastEvaluationDate: string;
@@ -193,6 +197,8 @@ export class PhysicalEvaluationService {
         name: inv.user!.name,
         lastName: inv.user!.lastName,
         primarySport: inv.user!.primarySport ?? null,
+        sexo: inv.user!.sexo ?? null,
+        peso: inv.user!.peso ?? null,
         evaluationPortalOnly: portalOnly,
         evaluationCount: meaningful.length,
         lastEvaluationDate,

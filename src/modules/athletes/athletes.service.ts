@@ -286,7 +286,7 @@ export class AthletesService {
     companyId: string,
     createAthleteDto: CreateAthleteDto,
   ): Promise<{ user: User; invitation: AthleteInvitation }> {
-    const { name, lastName, email, isOnline = false, dateOfBirth, dni, phoneNumber, evaluationPortalOnly } = createAthleteDto;
+    const { name, lastName, email, isOnline = false, dateOfBirth, dni, phoneNumber, evaluationPortalOnly, sexo, peso, altura } = createAthleteDto;
 
     // Verificar que el centro existe
     const company = await this.companyRepository.findOne({
@@ -322,8 +322,24 @@ export class AthletesService {
         });
         const savedInvitation = await this.invitationRepository.save(invitation);
         await this.addUserToCompany(existingUser.id, companyId);
+        let touched = false;
         if (evaluationPortalOnly === true) {
           existingUser.evaluationPortalOnly = true;
+          touched = true;
+        }
+        if (sexo === 'femenino' || sexo === 'masculino') {
+          existingUser.sexo = sexo;
+          touched = true;
+        }
+        if (peso != null && Number.isFinite(Number(peso))) {
+          existingUser.peso = Number(peso);
+          touched = true;
+        }
+        if (altura != null && Number.isFinite(Number(altura))) {
+          existingUser.altura = Number(altura);
+          touched = true;
+        }
+        if (touched) {
           await this.userRepository.save(existingUser);
         }
         return { user: existingUser, invitation: savedInvitation };
@@ -352,6 +368,9 @@ export class AthletesService {
       ...(dateOfBirth && { dateOfBirth: new Date(dateOfBirth) }),
       ...(trimmedDni && { dni: trimmedDni }),
       ...(parsedPhone !== undefined && { phoneNumber: parsedPhone }),
+      ...(sexo === 'femenino' || sexo === 'masculino' ? { sexo } : {}),
+      ...(peso != null && Number.isFinite(Number(peso)) ? { peso: Number(peso) } : {}),
+      ...(altura != null && Number.isFinite(Number(altura)) ? { altura: Number(altura) } : {}),
     });
     const savedUser = await this.userRepository.save(newUser);
 
