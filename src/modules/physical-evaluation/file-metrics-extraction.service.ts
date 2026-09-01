@@ -275,6 +275,8 @@ export class FileMetricsExtractionService {
     metrics.csv_row_count = records.length;
     metrics.csv_format = 'metrics_vertical_v1';
 
+    collapseEmptyUnilateralPlates(metrics);
+
     if (testType === 'unknown') {
       metrics.header_join = headerKeysJoin(records[0] || {});
     }
@@ -307,4 +309,38 @@ export class FileMetricsExtractionService {
 
 function headerKeysJoin(firstRow: Record<string, string>): string {
   return Object.keys(firstRow || {}).join(' ');
+}
+
+const UNILATERAL_PLATE_FAMILIES = [
+  'fuerza_pico',
+  'fuerza_media',
+  'tiempo_de_fuerza_pico',
+  'rfd_en_50ms',
+  'rfd_en_100ms',
+  'rfd_en_150ms',
+  'rfd_en_250ms',
+  'fuerza_en_50ms',
+  'fuerza_en_100ms',
+  'fuerza_en_150ms',
+  'fuerza_en_250ms',
+];
+
+/**
+ * McCall a una pierna: Ivolution deja la otra placa en 0.
+ * Copia el máximo ≠ 0 a la clave genérica (fuerza_pico, rfd_en_100ms, …).
+ */
+function collapseEmptyUnilateralPlates(metrics: Record<string, unknown>): void {
+  for (const base of UNILATERAL_PLATE_FAMILIES) {
+    const positives: number[] = [];
+    for (const [key, raw] of Object.entries(metrics)) {
+      if (typeof raw !== 'number' || !Number.isFinite(raw) || raw <= 0.5) continue;
+      const nk = key.toLowerCase().replace(/_values$/, '');
+      if (nk === base || nk.startsWith(`${base}_`)) positives.push(raw);
+    }
+    if (!positives.length) continue;
+    const current = metrics[base];
+    if (typeof current !== 'number' || current <= 0.5) {
+      metrics[base] = Math.max(...positives);
+    }
+  }
 }

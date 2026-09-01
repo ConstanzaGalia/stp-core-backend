@@ -2,6 +2,7 @@ import { Injectable, Logger } from '@nestjs/common';
 import * as fs from 'fs';
 import * as path from 'path';
 import type {
+  AthleteSex,
   CategoryName,
   CategoryScores,
   DerivedVariables,
@@ -24,7 +25,14 @@ const DEFAULT_NORMATIVES: NormativeThresholds = {
   fatigue_index: [25, 18, 12, 8],
   asymmetry_pct: [20, 15, 10, 6],
   elasticity_pct: [8, 12, 18, 25],
-  force_bw_ratio: [15, 20, 25, 30],
+  force_bw_ratio: [8, 11, 14.5, 18],
+  mccall_30_30_n_kg_femenino: [1.8, 2.2, 2.8, 3.3],
+  mccall_30_30_n_kg_masculino: [2.3, 2.7, 3.4, 4.0],
+  cmj_power_w_kg_femenino: [28, 34, 42, 50],
+  cmj_power_w_kg_masculino: [35, 42, 52, 62],
+  propulsive_power_rel: [32, 42, 52, 62],
+  cmj_rsi_mod: [0.6, 0.85, 1.05, 1.25],
+  propulsive_impulse_rel: [2.0, 2.4, 2.8, 3.3],
 };
 
 function round(value: number, digits = 2): number {
@@ -108,7 +116,7 @@ export class CapacityScoringService {
       const raw = fs.readFileSync(filePath, 'utf-8');
       const parsed = JSON.parse(raw) as NormativesConfigFile;
       if (parsed.thresholds) {
-        this.normatives = parsed.thresholds;
+        this.normatives = { ...DEFAULT_NORMATIVES, ...parsed.thresholds };
         this.logger.log(`Normativas cargadas (${parsed.version})`);
       }
     } catch (err) {
@@ -121,54 +129,42 @@ export class CapacityScoringService {
     return this.normatives;
   }
 
-  score(derived: DerivedVariables, rulesConfig: RulesConfigFile | null): ScoringResult {
+  score(
+    derived: DerivedVariables,
+    rulesConfig: RulesConfigFile | null,
+    athleteSex: AthleteSex | null = null,
+  ): ScoringResult {
     const thr = this.normatives;
 
-    const potencia = weightedAverage([
-      { score: scoreHigherIsBetter(derived.cmj_height, thr.cmj_height_cm), weight: 0.5 },
-      {
-        score: scoreHigherIsBetter(derived.cmj_propulsive_force, thr.propulsive_force_n),
-        weight: 0.25,
-      },
-      {
-        score: scoreHigherIsBetter(derived.cmj_propulsive_power, thr.propulsive_power),
-        weight: 0.25,
-      },
-    ]);
+    // Potencia = solo W/kg del CMJ; la banda depende del sexo.
+    const powerBands =
+      athleteSex === 'femenino'
+        ? thr.cmj_power_w_kg_femenino
+        : athleteSex === 'masculino'
+          ? thr.cmj_power_w_kg_masculino
+          : null;
+    const potencia = powerBands
+      ? scoreHigherIsBetter(derived.cmj_propulsive_power_rel, powerBands)
+      : null;
 
     const reactividad = weightedAverage([
-      { score: scoreHigherIsBetter(derived.reactive_rsi, thr.rsi), weight: 0.7 },
+      { score: scoreHigherIsBetter(derived.dj_rsi, thr.rsi), weight: 0.7 },
       {
-        score: scoreLowerIsBetter(derived.reactive_contact_time, thr.contact_time_s),
+        score: scoreLowerIsBetter(derived.dj_contact_time, thr.contact_time_s),
         weight: 0.3,
       },
     ]);
 
-    const fuerzaParts: Array<{ score: number | null; weight: number }> = [
-      {
-        score: scoreHigherIsBetter(derived.cmj_braking_force, thr.braking_force_n),
-        weight: 0.35,
-      },
-      {
-        score: scoreLowerIsBetter(derived.cmj_braking_time, thr.braking_time_s),
-        weight: 0.15,
-      },
-      {
-        score: scoreHigherIsBetter(derived.cmj_propulsive_force, thr.propulsive_force_n),
-        weight: 0.25,
-      },
-    ];
-    if (derived.force_to_body_weight_ratio != null) {
-      fuerzaParts.push({
-        score: scoreHigherIsBetter(derived.force_to_body_weight_ratio, thr.force_bw_ratio),
-        weight: 0.25,
-      });
-    } else {
-      fuerzaParts[0].weight += 0.08;
-      fuerzaParts[1].weight += 0.05;
-      fuerzaParts[2].weight += 0.12;
-    }
-    const fuerza = weightedAverage(fuerzaParts);
+    // La banda del McCall depende del sexo: sin ese dato no se puntúa el eje.
+    const mccallBands =
+      athleteSex === 'femenino'
+        ? thr.mccall_30_30_n_kg_femenino
+        : athleteSex === 'masculino'
+          ? thr.mccall_30_30_n_kg_masculino
+          : null;
+    const fuerza = mccallBands
+      ? scoreHigherIsBetter(derived.force_to_body_weight_ratio, mccallBands)
+      : null;
 
     const estrategiaParts: Array<{ score: number | null; weight: number }> = [];
     if (derived.elasticity_index != null) {

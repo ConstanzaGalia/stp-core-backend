@@ -103,19 +103,19 @@
     {
       "id": "fuerza_relativa_baja",
       "category": "fuerza",
-      "condition": "force_to_body_weight_ratio < 15",
+      "condition": "force_to_body_weight_ratio < 8",
       "severity": "alta",
       "score_impact": -2,
-      "message": "Fuerza isométrica relativa baja (McCall / N por kg)",
+      "message": "Fuerza isométrica relativa baja (McCall unilateral, N/kg)",
       "recommendation": "Priorizar fuerza máxima e isometrías progresivas antes de alta complejidad"
     },
     {
       "id": "fuerza_relativa_ok",
       "category": "fuerza",
-      "condition": "force_to_body_weight_ratio >= 25",
+      "condition": "force_to_body_weight_ratio >= 14.5",
       "severity": "baja",
       "score_impact": 1,
-      "message": "Buena expresión de fuerza relativa",
+      "message": "Buena expresión de fuerza relativa en McCall (N/kg por pierna)",
       "recommendation": "Mantener y transferir a gestos dinámicos"
     },
     {

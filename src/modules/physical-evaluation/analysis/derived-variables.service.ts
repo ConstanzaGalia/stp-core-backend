@@ -48,11 +48,25 @@ const MCCALL_FORCE_ALIASES = [
   'fuerza_max_propulsiva_izq',
   'peak_force',
   'peak_force_n',
+  'peak_force_left',
+  'peak_force_right',
   'fuerza_maxima',
   'fuerza_pico',
+  'fuerza_pico_izquierda',
+  'fuerza_pico_derecha',
+  'fuerza_pico_izq',
+  'fuerza_pico_der',
 ];
 
 const CUSTOM_LIKE = new Set(['custom', 'unknown', 'force_platform', '']);
+
+function toBodyMassKg(raw: number | null): number | null {
+  if (raw == null || !Number.isFinite(raw) || raw <= 0) return null;
+  if (raw >= 25 && raw <= 220) return round(raw, 2);
+  // Ivolution suele exportar peso en newtons (785 N ≈ 80 kg).
+  if (raw >= 245 && raw <= 2200) return round(raw / 9.80665, 2);
+  return null;
+}
 
 function looksLikeCmjMetrics(metrics: Record<string, number[]>): boolean {
   const hasHeight =
@@ -108,6 +122,39 @@ function gatherWithFallback(
   const scoped = gatherFromTests(tests, aliases, typeSet);
   if (scoped.length) return scoped;
   return gatherFromTests(tests, aliases);
+}
+
+function isMcCallPeakKey(key: string): boolean {
+  const k = key.toLowerCase().replace(/_values$/, '');
+  return (
+    k === 'fuerza_pico' ||
+    k.startsWith('fuerza_pico_') ||
+    k === 'peak_force' ||
+    k.startsWith('peak_force_') ||
+    k === 'fuerza_maxima' ||
+    k === 'fuerza_max_propulsiva' ||
+    k.startsWith('fuerza_max_propulsiva_')
+  );
+}
+
+/** Placa vacía Ivolution (~0 N). No promediar con el pico real. */
+function positiveMax(nums: number[]): number | null {
+  const pos = nums.filter((n) => Number.isFinite(n) && n > 0.5);
+  if (!pos.length) return null;
+  return Math.max(...pos);
+}
+
+function mccallPeakFromTest(t: NormalizedTest): number | null {
+  const values: number[] = [];
+  for (const [key, arr] of Object.entries(t.metrics)) {
+    if (!arr?.length) continue;
+    if (isMcCallPeakKey(key)) values.push(...arr);
+  }
+  for (const alias of MCCALL_FORCE_ALIASES) {
+    const arr = t.metrics[alias];
+    if (arr?.length) values.push(...arr);
+  }
+  return positiveMax(values);
 }
 
 function mccallSide(testType: string): 'left' | 'right' | 'unknown' {
@@ -182,6 +229,12 @@ export class DerivedVariablesService {
       'peak_propulsive_power',
     ]);
 
+    const cmjPropImpulse = gatherWithFallback(normalized, CMJ_TYPES, [
+      'impulso_propulsivo',
+      'propulsive_impulse',
+      'impulso_positivo',
+    ]);
+
     const djRsi = gatherFromTests(normalized, RSI_ALIASES, DJ_TYPES);
     const djContactRaw = gatherFromTests(normalized, CONTACT_ALIASES, DJ_TYPES);
 
@@ -216,12 +269,7 @@ export class DerivedVariablesService {
     const reactiveContact = djContactAvg != null ? djContactAvg : cmjContactAvg;
 
     const pesoVals = gatherFromTests(normalized, PESO_ALIASES);
-    const bodyWeightKg = (() => {
-      const p = avg(pesoVals);
-      if (p == null || !Number.isFinite(p)) return null;
-      if (p >= 25 && p <= 220) return round(p, 2);
-      return null;
-    })();
+    const bodyWeightKg = toBodyMassKg(avg(pesoVals));
 
     let mccallLeft: number | null = null;
     let mccallRight: number | null = null;
@@ -229,12 +277,8 @@ export class DerivedVariablesService {
 
     for (const t of normalized) {
       if (!MCCALL_TYPES.has(t.testType.trim().toLowerCase())) continue;
-      const peaks: number[] = [];
-      for (const alias of MCCALL_FORCE_ALIASES) {
-        const arr = t.metrics[alias];
-        if (arr?.length) peaks.push(...arr);
-      }
-      const peak = avg(peaks);
+      // Un archivo = una pierna: tomar el máximo ≠ 0 de las placas y asignarlo al tipo de test.
+      const peak = mccallPeakFromTest(t);
       if (peak == null) continue;
       mccallPeaks.push(peak);
       const side = mccallSide(t.testType);
@@ -265,12 +309,24 @@ export class DerivedVariablesService {
       forceBw = +(mccallPeakForce / bodyWeightKg).toFixed(2);
     }
 
+    const cmjPowerAvg = avg(cmjPropPower);
+    const cmjImpulseAvg = avg(cmjPropImpulse);
+    let cmjPowerRel: number | null = null;
+    let cmjImpulseRel: number | null = null;
+    if (bodyWeightKg != null && bodyWeightKg > 0) {
+      if (cmjPowerAvg != null) cmjPowerRel = +(cmjPowerAvg / bodyWeightKg).toFixed(2);
+      if (cmjImpulseAvg != null) cmjImpulseRel = +(cmjImpulseAvg / bodyWeightKg).toFixed(3);
+    }
+
     return {
       cmj_height: round(cmjH, 2),
       cmj_braking_time: round(avg(cmjBrakingTime), 3),
       cmj_braking_force: round(avg(cmjBrakingForce), 2),
       cmj_propulsive_force: round(avg(cmjPropForce), 2),
-      cmj_propulsive_power: round(avg(cmjPropPower), 2),
+      cmj_propulsive_power: round(cmjPowerAvg, 2),
+      cmj_propulsive_power_rel: cmjPowerRel,
+      cmj_propulsive_impulse: round(cmjImpulseAvg, 2),
+      cmj_propulsive_impulse_rel: cmjImpulseRel,
       dj_rsi: round(djRsiAvg, 3),
       dj_contact_time: round(djContactAvg, 3),
       cmj_rsi: round(cmjRsiAvg, 3),
@@ -313,7 +369,10 @@ export class DerivedVariablesService {
       'asimetria_aterrizaje',
     ];
 
-    const values = gatherFromTests(tests, asymmetryAliases).map((value) => Math.abs(value));
+    const values = gatherFromTests(
+      tests.filter((t) => !MCCALL_TYPES.has(t.testType.trim().toLowerCase())),
+      asymmetryAliases,
+    ).map((value) => Math.abs(value));
 
     const direct = avg(values);
     if (direct != null) {

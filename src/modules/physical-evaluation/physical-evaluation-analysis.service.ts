@@ -11,7 +11,7 @@ import type {
   StrategyBlock,
   StructuredAnalysis,
 } from './analysis/analysis.types';
-import { DERIVED_VAR_KEYS } from './analysis/analysis.types';
+import { DERIVED_VAR_KEYS, normalizeAthleteSex } from './analysis/analysis.types';
 import { MetricsNormalizerService } from './analysis/metrics-normalizer.service';
 import { DerivedVariablesService } from './analysis/derived-variables.service';
 import { RulesEngineService } from './analysis/rules-engine.service';
@@ -45,7 +45,8 @@ export class PhysicalEvaluationAnalysisService {
     return this.fallback;
   }
 
-  analyze(tests: PhysicalTestInput[]): FullAnalysisResult {
+  /** `athleteSex` habilita la banda de referencia del McCall; sin él ese eje queda sin puntaje. */
+  analyze(tests: PhysicalTestInput[], athleteSex?: string | null): FullAnalysisResult {
     if (!tests.length) {
       return {
         summaryScore: null,
@@ -58,7 +59,11 @@ export class PhysicalEvaluationAnalysisService {
     const derived = this.derivedVars.compute(normalized);
     const triggered = this.rulesEngine.evaluate(derived);
     const config = this.rulesEngine.getConfig();
-    const { categoryScores, totalScore, level } = this.scoring.score(derived, config);
+    const { categoryScores, totalScore, level } = this.scoring.score(
+      derived,
+      config,
+      normalizeAthleteSex(athleteSex),
+    );
     const analysis = this.analysisGen.generate(derived, triggered, categoryScores, totalScore, level);
     const narrativeText = this.analysisGen.generateNarrativeText(analysis);
 

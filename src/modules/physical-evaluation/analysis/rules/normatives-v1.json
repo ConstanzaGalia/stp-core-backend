@@ -12,6 +12,13 @@
     "fatigue_index": [25, 18, 12, 8],
     "asymmetry_pct": [20, 15, 10, 6],
     "elasticity_pct": [8, 12, 18, 25],
-    "force_bw_ratio": [15, 20, 25, 30]
+    "force_bw_ratio": [8, 11, 14.5, 18],
+    "mccall_30_30_n_kg_femenino": [1.8, 2.2, 2.8, 3.3],
+    "mccall_30_30_n_kg_masculino": [2.3, 2.7, 3.4, 4.0],
+    "cmj_power_w_kg_femenino": [28, 34, 42, 50],
+    "cmj_power_w_kg_masculino": [35, 42, 52, 62],
+    "propulsive_power_rel": [32, 42, 52, 62],
+    "cmj_rsi_mod": [0.6, 0.85, 1.05, 1.25],
+    "propulsive_impulse_rel": [2.0, 2.4, 2.8, 3.3]
   }
 }

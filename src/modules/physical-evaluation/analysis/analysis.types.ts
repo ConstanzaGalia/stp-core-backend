@@ -9,6 +9,9 @@ export interface DerivedVariables {
   cmj_braking_force: number | null;
   cmj_propulsive_force: number | null;
   cmj_propulsive_power: number | null;
+  cmj_propulsive_power_rel: number | null;
+  cmj_propulsive_impulse: number | null;
+  cmj_propulsive_impulse_rel: number | null;
   dj_rsi: number | null;
   dj_contact_time: number | null;
   cmj_rsi: number | null;
@@ -33,6 +36,9 @@ export const DERIVED_VAR_KEYS: (keyof DerivedVariables)[] = [
   'cmj_braking_force',
   'cmj_propulsive_force',
   'cmj_propulsive_power',
+  'cmj_propulsive_power_rel',
+  'cmj_propulsive_impulse',
+  'cmj_propulsive_impulse_rel',
   'dj_rsi',
   'dj_contact_time',
   'cmj_rsi',
@@ -71,6 +77,34 @@ export const RADAR_CATEGORY_NAMES: CategoryName[] = [
 
 /** Categorías que entran en el promedio global (excluye `global`). */
 export const WEIGHTED_CATEGORIES: CategoryName[] = RADAR_CATEGORY_NAMES.filter((c) => c !== 'global');
+
+export type AthleteSex = 'femenino' | 'masculino';
+
+const SEX_ALIASES: Record<string, AthleteSex> = {
+  f: 'femenino',
+  fem: 'femenino',
+  femenino: 'femenino',
+  femenina: 'femenino',
+  female: 'femenino',
+  mujer: 'femenino',
+  m: 'masculino',
+  masc: 'masculino',
+  masculino: 'masculino',
+  masculina: 'masculino',
+  male: 'masculino',
+  varon: 'masculino',
+  hombre: 'masculino',
+};
+
+export function normalizeAthleteSex(raw: string | null | undefined): AthleteSex | null {
+  const normalized = (raw ?? '')
+    .normalize('NFD')
+    .replace(/[\u0300-\u036f]/g, '')
+    .trim()
+    .toLowerCase();
+  if (!normalized) return null;
+  return SEX_ALIASES[normalized] ?? null;
+}
 
 export type Severity = 'alta' | 'media' | 'baja';
 
@@ -173,6 +207,18 @@ export interface NormativeThresholds {
   asymmetry_pct: [number, number, number, number];
   elasticity_pct: [number, number, number, number];
   force_bw_ratio: [number, number, number, number];
+  /**
+   * McCall 30-30, fuerza pico relativa N/kg (no es IMTP bilateral).
+   * Depende del sexo: sin ese dato el eje de fuerza queda en null.
+   */
+  mccall_30_30_n_kg_femenino?: [number, number, number, number];
+  mccall_30_30_n_kg_masculino?: [number, number, number, number];
+  /** CMJ potencia máxima propulsiva relativa W/kg; banda por sexo. */
+  cmj_power_w_kg_femenino?: [number, number, number, number];
+  cmj_power_w_kg_masculino?: [number, number, number, number];
+  propulsive_power_rel?: [number, number, number, number];
+  cmj_rsi_mod?: [number, number, number, number];
+  propulsive_impulse_rel?: [number, number, number, number];
 }
 
 export interface NormativesConfigFile {

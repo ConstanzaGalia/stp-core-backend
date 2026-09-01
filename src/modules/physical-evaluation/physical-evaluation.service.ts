@@ -408,7 +408,7 @@ export class PhysicalEvaluationService {
   async recomputeEvaluationSummary(evaluationId: string): Promise<void> {
     const ev = await this.evaluationRepo.findOne({
       where: { id: evaluationId },
-      relations: ['tests'],
+      relations: ['tests', 'user'],
     });
     if (!ev) throw new NotFoundException('Evaluación no encontrada');
 
@@ -424,7 +424,7 @@ export class PhysicalEvaluationService {
       testType: t.testType,
       metrics: t.metrics ?? {},
     }));
-    const computed = this.analysisService.analyze(inputs);
+    const computed = this.analysisService.analyze(inputs, ev.user?.sexo ?? null);
     ev.summaryScore = computed.summaryScore;
     ev.summaryAnalysis = computed.summaryAnalysis;
     ev.structuredAnalysis = computed.structuredAnalysis as unknown as Record<string, unknown>;
@@ -454,7 +454,7 @@ export class PhysicalEvaluationService {
       metrics: t.metrics ?? {},
     }));
 
-    const computed = this.analysisService.analyze(inputs);
+    const computed = this.analysisService.analyze(inputs, target?.sexo ?? null);
 
     const staffOverride = this.isStaff(actor);
     let summaryScore = computed.summaryScore;
