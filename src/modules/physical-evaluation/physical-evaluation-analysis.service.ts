@@ -79,7 +79,7 @@ export class PhysicalEvaluationAnalysisService {
     const trainingDecision = this.trainingDecision.build(triggered, categoryScores);
 
     const structuredAnalysis: StructuredAnalysis = {
-      version: '1.1',
+      version: 'neuromuscular-profile-v2',
       derivedVariables: derived,
       triggeredRules: triggered.map((t) => ({
         id: t.rule.id,
@@ -237,13 +237,15 @@ export class PhysicalEvaluationAnalysisService {
 
   private emptyStructuredAnalysis(): StructuredAnalysis {
     return {
-      version: '1.1',
+      version: 'neuromuscular-profile-v2',
       derivedVariables: this.emptyDerived(),
       triggeredRules: [],
       categoryScores: {
         potencia: null,
         reactividad: null,
         fuerza: null,
+        fuerza_unilateral: null,
+        absorcion_simetria: null,
         estrategia: null,
         resistencia: null,
         asimetria: null,

@@ -26,6 +26,13 @@ export interface DerivedVariables {
   mccall_peak_force_right: number | null;
   mccall_asymmetry_pct: number | null;
   force_to_body_weight_ratio: number | null;
+  force_to_body_weight_left: number | null;
+  force_to_body_weight_right: number | null;
+  mccall_rfd_100_left: number | null;
+  mccall_rfd_100_right: number | null;
+  cmj_landing_asymmetry: number | null;
+  cmj_propulsive_asymmetry: number | null;
+  dj_height: number | null;
   fatigue_index: number | null;
   asymmetry: number | null;
 }
@@ -53,6 +60,13 @@ export const DERIVED_VAR_KEYS: (keyof DerivedVariables)[] = [
   'mccall_peak_force_right',
   'mccall_asymmetry_pct',
   'force_to_body_weight_ratio',
+  'force_to_body_weight_left',
+  'force_to_body_weight_right',
+  'mccall_rfd_100_left',
+  'mccall_rfd_100_right',
+  'cmj_landing_asymmetry',
+  'cmj_propulsive_asymmetry',
+  'dj_height',
   'fatigue_index',
   'asymmetry',
 ];
@@ -64,15 +78,16 @@ export type CategoryName =
   | 'estrategia'
   | 'resistencia'
   | 'asimetria'
+  | 'fuerza_unilateral'
+  | 'absorcion_simetria'
   | 'global';
 
 export const RADAR_CATEGORY_NAMES: CategoryName[] = [
   'potencia',
   'reactividad',
   'fuerza',
-  'estrategia',
-  'resistencia',
-  'asimetria',
+  'fuerza_unilateral',
+  'absorcion_simetria',
 ];
 
 /** Categorías que entran en el promedio global (excluye `global`). */

@@ -144,6 +144,20 @@ function positiveMax(nums: number[]): number | null {
   return Math.max(...pos);
 }
 
+function mccallMetricFromTest(t: NormalizedTest, aliases: string[]): number | null {
+  const values: number[] = [];
+  for (const alias of aliases) {
+    const arr = t.metrics[alias];
+    if (arr?.length) values.push(...arr);
+  }
+  for (const [key, arr] of Object.entries(t.metrics)) {
+    if (!arr?.length) continue;
+    const k = key.toLowerCase();
+    if (aliases.some((a) => k === a || k.startsWith(`${a}_`))) values.push(...arr);
+  }
+  return positiveMax(values);
+}
+
 function mccallPeakFromTest(t: NormalizedTest): number | null {
   const values: number[] = [];
   for (const [key, arr] of Object.entries(t.metrics)) {
@@ -273,7 +287,10 @@ export class DerivedVariablesService {
 
     let mccallLeft: number | null = null;
     let mccallRight: number | null = null;
+    let mccallRfdLeft: number | null = null;
+    let mccallRfdRight: number | null = null;
     const mccallPeaks: number[] = [];
+    const rfdAliases = ['rfd_en_100ms', 'rfd_100ms', 'rfd_100'];
 
     for (const t of normalized) {
       if (!MCCALL_TYPES.has(t.testType.trim().toLowerCase())) continue;
@@ -282,8 +299,15 @@ export class DerivedVariablesService {
       if (peak == null) continue;
       mccallPeaks.push(peak);
       const side = mccallSide(t.testType);
-      if (side === 'left') mccallLeft = peak;
-      if (side === 'right') mccallRight = peak;
+      const rfd = mccallMetricFromTest(t, rfdAliases);
+      if (side === 'left') {
+        mccallLeft = peak;
+        mccallRfdLeft = rfd;
+      }
+      if (side === 'right') {
+        mccallRight = peak;
+        mccallRfdRight = rfd;
+      }
     }
 
     const mccallPeakForce = mccallPeaks.length ? avg(mccallPeaks) : null;
@@ -305,9 +329,25 @@ export class DerivedVariablesService {
     }
 
     let forceBw: number | null = null;
-    if (bodyWeightKg != null && bodyWeightKg > 0 && mccallPeakForce != null) {
-      forceBw = +(mccallPeakForce / bodyWeightKg).toFixed(2);
+    let forceBwLeft: number | null = null;
+    let forceBwRight: number | null = null;
+    if (bodyWeightKg != null && bodyWeightKg > 0) {
+      if (mccallPeakForce != null) forceBw = +(mccallPeakForce / bodyWeightKg).toFixed(2);
+      if (mccallLeft != null) forceBwLeft = +(mccallLeft / bodyWeightKg).toFixed(2);
+      if (mccallRight != null) forceBwRight = +(mccallRight / bodyWeightKg).toFixed(2);
     }
+
+    const cmjLandingAsymVals = gatherFromTests(normalized, ['asimetria_aterrizaje', 'landing_asymmetry'], CMJ_TYPES).map(
+      (v) => Math.abs(v),
+    );
+    const cmjPropAsymVals = gatherFromTests(normalized, ['asimetria_propulsiva', 'propulsive_asymmetry'], CMJ_TYPES).map(
+      (v) => Math.abs(v),
+    );
+
+    const djHeightRaw = gatherFromTests(normalized, HEIGHT_ALIASES, DJ_TYPES);
+    const djHeights = djHeightRaw
+      .map((value) => (value > 5 ? value : value * 100))
+      .filter((value) => Number.isFinite(value));
 
     const cmjPowerAvg = avg(cmjPropPower);
     const cmjImpulseAvg = avg(cmjPropImpulse);
@@ -341,6 +381,13 @@ export class DerivedVariablesService {
       mccall_peak_force_right: mccallRight != null ? round(mccallRight, 2) : null,
       mccall_asymmetry_pct: mccallAsym,
       force_to_body_weight_ratio: forceBw,
+      force_to_body_weight_left: forceBwLeft,
+      force_to_body_weight_right: forceBwRight,
+      mccall_rfd_100_left: round(mccallRfdLeft, 1),
+      mccall_rfd_100_right: round(mccallRfdRight, 1),
+      cmj_landing_asymmetry: round(avg(cmjLandingAsymVals), 1),
+      cmj_propulsive_asymmetry: round(avg(cmjPropAsymVals), 1),
+      dj_height: round(avg(djHeights), 2),
       fatigue_index: fatigueIndex,
       asymmetry,
     };

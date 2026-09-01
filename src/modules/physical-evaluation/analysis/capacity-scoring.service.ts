@@ -143,28 +143,60 @@ export class CapacityScoringService {
         : athleteSex === 'masculino'
           ? thr.cmj_power_w_kg_masculino
           : null;
-    const potencia = powerBands
-      ? scoreHigherIsBetter(derived.cmj_propulsive_power_rel, powerBands)
-      : null;
-
-    const reactividad = weightedAverage([
-      { score: scoreHigherIsBetter(derived.dj_rsi, thr.rsi), weight: 0.7 },
+    const potencia = weightedAverage([
+      { score: powerBands ? scoreHigherIsBetter(derived.cmj_propulsive_power_rel, powerBands) : null, weight: 0.4 },
       {
-        score: scoreLowerIsBetter(derived.dj_contact_time, thr.contact_time_s),
-        weight: 0.3,
+        score: scoreHigherIsBetter(derived.cmj_propulsive_impulse_rel, thr.propulsive_impulse_rel ?? [2, 2.4, 2.8, 3.3]),
+        weight: 0.25,
       },
+      { score: scoreHigherIsBetter(derived.cmj_rsi, thr.cmj_rsi_mod ?? [0.6, 0.85, 1.05, 1.25]), weight: 0.2 },
+      { score: scoreHigherIsBetter(derived.cmj_height, thr.cmj_height_cm), weight: 0.15 },
     ]);
 
-    // La banda del McCall depende del sexo: sin ese dato no se puntúa el eje.
+    const reactividad = weightedAverage([
+      { score: scoreHigherIsBetter(derived.dj_rsi, thr.rsi), weight: 0.4 },
+      { score: scoreLowerIsBetter(derived.dj_contact_time, thr.contact_time_s), weight: 0.35 },
+      { score: scoreHigherIsBetter(derived.dj_height, [18, 24, 30, 36]), weight: 0.25 },
+    ]);
+
     const mccallBands =
       athleteSex === 'femenino'
         ? thr.mccall_30_30_n_kg_femenino
         : athleteSex === 'masculino'
           ? thr.mccall_30_30_n_kg_masculino
           : null;
-    const fuerza = mccallBands
-      ? scoreHigherIsBetter(derived.force_to_body_weight_ratio, mccallBands)
-      : null;
+    const fuerza = weightedAverage([
+      { score: mccallBands ? scoreHigherIsBetter(derived.force_to_body_weight_left, mccallBands) : null, weight: 0.28 },
+      { score: mccallBands ? scoreHigherIsBetter(derived.force_to_body_weight_right, mccallBands) : null, weight: 0.28 },
+      {
+        score: mccallBands ? scoreHigherIsBetter(derived.force_to_body_weight_ratio, mccallBands) : null,
+        weight:
+          derived.force_to_body_weight_left == null && derived.force_to_body_weight_right == null ? 0.28 : 0.08,
+      },
+      {
+        score: scoreHigherIsBetter(derived.cmj_propulsive_impulse_rel, thr.propulsive_impulse_rel ?? [2, 2.4, 2.8, 3.3]),
+        weight: 0.22,
+      },
+    ]);
+
+    const rfdGap =
+      derived.mccall_rfd_100_left != null && derived.mccall_rfd_100_right != null
+        ? Math.abs(derived.mccall_rfd_100_left - derived.mccall_rfd_100_right) /
+          Math.max(derived.mccall_rfd_100_left, derived.mccall_rfd_100_right) *
+          100
+        : null;
+    const fuerzaUnilateral = weightedAverage([
+      { score: mccallBands ? scoreHigherIsBetter(derived.force_to_body_weight_ratio, mccallBands) : null, weight: 0.35 },
+      { score: scoreLowerIsBetter(derived.mccall_asymmetry_pct, thr.asymmetry_pct), weight: 0.25 },
+      { score: scoreLowerIsBetter(rfdGap, thr.asymmetry_pct), weight: 0.2 },
+    ]);
+
+    const absorcion = weightedAverage([
+      { score: scoreLowerIsBetter(derived.cmj_landing_asymmetry, thr.asymmetry_pct), weight: 0.4 },
+      { score: scoreLowerIsBetter(derived.cmj_braking_time, thr.braking_time_s), weight: 0.2 },
+      { score: scoreLowerIsBetter(derived.mccall_asymmetry_pct, thr.asymmetry_pct), weight: 0.2 },
+      { score: scoreLowerIsBetter(derived.cmj_propulsive_asymmetry, thr.asymmetry_pct), weight: 0.2 },
+    ]);
 
     const estrategiaParts: Array<{ score: number | null; weight: number }> = [];
     if (derived.elasticity_index != null) {
@@ -184,15 +216,16 @@ export class CapacityScoringService {
     const estrategia = weightedAverage(estrategiaParts);
 
     const resistencia = scoreLowerIsBetter(derived.fatigue_index, thr.fatigue_index);
-    const asimetria = scoreLowerIsBetter(derived.asymmetry, thr.asymmetry_pct);
 
     const categoryScores: CategoryScores = {
       potencia: potencia == null ? null : round(potencia),
       reactividad: reactividad == null ? null : round(reactividad),
       fuerza: fuerza == null ? null : round(fuerza),
+      fuerza_unilateral: fuerzaUnilateral == null ? null : round(fuerzaUnilateral),
+      absorcion_simetria: absorcion == null ? null : round(absorcion),
       estrategia: estrategia == null ? null : round(estrategia),
       resistencia: resistencia == null ? null : round(resistencia),
-      asimetria: asimetria == null ? null : round(asimetria),
+      asimetria: absorcion == null ? null : round(absorcion),
       global: null,
     };
 

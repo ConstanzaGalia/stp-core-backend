@@ -13,6 +13,8 @@ const CATEGORY_LABELS: Record<CategoryName, string> = {
   potencia: 'Potencia',
   reactividad: 'Reactividad',
   fuerza: 'Fuerza',
+  fuerza_unilateral: 'Fuerza unilateral',
+  absorcion_simetria: 'Absorción / simetría',
   estrategia: 'Estrategia neuromuscular',
   resistencia: 'Resistencia neuromuscular',
   asimetria: 'Simetría bilateral',

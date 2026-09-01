@@ -29,6 +29,8 @@ export const COACH_DASHBOARD_CAPACITY_KEYS = [
   'potencia',
   'reactividad',
   'fuerza',
+  'fuerza_unilateral',
+  'absorcion_simetria',
   'estrategia',
   'resistencia',
   'asimetria',
