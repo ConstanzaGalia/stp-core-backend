@@ -78,7 +78,11 @@ export class UserPaymentSubscription {
   companyId: string;
 
   @ManyToOne(() => PaymentPlan, paymentPlan => paymentPlan.userSubscriptions)
+  @JoinColumn({ name: 'paymentPlanId' })
   paymentPlan: PaymentPlan;
+
+  @Column({ nullable: true })
+  paymentPlanId: string;
 
   @OneToMany(() => Payment, payment => payment.subscription)
   payments: Payment[];

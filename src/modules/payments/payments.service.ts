@@ -273,7 +273,8 @@ export class PaymentsService {
       autoRenew: true, // Siempre se renueva
       company: { id: companyId },
       user: { id: createSubscriptionDto.userId },
-      paymentPlan: { id: createSubscriptionDto.paymentPlanId }
+      paymentPlan: { id: createSubscriptionDto.paymentPlanId },
+      paymentPlanId: createSubscriptionDto.paymentPlanId,
     });
 
     const savedSubscription = await this.subscriptionRepository.save(subscription);
@@ -597,6 +598,7 @@ export class PaymentsService {
       }
     }
 
+    await this.syncSubscriptionPlanFromPaidAccess(subscription, paidPeriodAccess.plan);
     await this.renewWeeklyCounters(subscription);
 
     const updatedSubscription = await this.subscriptionRepository.findOne({
@@ -612,7 +614,19 @@ export class PaymentsService {
       };
     }
 
-    if ((updatedSubscription.classesRemainingThisWeek ?? 0) <= 0) {
+    const allowedThisWeek = this.resolveWeeklyClassAllowance(
+      paidPeriodAccess.plan,
+      updatedSubscription,
+    );
+    const usedThisWeek = updatedSubscription.classesUsedThisWeek ?? 0;
+    if (allowedThisWeek > 0 && usedThisWeek >= allowedThisWeek) {
+      return {
+        canBook: false,
+        reason: 'WEEKLY_LIMIT',
+        message: CAN_BOOK_CLASS_MESSAGES.WEEKLY_LIMIT,
+      };
+    }
+    if (allowedThisWeek <= 0 && (updatedSubscription.classesRemainingThisWeek ?? 0) <= 0) {
       return {
         canBook: false,
         reason: 'WEEKLY_LIMIT',
@@ -1915,6 +1929,49 @@ export class PaymentsService {
     return studentsResult;
   }
 
+  private applyPaymentPlanToSubscription(
+    subscription: UserPaymentSubscription,
+    plan: PaymentPlan,
+  ): void {
+    subscription.paymentPlan = plan;
+    subscription.paymentPlanId = plan.id;
+  }
+
+  private resolveWeeklyClassAllowance(
+    paidPlan: PaymentPlan | null | undefined,
+    subscription: UserPaymentSubscription | null | undefined,
+  ): number {
+    return paidPlan?.classesPerWeek ?? subscription?.paymentPlan?.classesPerWeek ?? 0;
+  }
+
+  /**
+   * Si el último pago PAID tiene otro plan que la suscripción, alinea el FK y los cupos.
+   * Cubre desfasajes viejos (pago 3x / suscripción 2x).
+   */
+  private async syncSubscriptionPlanFromPaidAccess(
+    subscription: UserPaymentSubscription,
+    paidPlan: PaymentPlan | null | undefined,
+  ): Promise<UserPaymentSubscription> {
+    if (!paidPlan?.id) return subscription;
+    const currentPlanId = subscription.paymentPlanId ?? subscription.paymentPlan?.id;
+    if (currentPlanId === paidPlan.id) return subscription;
+
+    this.applyPaymentPlanToSubscription(subscription, paidPlan);
+    const usedWeek = subscription.classesUsedThisWeek ?? 0;
+    const usedPeriod = subscription.classesUsedThisPeriod ?? 0;
+    subscription.classesRemainingThisWeek = Math.max(0, (paidPlan.classesPerWeek ?? 0) - usedWeek);
+    subscription.classesRemainingThisPeriod = Math.max(0, (paidPlan.maxClassesPerPeriod ?? 0) - usedPeriod);
+    await this.subscriptionRepository.update(subscription.id, {
+      paymentPlanId: paidPlan.id,
+      classesRemainingThisWeek: subscription.classesRemainingThisWeek,
+      classesRemainingThisPeriod: subscription.classesRemainingThisPeriod,
+    });
+    this.logger.log(
+      `syncSubscriptionPlanFromPaidAccess -> subscription=${subscription.id} plan ${currentPlanId} -> ${paidPlan.id}`,
+    );
+    return subscription;
+  }
+
   /**
    * Reinicia los períodos y contadores mensuales de una suscripción
    * @param paymentDate Fecha del pago (opcional, por defecto hoy)
@@ -1929,8 +1986,7 @@ export class PaymentsService {
     let paymentPlanToUse = subscription.paymentPlan;
     if (newPaymentPlan) {
       paymentPlanToUse = newPaymentPlan;
-      // Actualizar la relación en la base de datos
-      subscription.paymentPlan = newPaymentPlan;
+      this.applyPaymentPlanToSubscription(subscription, newPaymentPlan);
     }
 
     // Asegurarse de que paymentPlan esté cargado
@@ -1989,7 +2045,13 @@ export class PaymentsService {
     subscription.classesUsedThisWeek = 0;
     subscription.classesRemainingThisWeek = paymentPlanToUse.classesPerWeek;
 
-    return await this.subscriptionRepository.save(subscription);
+    const saved = await this.subscriptionRepository.save(subscription);
+    if (paymentPlanToUse?.id) {
+      await this.subscriptionRepository.update(saved.id, { paymentPlanId: paymentPlanToUse.id });
+      saved.paymentPlanId = paymentPlanToUse.id;
+      saved.paymentPlan = paymentPlanToUse;
+    }
+    return saved;
   }
 
   /**
@@ -2057,7 +2119,11 @@ export class PaymentsService {
       // Siempre reiniciar el período cuando se paga una nueva cuota mensual
       // Esto asegura que cada pago mensual reinicie los contadores
       // Pasar la fecha del pago para calcular el período correctamente
-      subscription = await this.resetMonthlyPeriod(existingSubscription, planChanged ? newPaymentPlan : undefined, paymentDate);
+      subscription = await this.resetMonthlyPeriod(
+        existingSubscription,
+        planChanged ? newPaymentPlan : undefined,
+        paymentDate,
+      );
     } else {
       // Si no existe suscripción activa, crear una nueva
       // Usar la fecha del pago como startDate si no se proporciona otra fecha
@@ -2090,6 +2156,11 @@ export class PaymentsService {
 
     if (!pendingPayment) {
       throw new BadRequestException('No pending payments found for this subscription');
+    }
+
+    const planForPayment = subscription.paymentPlan ?? newPaymentPlan;
+    if (planForPayment?.id) {
+      pendingPayment.paymentPlan = { id: planForPayment.id } as PaymentPlan;
     }
 
     const lateFee = this.resolveAppliedLateFee({
@@ -2258,7 +2329,7 @@ export class PaymentsService {
   private async completePaymentById(dto: CompletePaymentDto, paymentId: string): Promise<{ subscription: UserPaymentSubscription | null; payment: Payment; reservationsGenerated?: boolean }> {
     const payment = await this.paymentRepository.findOne({
       where: { id: paymentId },
-      relations: ['subscription', 'subscription.user', 'subscription.company', 'subscription.paymentPlan', 'user', 'company']
+      relations: ['subscription', 'subscription.user', 'subscription.company', 'subscription.paymentPlan', 'paymentPlan', 'user', 'company']
     });
     if (!payment) throw new NotFoundException('Payment not found');
     // Validar por user/company del pago (funciona con o sin suscripción)
@@ -2311,8 +2382,31 @@ export class PaymentsService {
     const userId = subscription.user.id;
     const companyId = subscription.company.id;
 
+    let planForReset: PaymentPlan | undefined;
+    if (dto.paymentPlanId && dto.paymentPlanId !== subscription.paymentPlan?.id) {
+      const dtoPlan = await this.paymentPlanRepository.findOne({
+        where: { id: dto.paymentPlanId },
+        relations: ['company'],
+      });
+      if (dtoPlan && dtoPlan.company?.id === companyId) {
+        planForReset = dtoPlan;
+        payment.paymentPlan = dtoPlan;
+        await this.paymentRepository
+          .createQueryBuilder()
+          .update(Payment)
+          .set({ paymentPlan: { id: dtoPlan.id } })
+          .where('id = :id', { id: savedPayment.id })
+          .execute();
+      }
+    } else if (
+      payment.paymentPlan?.id
+      && payment.paymentPlan.id !== (subscription.paymentPlanId ?? subscription.paymentPlan?.id)
+    ) {
+      planForReset = payment.paymentPlan;
+    }
+
     // Reiniciar el período mensual con la fecha del pago (igual que completePayment)
-    subscription = await this.resetMonthlyPeriod(subscription, undefined, paymentDate);
+    subscription = await this.resetMonthlyPeriod(subscription, planForReset, paymentDate);
 
     subscription.paidInstallments = 1;
     subscription.pendingInstallments = 0;
@@ -2986,7 +3080,11 @@ export class PaymentsService {
     let updatedSubscription = subscription;
     let expiredClasses: any[] = [];
     if (hasActiveSubscription && subscription) {
-      updatedSubscription = await this.renewWeeklyCounters(subscription);
+      updatedSubscription = await this.syncSubscriptionPlanFromPaidAccess(
+        subscription,
+        paidPeriodAccess.plan,
+      );
+      updatedSubscription = await this.renewWeeklyCounters(updatedSubscription);
       expiredClasses = await this.getExpiredClasses(updatedSubscription);
     }
 
@@ -3082,7 +3180,7 @@ export class PaymentsService {
         weekEndDate: currentWeekEnd.toISOString().split('T')[0],
         classesUsedThisWeek: updatedSubscription.classesUsedThisWeek,
         classesRemainingThisWeek: updatedSubscription.classesRemainingThisWeek,
-        classesAllowedPerWeek: updatedSubscription.paymentPlan?.classesPerWeek,
+        classesAllowedPerWeek: this.resolveWeeklyClassAllowance(plan, updatedSubscription),
       };
     })() : (subscription || paidPeriodAccess.lastPaidPayment ? {
       id: subscription?.id ?? null,
