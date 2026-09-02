@@ -16,8 +16,8 @@ export class CreateFixedExpenseTemplateDto {
   defaultCategory?: string;
 
   @IsOptional()
-  @IsIn(['ARS', 'USD'])
-  defaultCurrency?: 'ARS' | 'USD';
+  @IsIn(['ARS', 'USD', 'EUR'])
+  defaultCurrency?: 'ARS' | 'USD' | 'EUR';
 }
 
 export class UpdateFixedExpenseTemplateDto {
@@ -36,8 +36,8 @@ export class UpdateFixedExpenseTemplateDto {
   defaultCategory?: string;
 
   @IsOptional()
-  @IsIn(['ARS', 'USD'])
-  defaultCurrency?: 'ARS' | 'USD';
+  @IsIn(['ARS', 'USD', 'EUR'])
+  defaultCurrency?: 'ARS' | 'USD' | 'EUR';
 
   @IsOptional()
   @IsBoolean()

@@ -17,6 +17,9 @@ export class PaymentPlan {
   @Column({ type: 'decimal', precision: 10, scale: 2 })
   amount: number; // Monto mensual
 
+  @Column({ type: 'varchar', length: 3, default: 'ARS' })
+  currency: string;
+
   @Column({ type: 'int', default: 30 })
   frequencyDays: number; // Siempre 30 días (mensual)
 

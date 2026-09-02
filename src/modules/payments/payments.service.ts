@@ -72,6 +72,7 @@ import { UpdateFixedExpenseChecklistDto } from './dto/update-fixed-expense-check
 import { MailingService } from '../mailer/mailing.service';
 import { CompanyService } from '../company/company.service';
 import { UserRole } from '../../common/enums/enums';
+import { CenterCurrency, normalizeMoneyCurrency, resolveCompanyCurrencies } from '../../common/center-currencies';
 
 /** Fecha calendario desde input HTML (YYYY-MM-DD), sin interpretación UTC que desplace el día. */
 function parseCalendarDateInput(dateStr: string): Date {
@@ -143,6 +144,15 @@ export class PaymentsService {
     private readonly companyService: CompanyService,
   ) {}
 
+  private resolvePlanCurrency(company?: Company | null, requested?: string): CenterCurrency {
+    const { enabledCurrencies, defaultCurrency } = resolveCompanyCurrencies(company ?? undefined);
+    const currency = requested ? normalizeMoneyCurrency(requested, defaultCurrency) : defaultCurrency;
+    if (!enabledCurrencies.includes(currency)) {
+      throw new BadRequestException('La moneda del plan no está habilitada en el centro');
+    }
+    return currency;
+  }
+
   // ===== PLANES DE PAGO =====
   async createPaymentPlan(companyId: string, createPaymentPlanDto: CreatePaymentPlanDto): Promise<PaymentPlan> {
     const company = await this.companyRepository.findOne({ where: { id: companyId } });
@@ -156,8 +166,11 @@ export class PaymentsService {
       );
     }
 
+    const currency = this.resolvePlanCurrency(company, createPaymentPlanDto.currency);
+
     const paymentPlan = this.paymentPlanRepository.create({
       ...createPaymentPlanDto,
+      currency,
       frequencyDays: 30, // Siempre 30 días
       totalInstallments: 1, // Siempre 1 cuota
       isRecurring: true, // Siempre se renueva
@@ -192,9 +205,16 @@ export class PaymentsService {
   }
 
   async updatePaymentPlan(id: string, updateData: Partial<CreatePaymentPlanDto>): Promise<PaymentPlan> {
-    const paymentPlan = await this.paymentPlanRepository.findOne({ where: { id } });
+    const paymentPlan = await this.paymentPlanRepository.findOne({
+      where: { id },
+      relations: ['company'],
+    });
     if (!paymentPlan) {
       throw new NotFoundException('Payment plan not found');
+    }
+
+    if (updateData.currency !== undefined) {
+      updateData.currency = this.resolvePlanCurrency(paymentPlan.company, updateData.currency);
     }
 
     // Validar coherencia mínima: el período debe cubrir al menos una semana de clases
@@ -841,15 +861,19 @@ export class PaymentsService {
     const startDate = new Date(year, month - 1, 1);
     const endDate = new Date(year, month, 0, 23, 59, 59, 999);
 
-    const payments = await this.paymentRepository.find({
-      where: {
-        company: { id: companyId },
-        status: PaymentStatus.PAID,
-        paidDate: Between(startDate, endDate)
-      },
-      relations: ['user', 'paymentPlan']
-    });
+    const [payments, company] = await Promise.all([
+      this.paymentRepository.find({
+        where: {
+          company: { id: companyId },
+          status: PaymentStatus.PAID,
+          paidDate: Between(startDate, endDate)
+        },
+        relations: ['user', 'paymentPlan']
+      }),
+      this.companyRepository.findOne({ where: { id: companyId } }),
+    ]);
 
+    const { defaultCurrency } = resolveCompanyCurrencies(company ?? undefined);
     const total = payments.reduce((sum, p) => sum + Number(p.totalAmount || 0), 0);
 
     return {
@@ -862,7 +886,7 @@ export class PaymentsService {
         planName: p.paymentPlan?.name || null,
         concept: p.concept,
         type: 'cuota' as const,
-        currency: 'ARS' as const
+        currency: normalizeMoneyCurrency(p.paymentPlan?.currency, defaultCurrency)
       }))
     };
   }
@@ -891,7 +915,7 @@ export class PaymentsService {
         category: i.category,
         concept: i.concept,
         type: 'extraordinario' as const,
-        currency: (i.currency || 'ARS') as 'ARS' | 'USD'
+        currency: normalizeMoneyCurrency(i.currency)
       }))
     };
   }
@@ -919,7 +943,7 @@ export class PaymentsService {
         date: e.date,
         description: e.description,
         category: e.category,
-        currency: (e.currency || 'ARS') as 'ARS' | 'USD',
+        currency: normalizeMoneyCurrency(e.currency),
         fixedExpenseTemplateId: e.fixedExpenseTemplate?.id ?? null,
       }))
     };
@@ -1153,7 +1177,9 @@ export class PaymentsService {
       date: parseCalendarDateInput(createExpenseDto.date),
       description: createExpenseDto.description,
       category: createExpenseDto.category,
-      currency: createExpenseDto.currency || 'ARS',
+      currency: createExpenseDto.currency || resolveCompanyCurrencies(
+        (await this.companyRepository.findOne({ where: { id: companyId } })) ?? undefined,
+      ).defaultCurrency,
       company: { id: companyId },
       ...(createExpenseDto.fixedExpenseTemplateId
         ? { fixedExpenseTemplate: { id: createExpenseDto.fixedExpenseTemplateId } }
@@ -1269,7 +1295,7 @@ export class PaymentsService {
     const extraIncome = this.extraIncomeRepository.create({
       ...dto,
       date: parseCalendarDateInput(dto.date),
-      currency: dto.currency || 'ARS',
+      currency: dto.currency || resolveCompanyCurrencies(company).defaultCurrency,
       company: { id: companyId }
     });
     return await this.extraIncomeRepository.save(extraIncome);
@@ -1340,6 +1366,9 @@ export class PaymentsService {
     const incomeFromExtra = extraIncomes.reduce((sum, i) => sum + Number(i.amount || 0), 0);
     const totalIncome = incomeFromPayments + incomeFromExtra;
     const totalExpenses = expenses.reduce((sum, e) => sum + Number(e.amount || 0), 0);
+    const { defaultCurrency } = resolveCompanyCurrencies(
+      (await this.companyRepository.findOne({ where: { id: companyId } })) ?? undefined,
+    );
 
     const incomeDetail = [
       ...payments.map(p => ({
@@ -1350,7 +1379,7 @@ export class PaymentsService {
         planName: p.paymentPlan?.name || null,
         concept: p.concept,
         type: 'cuota' as const,
-        currency: 'ARS' as const
+        currency: normalizeMoneyCurrency(p.paymentPlan?.currency, defaultCurrency)
       })),
       ...extraIncomes.map(i => ({
         id: i.id,
@@ -1360,7 +1389,7 @@ export class PaymentsService {
         category: i.category,
         concept: i.concept,
         type: 'extraordinario' as const,
-        currency: (i.currency || 'ARS') as 'ARS' | 'USD'
+        currency: normalizeMoneyCurrency(i.currency)
       }))
     ].sort((a, b) => new Date(b.date).getTime() - new Date(a.date).getTime());
 
@@ -1370,7 +1399,7 @@ export class PaymentsService {
       date: e.date,
       description: e.description,
       category: e.category,
-      currency: (e.currency || 'ARS') as 'ARS' | 'USD'
+      currency: normalizeMoneyCurrency(e.currency)
     }));
 
     return {
@@ -1390,7 +1419,13 @@ export class PaymentsService {
     companyId: string,
     year?: number,
     month?: number
-  ): Promise<{ cajaArs: number; cajaUsd: number }> {
+  ): Promise<{
+    cajaArs: number;
+    cajaUsd: number;
+    defaultCurrency: CenterCurrency;
+    enabledCurrencies: CenterCurrency[];
+    byCurrency: Record<CenterCurrency, number>;
+  }> {
     let startDate: Date | undefined;
     let endDate: Date | undefined;
     if (year != null && month != null) {
@@ -1419,21 +1454,40 @@ export class PaymentsService {
       expenseWhere.date = Between(startDate, endDate);
     }
 
-    const [payments, extraIncomes, expenses] = await Promise.all([
-      this.paymentRepository.find({ where: paymentWhere }),
+    const [payments, extraIncomes, expenses, company] = await Promise.all([
+      this.paymentRepository.find({ where: paymentWhere, relations: ['paymentPlan'] }),
       this.extraIncomeRepository.find({ where: extraWhere }),
-      this.expenseRepository.find({ where: expenseWhere })
+      this.expenseRepository.find({ where: expenseWhere }),
+      this.companyRepository.findOne({ where: { id: companyId } }),
     ]);
 
-    const incomeArs = payments.reduce((sum, p) => sum + Number(p.totalAmount || 0), 0) +
-      extraIncomes.filter(i => (i.currency || 'ARS') === 'ARS').reduce((sum, i) => sum + Number(i.amount || 0), 0);
-    const incomeUsd = extraIncomes.filter(i => i.currency === 'USD').reduce((sum, i) => sum + Number(i.amount || 0), 0);
-    const expenseArs = expenses.filter(e => (e.currency || 'ARS') === 'ARS').reduce((sum, e) => sum + Number(e.amount || 0), 0);
-    const expenseUsd = expenses.filter(e => e.currency === 'USD').reduce((sum, e) => sum + Number(e.amount || 0), 0);
+    const { enabledCurrencies, defaultCurrency } = resolveCompanyCurrencies(company ?? undefined);
+    const income: Record<CenterCurrency, number> = { ARS: 0, USD: 0, EUR: 0 };
+    const expense: Record<CenterCurrency, number> = { ARS: 0, USD: 0, EUR: 0 };
+
+    for (const payment of payments) {
+      const currency = normalizeMoneyCurrency(payment.paymentPlan?.currency, defaultCurrency);
+      income[currency] += Number(payment.totalAmount || 0);
+    }
+    for (const item of extraIncomes) {
+      income[normalizeMoneyCurrency(item.currency)] += Number(item.amount || 0);
+    }
+    for (const item of expenses) {
+      expense[normalizeMoneyCurrency(item.currency)] += Number(item.amount || 0);
+    }
+
+    const byCurrency: Record<CenterCurrency, number> = {
+      ARS: income.ARS - expense.ARS,
+      USD: income.USD - expense.USD,
+      EUR: income.EUR - expense.EUR,
+    };
 
     return {
-      cajaArs: incomeArs - expenseArs,
-      cajaUsd: incomeUsd - expenseUsd
+      cajaArs: byCurrency.ARS,
+      cajaUsd: byCurrency.USD,
+      defaultCurrency,
+      enabledCurrencies,
+      byCurrency,
     };
   }
 

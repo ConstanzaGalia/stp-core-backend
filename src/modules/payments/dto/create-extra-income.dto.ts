@@ -28,6 +28,6 @@ export class CreateExtraIncomeDto {
     if (value === undefined || value === null || value === '') return undefined;
     return typeof value === 'string' ? value.trim().toUpperCase() : value;
   })
-  @IsIn(['ARS', 'USD'])
-  currency?: 'ARS' | 'USD';
+  @IsIn(['ARS', 'USD', 'EUR'])
+  currency?: 'ARS' | 'USD' | 'EUR';
 }

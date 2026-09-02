@@ -69,6 +69,16 @@ export class Company {
   @Column({ type: 'jsonb', nullable: true, name: 'enabled_modules' })
   enabledModules?: string[] | null;
 
+  /** Monedas habilitadas en caja y gastos. Default: solo ARS. */
+  @ApiProperty({ required: false, type: [String] })
+  @Column({ type: 'jsonb', nullable: true, name: 'enabled_currencies' })
+  enabledCurrencies?: string[] | null;
+
+  /** Moneda predeterminada. Las mensualidades siempre se imputan acá. */
+  @ApiProperty({ required: false })
+  @Column({ type: 'varchar', length: 3, default: 'ARS', name: 'default_currency' })
+  defaultCurrency?: string;
+
   @ManyToMany(() => User, user => user.company)
   @JoinTable()
   users: User[];

@@ -31,6 +31,7 @@ import { assertStpAdmin } from 'src/common/helpers/company-access.helper';
 import { UpdateCompanySubscriptionDto } from './dto/update-company-subscription.dto';
 import { UpdateCompanyModulesDto } from './dto/update-company-modules.dto';
 import { UpdateCompanyAccountTypeDto } from './dto/update-company-account-type.dto';
+import { isCenterCurrency, resolveCompanyCurrencies } from 'src/common/center-currencies';
 
 const STAFF_ROLES = [
   UserRole.TRAINER,
@@ -73,9 +74,16 @@ export class CompanyService {
         payload.secondary_color = createCompanyDto.secondary_color.trim();
       }
 
+      const currencies = resolveCompanyCurrencies({
+        enabledCurrencies: createCompanyDto.enabledCurrencies,
+        defaultCurrency: createCompanyDto.defaultCurrency,
+      });
+
       const newCompany = this.companyRepository.create({
         ...payload,
         subscriptionActive: false,
+        enabledCurrencies: currencies.enabledCurrencies,
+        defaultCurrency: currencies.defaultCurrency,
         ...(createCompanyDto.accountType ? { accountType: createCompanyDto.accountType } : {}),
       });
       newCompany.users = [user];
@@ -258,11 +266,55 @@ export class CompanyService {
   }
 
   public async update(id: string, updateCompanyDto: UpdateCompanyDto) {
-    try {
-      return await this.companyRepository.update(id, updateCompanyDto);
-    } catch (error) {
-      Logger.log(`Error to update company ${id}`, error);
+    const company = await this.companyRepository.findOne({ where: { id } });
+    if (!company) {
+      throw new NotFoundException('Company not found');
     }
+
+    if (updateCompanyDto.name !== undefined) {
+      company.name = updateCompanyDto.name.trim();
+    }
+    if (updateCompanyDto.image !== undefined) {
+      company.image = updateCompanyDto.image || null;
+    }
+    if (updateCompanyDto.primary_color !== undefined) {
+      company.primary_color = updateCompanyDto.primary_color || null;
+    }
+    if (updateCompanyDto.secondary_color !== undefined) {
+      company.secondary_color = updateCompanyDto.secondary_color || null;
+    }
+    if (updateCompanyDto.accountType !== undefined) {
+      company.accountType = updateCompanyDto.accountType;
+    }
+
+    if (
+      updateCompanyDto.enabledCurrencies !== undefined ||
+      updateCompanyDto.defaultCurrency !== undefined
+    ) {
+      const requestedEnabled =
+        updateCompanyDto.enabledCurrencies ?? company.enabledCurrencies;
+      const requestedDefault =
+        updateCompanyDto.defaultCurrency ?? company.defaultCurrency;
+      const unique = [...new Set((requestedEnabled ?? []).filter(isCenterCurrency))];
+      if (unique.length === 0) {
+        throw new BadRequestException('Debés habilitar al menos una moneda');
+      }
+      if (
+        requestedDefault &&
+        isCenterCurrency(requestedDefault) &&
+        !unique.includes(requestedDefault)
+      ) {
+        throw new BadRequestException('La moneda predeterminada debe estar habilitada');
+      }
+      const resolved = resolveCompanyCurrencies({
+        enabledCurrencies: unique,
+        defaultCurrency: requestedDefault,
+      });
+      company.enabledCurrencies = resolved.enabledCurrencies;
+      company.defaultCurrency = resolved.defaultCurrency;
+    }
+
+    return this.companyRepository.save(company);
   }
 
   public async remove(id: string): Promise<string> {

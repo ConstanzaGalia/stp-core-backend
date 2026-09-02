@@ -18,8 +18,8 @@ export class CreateExpenseDto {
   category?: string;
 
   @IsOptional()
-  @IsIn(['ARS', 'USD'])
-  currency?: 'ARS' | 'USD';
+  @IsIn(['ARS', 'USD', 'EUR'])
+  currency?: 'ARS' | 'USD' | 'EUR';
 
   @IsOptional()
   @IsUUID()

@@ -1,4 +1,4 @@
-import { IsString, IsNumber, IsBoolean, IsOptional, Min, Max } from 'class-validator';
+import { IsString, IsNumber, IsBoolean, IsOptional, IsIn, Min, Max } from 'class-validator';
 
 export class CreatePaymentPlanDto {
   @IsString()
@@ -11,6 +11,10 @@ export class CreatePaymentPlanDto {
   @IsNumber()
   @Min(0)
   amount: number; // Monto mensual
+
+  @IsOptional()
+  @IsIn(['ARS', 'USD', 'EUR'])
+  currency?: 'ARS' | 'USD' | 'EUR';
 
   @IsNumber()
   @Min(1)
