@@ -73,6 +73,11 @@ import { MailingService } from '../mailer/mailing.service';
 import { CompanyService } from '../company/company.service';
 import { UserRole } from '../../common/enums/enums';
 import { CenterCurrency, normalizeMoneyCurrency, resolveCompanyCurrencies } from '../../common/center-currencies';
+import {
+  ARGENTINA_TIME_ZONE,
+  parseDateOnlyLocal,
+  toDateOnlyKey,
+} from '../../common/utils/date-only.util';
 
 /** Fecha calendario desde input HTML (YYYY-MM-DD), sin interpretación UTC que desplace el día. */
 function parseCalendarDateInput(dateStr: string): Date {
@@ -381,33 +386,124 @@ export class PaymentsService {
     return weekStart1.getTime() === weekStart2.getTime();
   }
 
+  private formatLocalYmd(date: Date): string {
+    const y = date.getFullYear();
+    const m = String(date.getMonth() + 1).padStart(2, '0');
+    const d = String(date.getDate()).padStart(2, '0');
+    return `${y}-${m}-${d}`;
+  }
+
+  private toArgentinaYmd(date: Date): string {
+    return date.toLocaleDateString('en-CA', { timeZone: ARGENTINA_TIME_ZONE });
+  }
+
+  private addCalendarDaysYmd(ymd: string, days: number): string {
+    const date = parseDateOnlyLocal(ymd);
+    if (!date) return ymd;
+    date.setDate(date.getDate() + days);
+    return this.formatLocalYmd(date);
+  }
+
+  /** Lunes–domingo de la semana civil en Argentina. */
+  private getCalendarWeekBoundsYmd(referenceDate: Date): { weekStart: string; weekEnd: string } {
+    const ymd = this.toArgentinaYmd(referenceDate);
+    const cursor = parseDateOnlyLocal(ymd);
+    if (!cursor) {
+      const weekStart = this.formatLocalYmd(this.getWeekStartDate(referenceDate));
+      return { weekStart, weekEnd: this.addCalendarDaysYmd(weekStart, 6) };
+    }
+    const day = cursor.getDay();
+    cursor.setDate(cursor.getDate() + (day === 0 ? -6 : 1 - day));
+    const weekStart = this.formatLocalYmd(cursor);
+    return { weekStart, weekEnd: this.addCalendarDaysYmd(weekStart, 6) };
+  }
+
+  private getWeekEndDate(date: Date): Date {
+    const monday = this.getWeekStartDate(date);
+    const sunday = new Date(monday);
+    sunday.setDate(sunday.getDate() + 6);
+    sunday.setHours(23, 59, 59, 999);
+    return sunday;
+  }
+
   /**
-   * Renueva los contadores semanales si es necesario
+   * Reservas reales del alumno en la semana de `referenceDate` (lunes a domingo).
+   * Compara el día calendario UTC del turno (igual que toDateOnlyKey / la UI),
+   * no `date::date` de Postgres, que en UTC−3 mueve el lunes a la semana anterior.
+   */
+  private async countUserReservationsInWeek(
+    userId: string,
+    companyId: string | undefined,
+    referenceDate: Date,
+  ): Promise<number> {
+    const { weekStart, weekEnd } = this.getCalendarWeekBoundsYmd(referenceDate);
+
+    const qb = this.reservationRepository
+      .createQueryBuilder('reservation')
+      .innerJoinAndSelect('reservation.timeSlot', 'slot')
+      .where('reservation.userId = :userId', { userId })
+      .andWhere('slot.date >= :from', { from: `${this.addCalendarDaysYmd(weekStart, -1)}T00:00:00.000Z` })
+      .andWhere('slot.date < :to', { to: `${this.addCalendarDaysYmd(weekEnd, 2)}T00:00:00.000Z` });
+
+    if (companyId) {
+      qb.andWhere('slot.companyId = :companyId', { companyId });
+    }
+
+    const reservations = await qb.getMany();
+    return reservations.filter((reservation) => {
+      const key = toDateOnlyKey(reservation.timeSlot?.date);
+      return !!key && key >= weekStart && key <= weekEnd;
+    }).length;
+  }
+
+  /**
+   * Alinea el contador semanal con las reservas de la semana actual.
+   */
+  async refreshWeeklyClassCounters(subscriptionId: string): Promise<UserPaymentSubscription | null> {
+    const subscription = await this.subscriptionRepository.findOne({
+      where: { id: subscriptionId },
+      relations: ['paymentPlan', 'user', 'company'],
+    });
+    if (!subscription) return null;
+    return this.renewWeeklyCounters(subscription);
+  }
+
+  /**
+   * Recalcula usadas/restantes de la semana actual a partir de reservas reales.
    */
   private async renewWeeklyCounters(subscription: UserPaymentSubscription): Promise<UserPaymentSubscription> {
+    if (!subscription.paymentPlan || !subscription.user) {
+      const subscriptionWithPlan = await this.subscriptionRepository.findOne({
+        where: { id: subscription.id },
+        relations: ['paymentPlan', 'user', 'company'],
+      });
+      if (!subscriptionWithPlan?.paymentPlan) {
+        return subscription;
+      }
+      subscription.paymentPlan = subscriptionWithPlan.paymentPlan;
+      subscription.user = subscription.user ?? subscriptionWithPlan.user;
+      subscription.company = subscription.company ?? subscriptionWithPlan.company;
+      subscription.companyId = subscription.companyId ?? subscriptionWithPlan.companyId;
+    }
+
     const today = new Date();
     today.setHours(0, 0, 0, 0);
+    const userId = subscription.user?.id;
+    const companyId = subscription.company?.id ?? subscription.companyId;
+    const allowed = this.resolveWeeklyClassAllowance(subscription.paymentPlan, subscription);
+    const used = userId
+      ? await this.countUserReservationsInWeek(userId, companyId, today)
+      : (subscription.classesUsedThisWeek ?? 0);
 
-    // Si no tiene weekStartDate o es una semana diferente, renovar
-    if (!subscription.weekStartDate || !this.isSameWeek(today, subscription.weekStartDate)) {
-      // Asegurarse de que paymentPlan esté cargado
-      if (!subscription.paymentPlan) {
-        const subscriptionWithPlan = await this.subscriptionRepository.findOne({
-          where: { id: subscription.id },
-          relations: ['paymentPlan']
-        });
-        if (!subscriptionWithPlan || !subscriptionWithPlan.paymentPlan) {
-          return subscription;
-        }
-        subscription.paymentPlan = subscriptionWithPlan.paymentPlan;
-      }
+    subscription.weekStartDate = this.getWeekStartDate(today);
+    subscription.classesUsedThisWeek = used;
+    subscription.classesRemainingThisWeek = Math.max(0, allowed - used);
 
-      const newWeekStart = this.getWeekStartDate(today);
-      subscription.weekStartDate = newWeekStart;
-      subscription.classesUsedThisWeek = 0;
-      subscription.classesRemainingThisWeek = subscription.paymentPlan.classesPerWeek;
-      await this.subscriptionRepository.save(subscription);
-    }
+    await this.subscriptionRepository.update(subscription.id, {
+      weekStartDate: subscription.weekStartDate,
+      classesUsedThisWeek: subscription.classesUsedThisWeek,
+      classesRemainingThisWeek: subscription.classesRemainingThisWeek,
+    });
 
     return subscription;
   }
@@ -619,40 +715,25 @@ export class PaymentsService {
     }
 
     await this.syncSubscriptionPlanFromPaidAccess(subscription, paidPeriodAccess.plan);
-    await this.renewWeeklyCounters(subscription);
-
-    const updatedSubscription = await this.subscriptionRepository.findOne({
-      where: { id: subscriptionId },
-      relations: ['paymentPlan'],
-    });
-
-    if (!updatedSubscription) {
-      return {
-        canBook: false,
-        reason: 'NO_SUBSCRIPTION',
-        message: CAN_BOOK_CLASS_MESSAGES.NO_SUBSCRIPTION,
-      };
-    }
 
     const allowedThisWeek = this.resolveWeeklyClassAllowance(
       paidPeriodAccess.plan,
-      updatedSubscription,
+      subscription,
     );
-    const usedThisWeek = updatedSubscription.classesUsedThisWeek ?? 0;
-    if (allowedThisWeek > 0 && usedThisWeek >= allowedThisWeek) {
+    const targetDate = reservationDate ? (this.toCalendarDate(reservationDate) ?? new Date()) : new Date();
+    const usedInTargetWeek = userId
+      ? await this.countUserReservationsInWeek(userId, companyId, targetDate)
+      : 0;
+
+    if (allowedThisWeek <= 0 || usedInTargetWeek >= allowedThisWeek) {
       return {
         canBook: false,
         reason: 'WEEKLY_LIMIT',
         message: CAN_BOOK_CLASS_MESSAGES.WEEKLY_LIMIT,
       };
     }
-    if (allowedThisWeek <= 0 && (updatedSubscription.classesRemainingThisWeek ?? 0) <= 0) {
-      return {
-        canBook: false,
-        reason: 'WEEKLY_LIMIT',
-        message: CAN_BOOK_CLASS_MESSAGES.WEEKLY_LIMIT,
-      };
-    }
+
+    await this.renewWeeklyCounters(subscription);
 
     const pendingPayment = await this.paymentRepository.findOne({
       where: {
@@ -689,13 +770,6 @@ export class PaymentsService {
     const usageDate = usageData.usageDate ? new Date(usageData.usageDate) : new Date();
     usageDate.setHours(0, 0, 0, 0);
 
-    const bookCheck = await this.canUserBookClass(subscriptionId, usageDate);
-    if (!bookCheck.canBook) {
-      throw new BadRequestException(
-        bookCheck.message ?? 'No puedes reservar clases en este momento',
-      );
-    }
-
     // Renovar contadores semanales si es necesario
     await this.renewWeeklyCounters(subscription);
 
@@ -716,15 +790,17 @@ export class PaymentsService {
 
     const savedClassUsage = await this.classUsageRepository.save(classUsage);
 
-    // Actualizar contadores semanales (lógica semanal)
-    updatedSubscription.classesUsedThisWeek += 1;
-    updatedSubscription.classesRemainingThisWeek -= 1;
-    
-    // También actualizar contadores del período (para compatibilidad)
-    updatedSubscription.classesUsedThisPeriod += 1;
-    updatedSubscription.classesRemainingThisPeriod -= 1;
-    
-    await this.subscriptionRepository.save(updatedSubscription);
+    await this.subscriptionRepository.increment(
+      { id: subscriptionId },
+      'classesUsedThisPeriod',
+      1,
+    );
+    await this.subscriptionRepository.decrement(
+      { id: subscriptionId },
+      'classesRemainingThisPeriod',
+      1,
+    );
+    await this.renewWeeklyCounters(updatedSubscription);
 
     return savedClassUsage;
   }
@@ -2057,29 +2133,6 @@ export class PaymentsService {
       }
     }
 
-    // Calcular el inicio de semana (lunes) para usar como base del período
-    // Si ya existe weekStartDate y no ha pasado una semana completa, mantenerlo
-    // Si no existe o ya pasó una semana, calcular el nuevo lunes
-    let newWeekStart: Date;
-    if (subscription.weekStartDate) {
-      const existingWeekStart = new Date(subscription.weekStartDate);
-      existingWeekStart.setHours(0, 0, 0, 0);
-      const weekEnd = new Date(existingWeekStart);
-      weekEnd.setDate(weekEnd.getDate() + 6);
-      weekEnd.setHours(23, 59, 59, 999);
-      
-      // Si todavía estamos en la misma semana, mantener el weekStartDate existente
-      if (today <= weekEnd) {
-        newWeekStart = existingWeekStart;
-      } else {
-        // Si ya pasó la semana, calcular el nuevo lunes
-        newWeekStart = this.getWeekStartDate(today);
-      }
-    } else {
-      // Si no existe weekStartDate, calcular el lunes de la semana actual
-      newWeekStart = this.getWeekStartDate(today);
-    }
-    
     // Período desde la fecha del pago: el período empieza ese día y vence el mismo día del mes siguiente.
     // Ej: pago 23 feb → vencimiento 23 mar, 12 clases en ese rango.
     const newPeriodStartDate = new Date(today);
@@ -2094,18 +2147,15 @@ export class PaymentsService {
     subscription.classesUsedThisPeriod = 0;
     subscription.classesRemainingThisPeriod = paymentPlanToUse.maxClassesPerPeriod;
 
-    // Actualizar contadores semanales
-    subscription.weekStartDate = newWeekStart;
-    subscription.classesUsedThisWeek = 0;
-    subscription.classesRemainingThisWeek = paymentPlanToUse.classesPerWeek;
-
+    // Actualizar contadores semanales según reservas reales de esta semana
     const saved = await this.subscriptionRepository.save(subscription);
     if (paymentPlanToUse?.id) {
       await this.subscriptionRepository.update(saved.id, { paymentPlanId: paymentPlanToUse.id });
       saved.paymentPlanId = paymentPlanToUse.id;
       saved.paymentPlan = paymentPlanToUse;
     }
-    return saved;
+    const refreshed = await this.renewWeeklyCounters(saved);
+    return refreshed ?? saved;
   }
 
   /**
@@ -2833,6 +2883,12 @@ export class PaymentsService {
     return date;
   }
 
+  /** Día calendario local YYYY-MM-DD, sin hora (evita que 23:59 AR se serialice como el día siguiente en UTC). */
+  private toApiCalendarDate(value: Date | string | null | undefined): string | null {
+    const date = this.toCalendarDate(value);
+    return date ? this.formatLocalYmd(date) : null;
+  }
+
   private addOneCalendarMonth(value: Date | string): Date | null {
     const start = this.toCalendarDate(value);
     if (!start) return null;
@@ -3224,8 +3280,8 @@ export class PaymentsService {
       return {
         id: updatedSubscription.id,
         status: updatedSubscription.status,
-        periodStartDate: paidPeriodAccess.periodStartDate ?? updatedSubscription.periodStartDate,
-        periodEndDate: paidPeriodAccess.periodEndDate ?? updatedSubscription.periodEndDate,
+        periodStartDate: this.toApiCalendarDate(paidPeriodAccess.periodStartDate ?? updatedSubscription.periodStartDate),
+        periodEndDate: this.toApiCalendarDate(paidPeriodAccess.periodEndDate ?? updatedSubscription.periodEndDate),
         nextBillingDate: updatedSubscription.nextBillingDate,
         classesUsedThisPeriod: updatedSubscription.classesUsedThisPeriod,
         classesRemainingThisPeriod: updatedSubscription.classesRemainingThisPeriod,
@@ -3239,8 +3295,8 @@ export class PaymentsService {
     })() : (subscription || paidPeriodAccess.lastPaidPayment ? {
       id: subscription?.id ?? null,
       status: subscription?.status ?? null,
-      periodStartDate: paidPeriodAccess.periodStartDate ?? subscription?.periodStartDate ?? null,
-      periodEndDate: paidPeriodAccess.periodEndDate ?? subscription?.periodEndDate ?? null,
+      periodStartDate: this.toApiCalendarDate(paidPeriodAccess.periodStartDate ?? subscription?.periodStartDate),
+      periodEndDate: this.toApiCalendarDate(paidPeriodAccess.periodEndDate ?? subscription?.periodEndDate),
       nextBillingDate: subscription?.nextBillingDate ?? null,
     } : null);
 

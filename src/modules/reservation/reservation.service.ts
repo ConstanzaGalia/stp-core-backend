@@ -134,15 +134,19 @@ export class ReservationsService {
       }
     }
 
+    const sameTimeSlotsQb = this.timeSlotRepository
+      .createQueryBuilder('slot')
+      .select('slot.id')
+      .innerJoin('slot.company', 'company')
+      .where('company.id = :companyId', { companyId })
+      .andWhere('DATE(slot.date) = DATE(:slotDate)', { slotDate: timeSlot.date })
+      .andWhere('slot.startTime = :startTime', { startTime: timeSlot.startTime });
+
     const sameTimeReservation = await this.reservationRepository
       .createQueryBuilder('reservation')
-      .innerJoin('reservation.timeSlot', 'timeSlot')
-      .innerJoin('timeSlot.company', 'company')
-      .innerJoin('reservation.user', 'user')
-      .where('user.id = :userId', { userId })
-      .andWhere('company.id = :companyId', { companyId })
-      .andWhere('DATE(timeSlot.date) = DATE(:slotDate)', { slotDate: timeSlot.date })
-      .andWhere('timeSlot.startTime = :startTime', { startTime: timeSlot.startTime })
+      .where('reservation.userId = :userId', { userId })
+      .andWhere(`reservation.timeSlotId IN (${sameTimeSlotsQb.getQuery()})`)
+      .setParameters({ userId, ...sameTimeSlotsQb.getParameters() })
       .getCount();
 
     if (sameTimeReservation > 0) {
@@ -363,7 +367,7 @@ export class ReservationsService {
   async cancelReservation(reservationId: string, userId: string): Promise<void> {
     const reservation = await this.reservationRepository.findOne({
       where: { id: reservationId },
-      relations: ['timeSlot', 'user'],
+      relations: ['timeSlot', 'timeSlot.company', 'user'],
     });
 
     if (!reservation) {
@@ -389,6 +393,16 @@ export class ReservationsService {
     
     await this.timeSlotRepository.save(timeSlot);
     await this.reservationRepository.remove(reservation);
+
+    const companyId = timeSlot.company?.id;
+    const activeSubscription = await this.getActiveSubscriptionForUser(
+      userId,
+      companyId,
+      timeSlot.date,
+    );
+    if (activeSubscription) {
+      await this.paymentsService.refreshWeeklyClassCounters(activeSubscription.id);
+    }
 
     // Procesar lista de espera después de cancelar la reserva
     try {
@@ -2493,17 +2507,8 @@ export class ReservationsService {
             'classesRemainingThisPeriod',
             totalClassesToRegister
           );
-          await this.subscriptionRepository.increment(
-            { id: activeSubscription.id },
-            'classesUsedThisWeek',
-            totalClassesToRegister
-          );
-          await this.subscriptionRepository.decrement(
-            { id: activeSubscription.id },
-            'classesRemainingThisWeek',
-            totalClassesToRegister
-          );
-          this.logger.log(`generateRecurringReservations -> batch updated subscription counters: +${totalClassesToRegister} classes`);
+          await this.paymentsService.refreshWeeklyClassCounters(activeSubscription.id);
+          this.logger.log(`generateRecurringReservations -> batch updated period counters: +${totalClassesToRegister} classes`);
         }
         } catch (error) {
         this.logger.error(`generateRecurringReservations -> error batch saving class usages: ${error?.message}`);
@@ -3020,20 +3025,7 @@ export class ReservationsService {
           });
 
           if (updatedSubscription) {
-            const classesPerWeek = updatedSubscription.paymentPlan?.classesPerWeek ?? 0;
             const maxClassesPerPeriod = updatedSubscription.paymentPlan?.maxClassesPerPeriod ?? 0;
-
-            // Restaurar contadores semanales (restar de usadas, sumar a disponibles)
-            const previousUsedThisWeek = updatedSubscription.classesUsedThisWeek ?? 0;
-            const previousRemainingThisWeek = updatedSubscription.classesRemainingThisWeek ?? 0;
-
-            updatedSubscription.classesUsedThisWeek = Math.max(0, previousUsedThisWeek - restoredClassesCount);
-            updatedSubscription.classesRemainingThisWeek = Math.min(
-              classesPerWeek,
-              previousRemainingThisWeek + restoredClassesCount
-            );
-
-            // Restaurar contadores del período (restar de usadas, sumar a disponibles)
             const previousUsedThisPeriod = updatedSubscription.classesUsedThisPeriod ?? 0;
             const previousRemainingThisPeriod = updatedSubscription.classesRemainingThisPeriod ?? 0;
 
@@ -3044,7 +3036,7 @@ export class ReservationsService {
             );
 
             await this.subscriptionRepository.save(updatedSubscription);
-            this.logger.log(`cancelRecurringReservation -> restored ${restoredClassesCount} classes. Weekly: ${previousUsedThisWeek}->${updatedSubscription.classesUsedThisWeek} used, ${previousRemainingThisWeek}->${updatedSubscription.classesRemainingThisWeek} remaining. Period: ${previousUsedThisPeriod}->${updatedSubscription.classesUsedThisPeriod} used, ${previousRemainingThisPeriod}->${updatedSubscription.classesRemainingThisPeriod} remaining`);
+            this.logger.log(`cancelRecurringReservation -> restored ${restoredClassesCount} period classes. Period: ${previousUsedThisPeriod}->${updatedSubscription.classesUsedThisPeriod} used, ${previousRemainingThisPeriod}->${updatedSubscription.classesRemainingThisPeriod} remaining`);
           }
         }
       } else {
@@ -3094,6 +3086,10 @@ export class ReservationsService {
       }
 
       this.logger.log(`cancelRecurringReservation -> updated ${timeSlotsToUpdate.size} timeSlots (capacity restored, no timeSlots deleted)`);
+
+      if (activeSubscription) {
+        await this.paymentsService.refreshWeeklyClassCounters(activeSubscription.id);
+      }
     }
 
     // Eliminar la reserva recurrente (no solo cancelarla)
