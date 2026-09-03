@@ -2630,12 +2630,18 @@ export class PaymentsService {
   async updatePayment(paymentId: string, updatePaymentDto: UpdatePaymentDto): Promise<Payment> {
     const payment = await this.paymentRepository.findOne({
       where: { id: paymentId },
-      relations: ['subscription', 'user', 'company']
+      relations: ['subscription', 'user', 'company', 'paymentPlan']
     });
 
     if (!payment) {
       throw new NotFoundException('Payment not found');
     }
+
+    const dueDateExplicit = updatePaymentDto.dueDate !== undefined;
+    const paidDateExplicit = updatePaymentDto.paidDate !== undefined;
+    const becamePaid =
+      updatePaymentDto.status === PaymentStatus.PAID
+      && payment.status !== PaymentStatus.PAID;
 
     // Actualizar campos si se proporcionan
     if (updatePaymentDto.amount !== undefined) {
@@ -2665,10 +2671,10 @@ export class PaymentsService {
     if (updatePaymentDto.notes !== undefined) {
       payment.notes = updatePaymentDto.notes;
     }
-    if (updatePaymentDto.dueDate !== undefined) {
-      payment.dueDate = new Date(updatePaymentDto.dueDate);
+    if (dueDateExplicit) {
+      payment.dueDate = this.parseDateOnlyAsNoonUTC(String(updatePaymentDto.dueDate));
     }
-    if (updatePaymentDto.paidDate !== undefined) {
+    if (paidDateExplicit) {
       payment.paidDate = this.parseDateOnlyAsNoonUTC(updatePaymentDto.paidDate);
     }
     if (updatePaymentDto.pendingBalance !== undefined) {
@@ -2690,7 +2696,59 @@ export class PaymentsService {
       payment.totalAmount = parseFloat((amount + lateFee - discount).toFixed(2));
     }
 
-    return await this.paymentRepository.save(payment);
+    const isPaid = payment.status === PaymentStatus.PAID;
+    const isSubscriptionConcept =
+      payment.concept === PaymentConcept.SUBSCRIPTION || !payment.concept;
+
+    // Mensualidad pagada: vencimiento del plan = dueDate.
+    // Si no lo mandan explícito y cambió la fecha de pago (o pasó a pagado), recalcular +1 mes.
+    if (
+      isPaid
+      && isSubscriptionConcept
+      && payment.paidDate
+      && !dueDateExplicit
+      && (paidDateExplicit || becamePaid)
+    ) {
+      const nextDue = this.addOneCalendarMonth(payment.paidDate);
+      if (nextDue) {
+        payment.dueDate = this.parseDateOnlyAsNoonUTC(this.formatLocalYmd(nextDue));
+      }
+    }
+
+    const saved = await this.paymentRepository.save(payment);
+
+    // Alinear período de la suscripción con el último pago PAID de mensualidad.
+    if (isPaid && isSubscriptionConcept && payment.subscription?.id && payment.dueDate) {
+      await this.syncSubscriptionPeriodFromPayment(payment);
+    }
+
+    return saved;
+  }
+
+  /**
+   * Si este pago es el último PAID de suscripción, actualiza periodStart/End de la suscripción.
+   */
+  private async syncSubscriptionPeriodFromPayment(payment: Payment): Promise<void> {
+    const subscriptionId = payment.subscription?.id;
+    if (!subscriptionId || !payment.dueDate) return;
+
+    const subscription = await this.subscriptionRepository.findOne({
+      where: { id: subscriptionId },
+      relations: ['payments'],
+    });
+    if (!subscription) return;
+
+    const lastPaid = this.findLastPaidSubscriptionPayment(subscription.payments ?? [payment]);
+    if (!lastPaid || lastPaid.id !== payment.id) return;
+
+    const periodStart = this.toCalendarDate(payment.paidDate) ?? this.toCalendarDate(subscription.periodStartDate);
+    const periodEnd = this.toCalendarEndOfDay(payment.dueDate);
+    if (!periodStart || !periodEnd) return;
+
+    subscription.periodStartDate = periodStart;
+    subscription.periodEndDate = periodEnd;
+    subscription.nextBillingDate = periodEnd;
+    await this.subscriptionRepository.save(subscription);
   }
 
   async deletePayment(paymentId: string): Promise<{ message: string; cancelledReservations?: number; subscriptionCancelled?: boolean }> {
