@@ -92,6 +92,7 @@ ALTER TYPE user_role_enum ADD VALUE IF NOT EXISTS 'TRAINER_ONLY_ANALYTICS';
 
 -- 10) Functional Screening Biomecánico STP
 --     Ejecutar también: sql/create-biomechanical-screening.sql
+--     Capturas con pose: sql/create-screening-test-snapshots.sql
 
 -- 11) Historial clínico: tipo lesión/afección (migración 175060)
 DO $$

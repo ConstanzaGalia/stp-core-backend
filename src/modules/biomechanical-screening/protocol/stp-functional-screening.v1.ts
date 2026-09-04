@@ -17,6 +17,7 @@ export type ScreeningDomainCode =
   | 'LANDING';
 export type ScreeningScoringMode = 'quantitative' | 'criteria' | 'criteria_bilateral';
 export type ScreeningSide = 'left' | 'right';
+export type ScreeningCameraView = 'frontal' | 'sagital' | 'posterior';
 
 export interface ObservationOptionDef {
   code: ObservationOptionCode;
@@ -36,6 +37,20 @@ export interface ScreeningCompensationDef {
   label: string;
 }
 
+/**
+ * Captura esperada para un test. El evaluador filma y congela un frame por slot;
+ * `criterionCodes` indica qué criterios se leen mejor desde esa vista.
+ */
+export interface ScreeningSnapshotSlotDef {
+  code: string;
+  label: string;
+  view: ScreeningCameraView;
+  /** Genera una captura por lado (izquierda y derecha). */
+  perSide: boolean;
+  criterionCodes: string[];
+  hint: string;
+}
+
 export interface ScreeningTestDef {
   code: string;
   sortOrder: number;
@@ -45,6 +60,9 @@ export interface ScreeningTestDef {
   scoringMode: ScreeningScoringMode;
   maxScore: number;
   videoSuggested: boolean;
+  /** Habilita el panel de cámara con análisis de pose. */
+  poseCapture: boolean;
+  snapshotSlots: ScreeningSnapshotSlotDef[];
   objective: string;
   material: string[];
   position: string[];
@@ -135,6 +153,8 @@ export const STP_FUNCTIONAL_SCREENING_V1: ScreeningProtocolDefinition = {
       scoringMode: 'quantitative',
       maxScore: 4,
       videoSuggested: false,
+      poseCapture: false,
+      snapshotSlots: [],
       objective:
         'Evaluar la movilidad de dorsiflexión del tobillo en carga y comparar ambos miembros.',
       material: ['Pared', 'Cinta métrica o regla', 'Marcador o cinta (opcional)'],
@@ -167,6 +187,25 @@ export const STP_FUNCTIONAL_SCREENING_V1: ScreeningProtocolDefinition = {
       scoringMode: 'criteria',
       maxScore: 10,
       videoSuggested: true,
+      poseCapture: true,
+      snapshotSlots: [
+        {
+          code: 'frontal',
+          label: 'Vista frontal',
+          view: 'frontal',
+          perSide: false,
+          criterionCodes: ['knees', 'balance'],
+          hint: 'Cámara de frente al atleta, a la altura de la cadera. Capturar en la máxima profundidad.',
+        },
+        {
+          code: 'sagital',
+          label: 'Vista lateral',
+          view: 'sagital',
+          perSide: false,
+          criterionCodes: ['depth', 'trunk', 'overhead'],
+          hint: 'Cámara perpendicular al plano de movimiento. Capturar en la máxima profundidad.',
+        },
+      ],
       objective:
         'Observar el patrón global de sentadilla: movilidad de tobillo y cadera, control de rodillas y tronco, overhead y equilibrio.',
       material: ['Bastón o palo liviano'],
@@ -232,6 +271,17 @@ export const STP_FUNCTIONAL_SCREENING_V1: ScreeningProtocolDefinition = {
       scoringMode: 'criteria',
       maxScore: 8,
       videoSuggested: true,
+      poseCapture: true,
+      snapshotSlots: [
+        {
+          code: 'sagital',
+          label: 'Vista lateral',
+          view: 'sagital',
+          perSide: false,
+          criterionCodes: ['hip_motion', 'spine_control', 'knee_control', 'coordination'],
+          hint: 'Cámara de perfil, a la altura de la cadera. Capturar en el punto de máxima flexión.',
+        },
+      ],
       objective:
         'Evaluar la capacidad de realizar el patrón de bisagra de cadera (base de peso muerto, RDL, buenos días e hip thrust).',
       material: ['Bastón o palo liviano'],
@@ -293,6 +343,17 @@ export const STP_FUNCTIONAL_SCREENING_V1: ScreeningProtocolDefinition = {
       scoringMode: 'criteria_bilateral',
       maxScore: 16,
       videoSuggested: true,
+      poseCapture: true,
+      snapshotSlots: [
+        {
+          code: 'frontal',
+          label: 'Vista frontal',
+          view: 'frontal',
+          perSide: true,
+          criterionCodes: ['knee', 'pelvis', 'trunk', 'balance'],
+          hint: 'Cámara de frente, a la altura de la cadera. Una captura por pierna de apoyo.',
+        },
+      ],
       objective:
         'Evaluar el control del miembro inferior durante una tarea unilateral, exactamente igual en izquierda y derecha.',
       material: [],
@@ -346,6 +407,17 @@ export const STP_FUNCTIONAL_SCREENING_V1: ScreeningProtocolDefinition = {
       scoringMode: 'criteria',
       maxScore: 10,
       videoSuggested: true,
+      poseCapture: true,
+      snapshotSlots: [
+        {
+          code: 'frontal',
+          label: 'Vista frontal',
+          view: 'frontal',
+          perSide: false,
+          criterionCodes: ['absorption', 'knees', 'trunk', 'final_stability', 'symmetry'],
+          hint: 'Cámara de frente al cajón, a la altura de la rodilla. Capturar en la máxima flexión de la recepción.',
+        },
+      ],
       objective:
         'Evaluar cómo absorbe y estabiliza el atleta una caída. No es el Drop Jump de Ivolution.',
       material: ['Cajón de 30 cm (altura configurable)'],

@@ -21,6 +21,7 @@ import { EvaluationCriteriaSet } from './entities/evaluation-criteria-set.entity
 import { BiomechanicalScreeningProtocol } from './entities/biomechanical-screening-protocol.entity';
 import { BiomechanicalScreeningSession } from './entities/biomechanical-screening-session.entity';
 import { BiomechanicalScreeningTestResult } from './entities/biomechanical-screening-test-result.entity';
+import { BiomechanicalScreeningTestSnapshot } from './entities/biomechanical-screening-test-snapshot.entity';
 import { Exercise } from './entities/excercise.entity';
 import { Expense } from './entities/expense.entity';
 import { FixedExpenseTemplate } from './entities/fixed-expense-template.entity';
@@ -75,6 +76,7 @@ export const TYPEORM_ENTITIES = [
   BiomechanicalScreeningProtocol,
   BiomechanicalScreeningSession,
   BiomechanicalScreeningTestResult,
+  BiomechanicalScreeningTestSnapshot,
   AthleteInvitation,
   AthleteSchedule,
   Division,
