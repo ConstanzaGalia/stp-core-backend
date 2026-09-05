@@ -7,7 +7,7 @@ import { SafetyTag, BodyZone } from 'src/entities/safety-tag.entity';
 
 const MOVEMENT_PATTERNS = [
   { name: 'Dominante de Rodilla', description: 'Sentadillas, estocadas, step-ups' },
-  { name: 'Dominante de Cadera', description: 'Peso muerto, hip thrust, swings' },
+  { name: 'Dominante de Cadera', description: 'Peso muerto, hip thrust' },
   { name: 'Empuje Horizontal', description: 'Press banca, flexiones' },
   { name: 'Empuje Vertical', description: 'Press militar, press hombros' },
   { name: 'Tracción Horizontal', description: 'Remo con barra, TRX, polea' },
@@ -17,8 +17,16 @@ const MOVEMENT_PATTERNS = [
   { name: 'Anti-flexión', description: 'Dead bug, hollow hold, resistencia a flexión lumbar' },
   { name: 'Anti-rotación', description: 'Pallof press, plancha lateral' },
   { name: 'Core Tradicional', description: 'Abs crunch, cortitos, tijeras' },
-  { name: 'Saltos y Rebotes', description: 'Carrera, desplazamientos laterales, skipping' },
+  { name: 'Saltos y Rebotes', description: 'Saltos, depth jump, reactividad pliométrica' },
   { name: 'Compuestos', description: 'Movimientos combinados (sentadilla + press)' },
+  {
+    name: 'Derivado olímpico',
+    description: 'Arranque, cargadas, tirones y derivados de levantamiento olímpico',
+  },
+  {
+    name: 'Balístico',
+    description: 'Swings, slams y lanzamientos con aceleración de carga (no pliometría)',
+  },
 ];
 
 const CATEGORIES = [
@@ -29,6 +37,14 @@ const CATEGORIES = [
   { name: 'Metabólico', description: 'Ejercicios de acondicionamiento metabólico' },
   { name: 'Pliométrico', description: 'Ejercicios de potencia y reactividad' },
   { name: 'Movilidad', description: 'Ejercicios de movilidad articular y flexibilidad' },
+  {
+    name: 'Levantamiento olímpico',
+    description: 'Levantamientos olímpicos y derivados (arranque, cargada, etc.)',
+  },
+  {
+    name: 'Balísticos',
+    description: 'Producción rápida de fuerza: swings, slams, lanzamientos de balón',
+  },
 ];
 
 const SAFETY_TAGS: { key: string; description: string; bodyZone: BodyZone }[] = [
@@ -85,17 +101,23 @@ export class ExerciseSeedService implements OnModuleInit {
   }
 
   private async seedMovementPatterns() {
-    const count = await this.movementPatternRepo.count();
-    if (count > 0) return;
-    this.logger.log('Seeding movement patterns...');
-    await this.movementPatternRepo.save(MOVEMENT_PATTERNS);
+    this.logger.log('Upserting movement patterns (insert missing by name)...');
+    for (const pattern of MOVEMENT_PATTERNS) {
+      const exists = await this.movementPatternRepo.findOneBy({ name: pattern.name });
+      if (exists) continue;
+      await this.movementPatternRepo.save(pattern);
+      this.logger.log(`Inserted movement pattern: ${pattern.name}`);
+    }
   }
 
   private async seedCategories() {
-    const count = await this.categoryRepo.count();
-    if (count > 0) return;
-    this.logger.log('Seeding categories...');
-    await this.categoryRepo.save(CATEGORIES);
+    this.logger.log('Upserting categories (insert missing by name)...');
+    for (const category of CATEGORIES) {
+      const exists = await this.categoryRepo.findOneBy({ name: category.name });
+      if (exists) continue;
+      await this.categoryRepo.save(category);
+      this.logger.log(`Inserted category: ${category.name}`);
+    }
   }
 
   private async seedSafetyTags() {
