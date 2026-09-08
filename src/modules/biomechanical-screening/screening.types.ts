@@ -1,5 +1,6 @@
 import type {
   ObservationOptionCode,
+  ScreeningCameraView,
   ScreeningClassification,
   ScreeningDomainCode,
   ScreeningProtocolDefinition,
@@ -8,6 +9,42 @@ import type {
 
 export type ScreeningSessionStatus = 'draft' | 'in_progress' | 'completed';
 export type ScreeningTestStatus = 'pending' | 'saved';
+
+/** Punto de pose normalizado (0–1 respecto del frame) tal como lo entrega MediaPipe. */
+export interface PoseLandmarkPoint {
+  x: number;
+  y: number;
+  z: number;
+  visibility?: number;
+}
+
+/** Ángulos y ratios derivados de los landmarks. Null cuando la vista no permite calcularlos. */
+export type ScreeningSnapshotAngles = Record<string, number | null>;
+
+export interface CreateSnapshotPayload {
+  slotCode: string;
+  label?: string | null;
+  view: ScreeningCameraView;
+  side?: ScreeningSide | null;
+  criterionCodes?: string[];
+  storageKey: string;
+  imageUrl?: string | null;
+  width?: number | null;
+  height?: number | null;
+  poseModel?: string | null;
+  landmarks: PoseLandmarkPoint[];
+  worldLandmarks?: PoseLandmarkPoint[] | null;
+  angles?: ScreeningSnapshotAngles | null;
+  notes?: string | null;
+  capturedAt?: string;
+}
+
+export interface UpdateSnapshotPayload {
+  label?: string | null;
+  notes?: string | null;
+  criterionCodes?: string[];
+  sortOrder?: number;
+}
 
 export interface CriterionObservation {
   option: ObservationOptionCode;

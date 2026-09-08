@@ -4,11 +4,13 @@ import {
   Entity,
   JoinColumn,
   ManyToOne,
+  OneToMany,
   PrimaryGeneratedColumn,
   Unique,
   UpdateDateColumn,
 } from 'typeorm';
 import { BiomechanicalScreeningSession } from './biomechanical-screening-session.entity';
+import { BiomechanicalScreeningTestSnapshot } from './biomechanical-screening-test-snapshot.entity';
 import type { ScreeningClassification } from '../modules/biomechanical-screening/protocol/stp-functional-screening.v1';
 import type {
   CriterionObservation,
@@ -81,6 +83,11 @@ export class BiomechanicalScreeningTestResult {
 
   @Column({ type: 'text', array: true, name: 'invalid_reasons', default: () => "'{}'" })
   invalidReasons: string[];
+
+  @OneToMany(() => BiomechanicalScreeningTestSnapshot, (snapshot) => snapshot.testResult, {
+    cascade: true,
+  })
+  snapshots: BiomechanicalScreeningTestSnapshot[];
 
   @CreateDateColumn({ name: 'created_at' })
   createdAt: Date;

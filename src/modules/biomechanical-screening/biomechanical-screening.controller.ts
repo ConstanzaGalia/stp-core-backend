@@ -6,8 +6,10 @@ import { BiomechanicalScreeningService } from './biomechanical-screening.service
 import {
   CompleteScreeningSessionDto,
   CreateScreeningSessionDto,
+  CreateScreeningSnapshotDto,
   SaveScreeningTestDto,
   UpdateScreeningNotesDto,
+  UpdateScreeningSnapshotDto,
 } from './dto/screening.dto';
 
 @Controller('biomechanical-screenings')
@@ -72,6 +74,38 @@ export class BiomechanicalScreeningController {
     @Body() dto: SaveScreeningTestDto,
   ) {
     return this.service.saveTest(actor, userId, sessionId, testCode, dto);
+  }
+
+  @Post(':userId/:sessionId/tests/:testCode/snapshots')
+  addSnapshot(
+    @GetUser() actor: User,
+    @Param('userId') userId: string,
+    @Param('sessionId') sessionId: string,
+    @Param('testCode') testCode: string,
+    @Body() dto: CreateScreeningSnapshotDto,
+  ) {
+    return this.service.addSnapshot(actor, userId, sessionId, testCode, dto);
+  }
+
+  @Patch(':userId/:sessionId/snapshots/:snapshotId')
+  updateSnapshot(
+    @GetUser() actor: User,
+    @Param('userId') userId: string,
+    @Param('sessionId') sessionId: string,
+    @Param('snapshotId') snapshotId: string,
+    @Body() dto: UpdateScreeningSnapshotDto,
+  ) {
+    return this.service.updateSnapshot(actor, userId, sessionId, snapshotId, dto);
+  }
+
+  @Delete(':userId/:sessionId/snapshots/:snapshotId')
+  removeSnapshot(
+    @GetUser() actor: User,
+    @Param('userId') userId: string,
+    @Param('sessionId') sessionId: string,
+    @Param('snapshotId') snapshotId: string,
+  ) {
+    return this.service.removeSnapshot(actor, userId, sessionId, snapshotId);
   }
 
   @Delete(':userId/:sessionId')
