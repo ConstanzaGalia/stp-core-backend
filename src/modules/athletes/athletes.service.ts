@@ -24,6 +24,7 @@ import { CreateAthleteDto } from './dto/create-athlete.dto';
 import {
   monthDayFromDateOnly,
   monthDayInArgentina,
+  calendarDateInArgentina,
 } from '../../common/utils/date-only.util';
 
 const DEFAULT_ATHLETE_PASSWORD = 'EntrenamientoSTP1@';
@@ -636,6 +637,65 @@ export class AthletesService {
         name: inv.user!.name || '',
         lastName: inv.user!.lastName || '',
       }));
+  }
+
+  /**
+   * Cumpleaños de hoy y de los próximos N días (incluye cruce de año).
+   */
+  async getBirthdaysUpcoming(
+    companyId: string,
+    days = 7,
+    actor?: User,
+  ): Promise<
+    {
+      id: string;
+      name: string;
+      lastName: string;
+      monthDay: string;
+      isToday: boolean;
+      daysUntil: number;
+    }[]
+  > {
+    const thresholdDays = Number.isFinite(days) && days > 0 ? days : 7;
+    const athletes = await this.getCompanyAthletes(companyId, actor);
+    const todayStr = calendarDateInArgentina();
+    const [ty, tm, td] = todayStr.split('-').map(Number);
+    const todayUtc = Date.UTC(ty, tm - 1, td);
+
+    const results: {
+      id: string;
+      name: string;
+      lastName: string;
+      monthDay: string;
+      isToday: boolean;
+      daysUntil: number;
+    }[] = [];
+
+    for (const inv of athletes) {
+      const monthDay = monthDayFromDateOnly(inv.user?.dateOfBirth);
+      if (!monthDay || !inv.user) continue;
+
+      const [mm, dd] = monthDay.split('-').map(Number);
+      let candidateUtc = Date.UTC(ty, mm - 1, dd);
+      if (candidateUtc < todayUtc) {
+        candidateUtc = Date.UTC(ty + 1, mm - 1, dd);
+      }
+      const daysUntil = Math.round(
+        (candidateUtc - todayUtc) / (1000 * 60 * 60 * 24),
+      );
+      if (daysUntil < 0 || daysUntil > thresholdDays) continue;
+
+      results.push({
+        id: inv.user.id,
+        name: inv.user.name || '',
+        lastName: inv.user.lastName || '',
+        monthDay,
+        isToday: daysUntil === 0,
+        daysUntil,
+      });
+    }
+
+    return results.sort((a, b) => a.daysUntil - b.daysUntil);
   }
 
   /**

@@ -1,6 +1,7 @@
 import {
   BadRequestException,
   Injectable,
+  Logger,
   NotFoundException,
 } from '@nestjs/common';
 import { InjectRepository } from '@nestjs/typeorm';
@@ -13,6 +14,13 @@ import { STPWeeklyTemplate } from 'src/entities/stp-weekly-template.entity';
 import { STPSessionInstance } from 'src/entities/stp-session-instance.entity';
 import { Exercise } from 'src/entities/excercise.entity';
 import { User } from 'src/entities/user.entity';
+import {
+  AthleteInvitation,
+  InvitationStatus,
+} from 'src/entities/athlete-invitation.entity';
+import { Reservation } from 'src/entities/reservation.entity';
+import { ReservationsService } from '../reservation/reservation.service';
+import { toDateOnlyKey } from 'src/common/utils/date-only.util';
 
 interface SessionExerciseMeta {
   videoUrl: string | null;
@@ -137,6 +145,8 @@ function getSessionRpeSummary(
 
 @Injectable()
 export class TrainingPlannerService {
+  private readonly logger = new Logger(TrainingPlannerService.name);
+
   constructor(
     @InjectRepository(STPTrainingProfile)
     private readonly profileRepo: Repository<STPTrainingProfile>,
@@ -148,6 +158,11 @@ export class TrainingPlannerService {
     private readonly sessionRepo: Repository<STPSessionInstance>,
     @InjectRepository(Exercise)
     private readonly exerciseRepo: Repository<Exercise>,
+    @InjectRepository(AthleteInvitation)
+    private readonly invitationRepo: Repository<AthleteInvitation>,
+    @InjectRepository(Reservation)
+    private readonly reservationRepo: Repository<Reservation>,
+    private readonly reservationsService: ReservationsService,
   ) {}
 
   // ── Training Profile ────────────────────────────────────────────────────────
@@ -459,8 +474,78 @@ export class TrainingPlannerService {
       entity.lastSavedByName = displayName;
     }
 
+    const previousCompletion = existing?.athleteCompletionStatus ?? 'pending';
+    const nextCompletion = data.athleteCompletionStatus ?? 'pending';
+    const completionChanged = previousCompletion !== nextCompletion;
+
     const saved = await this.sessionRepo.save(entity);
-    return this.serializeSession(saved, { includePrivate: isStaff });
+    const serialized = this.serializeSession(saved, { includePrivate: isStaff });
+
+    let attendanceSync:
+      | { status: 'synced' | 'no_reservation' | 'sync_failed'; reservationsUpdated: number }
+      | undefined;
+
+    if (isStaff && completionChanged) {
+      attendanceSync = await this.syncAttendanceFromSessionCompletion(
+        saved.athleteId,
+        saved.scheduledDate,
+        nextCompletion,
+      );
+    }
+
+    return attendanceSync ? { ...serialized, attendanceSync } : serialized;
+  }
+
+  /**
+   * Best-effort: refleja athleteCompletionStatus en reservas del día.
+   * Nunca lanza — la sesión ya quedó guardada.
+   */
+  private async syncAttendanceFromSessionCompletion(
+    athleteId: string,
+    scheduledDate: string,
+    completionStatus: string,
+  ): Promise<{
+    status: 'synced' | 'no_reservation' | 'sync_failed';
+    reservationsUpdated: number;
+  }> {
+    const mappedAttendance: boolean | null =
+      completionStatus === 'completed'
+        ? true
+        : completionStatus === 'skipped'
+          ? false
+          : null;
+
+    try {
+      const dateKey = toDateOnlyKey(scheduledDate) ?? scheduledDate;
+      const reservations = await this.reservationRepo
+        .createQueryBuilder('r')
+        .innerJoinAndSelect('r.timeSlot', 'slot')
+        .innerJoin('r.user', 'user')
+        .where('user.id = :athleteId', { athleteId })
+        .andWhere('DATE(slot.date) = DATE(:dateKey)', { dateKey })
+        .getMany();
+
+      if (reservations.length === 0) {
+        return { status: 'no_reservation', reservationsUpdated: 0 };
+      }
+
+      let updated = 0;
+      for (const reservation of reservations) {
+        await this.reservationsService.updateAttendance(
+          reservation.id,
+          mappedAttendance,
+        );
+        updated += 1;
+      }
+      return { status: 'synced', reservationsUpdated: updated };
+    } catch (error) {
+      this.logger.warn(
+        `[syncAttendance] Failed for athlete ${athleteId} on ${scheduledDate}: ${
+          error instanceof Error ? error.message : String(error)
+        }`,
+      );
+      return { status: 'sync_failed', reservationsUpdated: 0 };
+    }
   }
 
   async deleteSession(athleteId: string, sessionId: string) {
@@ -846,5 +931,87 @@ export class TrainingPlannerService {
     const saved = await this.sessionRepo.save(entity);
     const serialized = this.serializeSession(saved);
     return this.enrichSessionWithExerciseMeta(serialized);
+  }
+
+  /** Alumnos del centro sin rutina planificada hace más de N días. */
+  async getPlanningGaps(companyId: string, days = 7) {
+    const thresholdDate = new Date();
+    thresholdDate.setDate(thresholdDate.getDate() - days);
+    const thresholdStr = thresholdDate.toISOString().split('T')[0];
+    const todayStr = new Date().toISOString().split('T')[0];
+
+    const invitations = await this.invitationRepo.find({
+      where: {
+        company: { id: companyId },
+        status: InvitationStatus.APPROVED,
+      },
+      relations: ['user'],
+    });
+
+    const activeAthletes = invitations.filter(
+      (inv) => inv.user && !inv.user.evaluationPortalOnly,
+    );
+
+    if (activeAthletes.length === 0) {
+      return { thresholdDays: days, athletes: [], total: 0 };
+    }
+
+    const athleteIds = activeAthletes.map((inv) => inv.user.id);
+
+    const plannedRows = await this.sessionRepo
+      .createQueryBuilder('s')
+      .select('s.athleteId', 'athleteId')
+      .addSelect('MAX(s.scheduledDate)', 'lastPlannedDate')
+      .where('s.athleteId IN (:...athleteIds)', { athleteIds })
+      .andWhere(
+        "(jsonb_array_length(COALESCE(s.blocks, '[]'::jsonb)) > 0 OR s.template_id = 'libre')",
+      )
+      .groupBy('s.athleteId')
+      .getRawMany<{ athleteId: string; lastPlannedDate: string }>();
+
+    const lastPlannedByAthlete = new Map(
+      plannedRows.map((row) => [row.athleteId, row.lastPlannedDate]),
+    );
+
+    const gaps = activeAthletes
+      .map((inv) => {
+        const athleteId = inv.user.id;
+        const lastPlannedDate = lastPlannedByAthlete.get(athleteId) ?? null;
+        const isGap =
+          !lastPlannedDate || lastPlannedDate < thresholdStr;
+
+        if (!isGap) return null;
+
+        let daysWithoutPlanning: number | null = null;
+        if (lastPlannedDate) {
+          const diffMs =
+            new Date(todayStr).getTime() -
+            new Date(lastPlannedDate).getTime();
+          daysWithoutPlanning = Math.max(
+            0,
+            Math.floor(diffMs / (1000 * 60 * 60 * 24)),
+          );
+        }
+
+        return {
+          athleteId,
+          name: inv.user.name ?? '',
+          lastName: inv.user.lastName ?? '',
+          lastPlannedDate,
+          daysWithoutPlanning,
+        };
+      })
+      .filter((row): row is NonNullable<typeof row> => row !== null)
+      .sort((a, b) => {
+        if (a.daysWithoutPlanning === null) return -1;
+        if (b.daysWithoutPlanning === null) return 1;
+        return b.daysWithoutPlanning - a.daysWithoutPlanning;
+      });
+
+    return {
+      thresholdDays: days,
+      athletes: gaps,
+      total: gaps.length,
+    };
   }
 }

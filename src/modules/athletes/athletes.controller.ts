@@ -7,6 +7,7 @@ import {
   Delete,
   Param,
   Body,
+  Query,
   UseGuards,
   DefaultValuePipe,
 } from '@nestjs/common';
@@ -233,6 +234,23 @@ export class AthletesController {
   ) {
     await this.ensureUserBelongsToCompany(user, companyId);
     return await this.athletesService.getBirthdaysToday(companyId, user);
+  }
+
+  @Get('company/:companyId/birthdays-upcoming')
+  @UseGuards(AuthGuard('jwt'))
+  async getBirthdaysUpcoming(
+    @Param('companyId') companyId: string,
+    @Query('days') days: string | undefined,
+    @GetUser() user: User,
+  ) {
+    await this.ensureUserBelongsToCompany(user, companyId);
+    const parsed = Number(days);
+    const thresholdDays = Number.isFinite(parsed) && parsed > 0 ? parsed : 7;
+    return await this.athletesService.getBirthdaysUpcoming(
+      companyId,
+      thresholdDays,
+      user,
+    );
   }
 
   @Get('company/:companyId/check-athlete/:athleteId')

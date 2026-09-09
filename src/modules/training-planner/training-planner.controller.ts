@@ -108,6 +108,18 @@ export class TrainingPlannerController {
 
   // ── Sessions ──────────────────────────────────────────────────────────────
 
+  /** GET /training-planner/company/:companyId/planning-gaps?days=7 */
+  @Get('company/:companyId/planning-gaps')
+  getPlanningGaps(
+    @Param('companyId') companyId: string,
+    @Query('days') days?: string,
+  ) {
+    const parsedDays = Number(days);
+    const thresholdDays =
+      Number.isFinite(parsedDays) && parsedDays > 0 ? parsedDays : 7;
+    return this.service.getPlanningGaps(companyId, thresholdDays);
+  }
+
   /** GET /training-planner/sessions?athleteId=&macroWeekId= */
   @Get('sessions')
   listSessions(
