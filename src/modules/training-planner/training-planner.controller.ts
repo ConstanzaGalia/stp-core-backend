@@ -16,17 +16,48 @@ import { UserRole } from 'src/common/enums/enums';
 import { GetUser } from '../auth/get-user.decorator';
 import { User } from 'src/entities/user.entity';
 import { TrainingPlannerService } from './training-planner.service';
+import { CompanyService } from '../company/company.service';
+
+const STAFF_ROLES = [
+  UserRole.STP_ADMIN,
+  UserRole.DIRECTOR,
+  UserRole.TRAINER,
+  UserRole.SUB_TRAINER,
+  UserRole.SECRETARIA,
+];
 
 @Controller('training-planner')
 @UseGuards(AuthGuard('jwt'))
 export class TrainingPlannerController {
-  constructor(private readonly service: TrainingPlannerService) {}
+  constructor(
+    private readonly service: TrainingPlannerService,
+    private readonly companyService: CompanyService,
+  ) {}
 
   private assertCanModify(user: User): void {
     if (user.role === UserRole.SECRETARIA) {
       throw new ForbiddenException(
         'El rol Secretaría solo puede consultar entrenamientos.',
       );
+    }
+  }
+
+  private async assertStaffBelongsToCompany(
+    user: User,
+    companyId: string,
+  ): Promise<void> {
+    if (!STAFF_ROLES.includes(user.role)) {
+      throw new ForbiddenException(
+        'No tienes permiso para consultar inactividad de este centro',
+      );
+    }
+    if (user.role === UserRole.STP_ADMIN) {
+      return;
+    }
+    const companies = await this.companyService.findCompaniesByUser(user.id);
+    const belongs = companies.some((c) => c.id === companyId);
+    if (!belongs) {
+      throw new ForbiddenException('No perteneces a este centro');
     }
   }
 
@@ -118,6 +149,16 @@ export class TrainingPlannerController {
     const thresholdDays =
       Number.isFinite(parsedDays) && parsedDays > 0 ? parsedDays : 7;
     return this.service.getPlanningGaps(companyId, thresholdDays);
+  }
+
+  /** GET /training-planner/company/:companyId/training-inactivity */
+  @Get('company/:companyId/training-inactivity')
+  async getTrainingInactivity(
+    @Param('companyId') companyId: string,
+    @GetUser() user: User,
+  ) {
+    await this.assertStaffBelongsToCompany(user, companyId);
+    return this.service.getTrainingInactivity(companyId, user);
   }
 
   /** GET /training-planner/sessions?athleteId=&macroWeekId= */

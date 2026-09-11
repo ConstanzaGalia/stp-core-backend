@@ -20,8 +20,15 @@ import {
 } from 'src/entities/athlete-invitation.entity';
 import { Reservation } from 'src/entities/reservation.entity';
 import { ReservationsService } from '../reservation/reservation.service';
-import { toDateOnlyKey } from 'src/common/utils/date-only.util';
-
+import { calendarDateInArgentina, toDateOnlyKey } from 'src/common/utils/date-only.util';
+import { resolveCoachDivisionScope } from 'src/common/helpers/division-scope.helper';
+import { Company } from 'src/entities/company.entity';
+import { Division } from 'src/entities/division.entity';
+import { SubscriptionSuspension } from 'src/entities/subscription-suspension.entity';
+import {
+  buildTrainingInactivityGroups,
+  collectSuspendedAthleteIds,
+} from './training-inactivity.util';
 interface SessionExerciseMeta {
   videoUrl: string | null;
   esIsometrico: boolean;
@@ -162,6 +169,12 @@ export class TrainingPlannerService {
     private readonly invitationRepo: Repository<AthleteInvitation>,
     @InjectRepository(Reservation)
     private readonly reservationRepo: Repository<Reservation>,
+    @InjectRepository(Company)
+    private readonly companyRepo: Repository<Company>,
+    @InjectRepository(Division)
+    private readonly divisionRepo: Repository<Division>,
+    @InjectRepository(SubscriptionSuspension)
+    private readonly suspensionRepo: Repository<SubscriptionSuspension>,
     private readonly reservationsService: ReservationsService,
   ) {}
 
@@ -1013,5 +1026,105 @@ export class TrainingPlannerService {
       athletes: gaps,
       total: gaps.length,
     };
+  }
+
+  /**
+   * Alumnos activos del centro agrupados por inactividad de entrenamiento confirmado.
+   * Buckets excluyentes: neverTrained | oneToTwoWeeks (7–13) | twoWeeksOrMore (14+).
+   */
+  async getTrainingInactivity(companyId: string, actor?: User) {
+    const referenceDate = calendarDateInArgentina();
+    const scope = await resolveCoachDivisionScope(
+      this.companyRepo,
+      this.divisionRepo,
+      actor,
+      companyId,
+    );
+
+    if (scope.scoped && scope.divisionIds.length === 0) {
+      return buildTrainingInactivityGroups([], referenceDate);
+    }
+
+    const qb = this.invitationRepo
+      .createQueryBuilder('inv')
+      .innerJoinAndSelect('inv.user', 'user')
+      .where('inv.companyId = :cid', { cid: companyId })
+      .andWhere('inv.status = :status', { status: InvitationStatus.APPROVED });
+
+    if (scope.scoped) {
+      qb.andWhere('inv.division_id IN (:...divIds)', {
+        divIds: scope.divisionIds,
+      });
+    }
+
+    const invitations = await qb.orderBy('inv.approvedAt', 'DESC').getMany();
+    const rosterAthletes = invitations.filter(
+      (inv) => inv.user && !inv.user.evaluationPortalOnly,
+    );
+
+    if (rosterAthletes.length === 0) {
+      return buildTrainingInactivityGroups([], referenceDate);
+    }
+
+    const suspensions = await this.suspensionRepo.find({
+      where: {
+        companyId,
+        isActive: true,
+      },
+      select: ['userId', 'startDate', 'endDate', 'isActive'],
+    });
+    const suspendedIds = collectSuspendedAthleteIds(suspensions, referenceDate);
+
+    const activeAthletes = rosterAthletes.filter(
+      (inv) => !suspendedIds.has(inv.user.id),
+    );
+
+    if (activeAthletes.length === 0) {
+      return buildTrainingInactivityGroups([], referenceDate);
+    }
+
+    const athleteIds = activeAthletes.map((inv) => inv.user.id);
+
+    const [confirmedRows, plannedRows] = await Promise.all([
+      this.sessionRepo
+        .createQueryBuilder('s')
+        .select('s.athleteId', 'athleteId')
+        .addSelect('MAX(s.scheduledDate)', 'lastTrainingDate')
+        .where('s.athleteId IN (:...athleteIds)', { athleteIds })
+        .andWhere('s.scheduledDate <= :referenceDate', { referenceDate })
+        .andWhere("s.athleteCompletionStatus <> 'skipped'")
+        .andWhere(
+          "(s.athleteCompletionStatus = 'completed' OR s.feedbackStatus IN ('pending_review', 'approved'))",
+        )
+        .groupBy('s.athleteId')
+        .getRawMany<{ athleteId: string; lastTrainingDate: string }>(),
+      this.sessionRepo
+        .createQueryBuilder('s')
+        .select('s.athleteId', 'athleteId')
+        .addSelect('MAX(s.scheduledDate)', 'lastPlannedDate')
+        .where('s.athleteId IN (:...athleteIds)', { athleteIds })
+        .andWhere(
+          "(jsonb_array_length(COALESCE(s.blocks, '[]'::jsonb)) > 0 OR s.template_id = 'libre')",
+        )
+        .groupBy('s.athleteId')
+        .getRawMany<{ athleteId: string; lastPlannedDate: string }>(),
+    ]);
+
+    const lastTrainingByAthlete = new Map(
+      confirmedRows.map((row) => [row.athleteId, row.lastTrainingDate]),
+    );
+    const lastPlannedByAthlete = new Map(
+      plannedRows.map((row) => [row.athleteId, row.lastPlannedDate]),
+    );
+
+    const athletes = activeAthletes.map((inv) => ({
+      athleteId: inv.user.id,
+      name: inv.user.name ?? '',
+      lastName: inv.user.lastName ?? '',
+      lastTrainingDate: lastTrainingByAthlete.get(inv.user.id) ?? null,
+      lastPlannedDate: lastPlannedByAthlete.get(inv.user.id) ?? null,
+    }));
+
+    return buildTrainingInactivityGroups(athletes, referenceDate);
   }
 }
