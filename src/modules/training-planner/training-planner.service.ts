@@ -1121,6 +1121,10 @@ export class TrainingPlannerService {
       athleteId: inv.user.id,
       name: inv.user.name ?? '',
       lastName: inv.user.lastName ?? '',
+      phone:
+        inv.user.phoneNumber != null && inv.user.phoneNumber !== undefined
+          ? String(inv.user.phoneNumber)
+          : null,
       lastTrainingDate: lastTrainingByAthlete.get(inv.user.id) ?? null,
       lastPlannedDate: lastPlannedByAthlete.get(inv.user.id) ?? null,
     }));
