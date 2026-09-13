@@ -1029,6 +1029,9 @@ export class PaymentsService {
     income: number;
     expenses: number;
     balance: number;
+    incomeByCurrency: Record<CenterCurrency, number>;
+    expensesByCurrency: Record<CenterCurrency, number>;
+    balanceByCurrency: Record<CenterCurrency, number>;
     incomeDetail: any[];
     expensesDetail: any[];
   }> {
@@ -1043,11 +1046,28 @@ export class PaymentsService {
       ...incomeResult.payments,
       ...extraIncomeResult.items
     ].sort((a, b) => new Date(b.date).getTime() - new Date(a.date).getTime());
+    const incomeByCurrency: Record<CenterCurrency, number> = { ARS: 0, USD: 0, EUR: 0 };
+    const expensesByCurrency: Record<CenterCurrency, number> = { ARS: 0, USD: 0, EUR: 0 };
+
+    for (const item of incomeDetail) {
+      incomeByCurrency[normalizeMoneyCurrency(item.currency)] += Number(item.amount || 0);
+    }
+    for (const item of expensesResult.expenses) {
+      expensesByCurrency[normalizeMoneyCurrency(item.currency)] += Number(item.amount || 0);
+    }
+    const balanceByCurrency: Record<CenterCurrency, number> = {
+      ARS: incomeByCurrency.ARS - expensesByCurrency.ARS,
+      USD: incomeByCurrency.USD - expensesByCurrency.USD,
+      EUR: incomeByCurrency.EUR - expensesByCurrency.EUR,
+    };
 
     return {
       income: totalIncome,
       expenses: expensesResult.total,
       balance: totalIncome - expensesResult.total,
+      incomeByCurrency,
+      expensesByCurrency,
+      balanceByCurrency,
       incomeDetail,
       expensesDetail: expensesResult.expenses
     };
@@ -1808,7 +1828,7 @@ export class PaymentsService {
   }
 
   async getStudentsWithPayments(companyId: string): Promise<any[]> {
-    const [subscriptions, allCompanyPayments] = await Promise.all([
+    const [subscriptions, allCompanyPayments, company] = await Promise.all([
       this.subscriptionRepository.find({
         where: { company: { id: companyId } },
         relations: [
@@ -1825,7 +1845,9 @@ export class PaymentsService {
         where: { company: { id: companyId } },
         relations: ['user', 'paymentPlan'],
       }),
+      this.companyRepository.findOne({ where: { id: companyId } }),
     ]);
+    const { defaultCurrency } = resolveCompanyCurrencies(company ?? undefined);
 
     const paymentsByUserId = new Map<string, Payment[]>();
     for (const payment of allCompanyPayments) {
@@ -1877,6 +1899,7 @@ export class PaymentsService {
           instalmentNumber: payment.instalmentNumber,
           concept: payment.concept,
           planName: payment.paymentPlan?.name ?? null,
+          currency: normalizeMoneyCurrency(payment.paymentPlan?.currency, defaultCurrency),
           pendingBalance: payment.pendingBalance != null ? Number(payment.pendingBalance) : null,
           sortDate: payment.paidDate || payment.dueDate
         }))
@@ -1918,6 +1941,7 @@ export class PaymentsService {
           instalmentNumber: payment.instalmentNumber,
           concept: payment.concept,
           planName: payment.planName,
+          currency: payment.currency,
           pendingBalance: payment.pendingBalance != null ? Number(payment.pendingBalance) : null,
           isOverdue: payment.dueDate
             ? new Date(payment.dueDate) < new Date()
@@ -1999,6 +2023,7 @@ export class PaymentsService {
         instalmentNumber: payment.instalmentNumber,
         concept: payment.concept,
         planName: payment.paymentPlan?.name ?? 'Matrícula',
+        currency: normalizeMoneyCurrency(payment.paymentPlan?.currency, defaultCurrency),
         pendingBalance: payment.pendingBalance != null ? Number(payment.pendingBalance) : null,
         isOverdue: payment.dueDate ? new Date(payment.dueDate) < new Date() && payment.status === PaymentStatus.PENDING : false,
         isSuspended: false
