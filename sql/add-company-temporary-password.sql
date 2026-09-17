@@ -1,0 +1,2 @@
+ALTER TABLE company
+ADD COLUMN IF NOT EXISTS temporary_password VARCHAR(100) NULL;

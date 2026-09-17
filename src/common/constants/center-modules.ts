@@ -5,6 +5,7 @@ export const CONFIGURABLE_CENTER_MODULE_IDS = [
   'evaluaciones-atletas',
   'entrenadores',
   'ejercicios',
+  'planes-entrenamiento',
   'turnos',
   'pagos',
   'mis-centros',

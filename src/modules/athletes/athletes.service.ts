@@ -26,8 +26,7 @@ import {
   monthDayInArgentina,
   calendarDateInArgentina,
 } from '../../common/utils/date-only.util';
-
-const DEFAULT_ATHLETE_PASSWORD = 'EntrenamientoSTP1@';
+import { resolveCenterTemporaryPassword } from '../../common/constants/center-temporary-password';
 
 @Injectable()
 export class AthletesService {
@@ -237,14 +236,21 @@ export class AthletesService {
    * Obtener todos los centros a los que está suscrito un atleta
    */
   async getMySubscribedCenters(athleteId: string) {
-    return await this.invitationRepository.find({
+    const invitations = await this.invitationRepository.find({
       where: {
         user: { id: athleteId },
         status: InvitationStatus.APPROVED
       },
-      relations: ['company'],
+      relations: ['company', 'division'],
       order: { approvedAt: 'DESC' }
     });
+
+    return invitations.map((invitation) =>
+      Object.assign(invitation, {
+        divisionId: invitation.division?.id ?? invitation.divisionId ?? null,
+        divisionName: invitation.division?.name ?? null,
+      }),
+    );
   }
 
   /**
@@ -286,7 +292,7 @@ export class AthletesService {
   async createAthleteForCompany(
     companyId: string,
     createAthleteDto: CreateAthleteDto,
-  ): Promise<{ user: User; invitation: AthleteInvitation }> {
+  ): Promise<{ user: User; invitation: AthleteInvitation; temporaryPassword?: string }> {
     const { name, lastName, email, isOnline = false, dateOfBirth, dni, phoneNumber, evaluationPortalOnly, sexo, peso, altura } = createAthleteDto;
 
     // Verificar que el centro existe
@@ -349,7 +355,8 @@ export class AthletesService {
     }
 
     // Crear nuevo usuario atleta (verificado, sin activeToken)
-    const passwordEncrypted = await this.encryptService.encryptedData(DEFAULT_ATHLETE_PASSWORD);
+    const temporaryPassword = resolveCenterTemporaryPassword(company);
+    const passwordEncrypted = await this.encryptService.encryptedData(temporaryPassword);
     const parsedPhone = phoneNumber ? (() => {
       const digits = String(phoneNumber).replace(/\D/g, '');
       const num = parseInt(digits, 10);
@@ -386,7 +393,7 @@ export class AthletesService {
     const savedInvitation = await this.invitationRepository.save(invitation);
     await this.addUserToCompany(savedUser.id, companyId);
 
-    return { user: savedUser, invitation: savedInvitation };
+    return { user: savedUser, invitation: savedInvitation, temporaryPassword };
   }
 
   /**

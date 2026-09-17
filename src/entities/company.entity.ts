@@ -79,6 +79,11 @@ export class Company {
   @Column({ type: 'varchar', length: 3, default: 'ARS', name: 'default_currency' })
   defaultCurrency?: string;
 
+  /** Contraseña temporal al crear atletas. NULL = EntrenamientoSTP1@. No altera cuentas existentes. */
+  @ApiProperty({ required: false })
+  @Column({ type: 'varchar', length: 100, nullable: true, name: 'temporary_password' })
+  temporaryPassword?: string | null;
+
   @ManyToMany(() => User, user => user.company)
   @JoinTable()
   users: User[];

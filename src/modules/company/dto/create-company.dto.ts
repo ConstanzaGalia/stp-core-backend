@@ -1,10 +1,28 @@
 import { Transform } from "class-transformer";
-import { ArrayMinSize, IsArray, IsEnum, IsIn, IsNotEmpty, IsOptional, IsString } from "class-validator";
+import {
+  ArrayMinSize,
+  IsArray,
+  IsEnum,
+  IsIn,
+  IsNotEmpty,
+  IsOptional,
+  IsString,
+  Matches,
+  MaxLength,
+  MinLength,
+  ValidateIf,
+} from "class-validator";
 import { CENTER_CURRENCIES } from "src/common/center-currencies";
 import { CompanyAccountType } from "src/common/enums/enums";
 
 const emptyToUndefined = ({ value }: { value: unknown }) =>
   value === '' || value === null ? undefined : value;
+
+const emptyToNull = ({ value }: { value: unknown }) => {
+  if (value === undefined) return undefined;
+  if (value === '' || value === null) return null;
+  return typeof value === 'string' ? value.trim() : value;
+};
 
 export class CreateCompanyDto {
   @IsNotEmpty()
@@ -39,4 +57,15 @@ export class CreateCompanyDto {
   @IsOptional()
   @IsIn([...CENTER_CURRENCIES])
   defaultCurrency?: string;
+
+  @IsOptional()
+  @Transform(emptyToNull)
+  @ValidateIf((_, value) => typeof value === 'string')
+  @IsString()
+  @MinLength(8)
+  @MaxLength(100)
+  @Matches(/^(?=.*?[A-Z])(?=.*?[a-z])(?=.*?[0-9])(?=.*?[^\w\s]).{8,}$/, {
+    message: 'La contraseña temporal debe tener al menos 8 caracteres, mayúscula, minúscula, número y símbolo',
+  })
+  temporaryPassword?: string | null;
 }

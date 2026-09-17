@@ -86,6 +86,8 @@ export class CompanyService {
         defaultCurrency: currencies.defaultCurrency,
         ...(createCompanyDto.accountType ? { accountType: createCompanyDto.accountType } : {}),
       });
+      const customTemporaryPassword = createCompanyDto.temporaryPassword?.trim();
+      newCompany.temporaryPassword = customTemporaryPassword || null;
       newCompany.users = [user];
       return await this.companyRepository.save(newCompany);
     } catch (error) {
@@ -312,6 +314,11 @@ export class CompanyService {
       });
       company.enabledCurrencies = resolved.enabledCurrencies;
       company.defaultCurrency = resolved.defaultCurrency;
+    }
+
+    if (updateCompanyDto.temporaryPassword !== undefined) {
+      const customTemporaryPassword = updateCompanyDto.temporaryPassword?.trim();
+      company.temporaryPassword = customTemporaryPassword || null;
     }
 
     return this.companyRepository.save(company);
