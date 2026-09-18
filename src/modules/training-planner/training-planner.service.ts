@@ -592,6 +592,11 @@ export class TrainingPlannerService {
       progressionConfig?: unknown;
       warnings?: string[];
       blocks?: unknown[];
+      /**
+       * Si true, permite persistir blocks=[] (vaciar circuitos a propósito).
+       * Sin este flag, un [] no pisa bloques existentes (protección ante listados summary).
+       */
+      allowEmptyBlocks?: boolean;
       feedbackStatus?: string;
       feedback?: unknown;
       review?: unknown;
@@ -613,7 +618,11 @@ export class TrainingPlannerService {
     let entity = existing ?? this.sessionRepo.create({ id: data.id });
     const isStaff = actor ? isStaffUser(actor) : false;
 
-    const blocks = data.blocks ?? existing?.blocks ?? [];
+    const blocks = this.resolveIncomingBlocks(
+      data.blocks,
+      existing?.blocks,
+      data.allowEmptyBlocks === true,
+    );
     const safety = await this.evaluateSessionSafety(data.athleteId, blocks);
     const requestedCoachStatus =
       data.coachStatus ?? existing?.coachStatus ?? 'published';
@@ -835,6 +844,25 @@ export class TrainingPlannerService {
     if (!entity) return false;
     await this.sessionRepo.remove(entity);
     return true;
+  }
+
+  /**
+   * Resuelve blocks a persistir.
+   * Un `blocks: []` sin `allowEmptyBlocks` no pisa circuitos existentes
+   * (los listados summary envían [] y no deben vaciar la sesión).
+   */
+  private resolveIncomingBlocks(
+    incoming: unknown[] | undefined,
+    existing: unknown,
+    allowEmptyBlocks: boolean,
+  ): unknown[] {
+    const existingBlocks = Array.isArray(existing) ? existing : [];
+    if (incoming === undefined) return existingBlocks;
+    if (!Array.isArray(incoming)) return existingBlocks;
+    if (incoming.length === 0 && existingBlocks.length > 0 && !allowEmptyBlocks) {
+      return existingBlocks;
+    }
+    return incoming;
   }
 
   /** Vista liviana para calendario/strip: sin blocks, feedback, review ni configs pesadas. */
