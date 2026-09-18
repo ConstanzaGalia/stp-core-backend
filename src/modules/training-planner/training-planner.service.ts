@@ -24,7 +24,7 @@ import {
   InvitationStatus,
 } from 'src/entities/athlete-invitation.entity';
 import { Reservation } from 'src/entities/reservation.entity';
-import { ReservationsService } from '../reservation/reservation.service';
+import { TimeSlot } from 'src/entities/timeSlot.entity';
 import { calendarDateInArgentina, toDateOnlyKey } from 'src/common/utils/date-only.util';
 import { resolveCoachDivisionScope } from 'src/common/helpers/division-scope.helper';
 import { Company } from 'src/entities/company.entity';
@@ -194,6 +194,8 @@ export class TrainingPlannerService {
     private readonly invitationRepo: Repository<AthleteInvitation>,
     @InjectRepository(Reservation)
     private readonly reservationRepo: Repository<Reservation>,
+    @InjectRepository(TimeSlot)
+    private readonly timeSlotRepo: Repository<TimeSlot>,
     @InjectRepository(Company)
     private readonly companyRepo: Repository<Company>,
     @InjectRepository(Division)
@@ -202,7 +204,6 @@ export class TrainingPlannerService {
     private readonly suspensionRepo: Repository<SubscriptionSuspension>,
     @InjectRepository(User)
     private readonly userRepo: Repository<User>,
-    private readonly reservationsService: ReservationsService,
     private readonly companyService: CompanyService,
     private readonly athletesService: AthletesService,
     @Inject(forwardRef(() => InjuriesService))
@@ -310,8 +311,21 @@ export class TrainingPlannerService {
       availableEquipment: [],
       defaultProgressionConfig: null,
     });
-    const saved = await this.profileRepo.save(entity);
-    return this.serializeProfile(saved);
+    try {
+      const saved = await this.profileRepo.save(entity);
+      return this.serializeProfile(saved);
+    } catch (error) {
+      // Carrera: otro request creó el perfil entre el findOne y el save.
+      const code =
+        error && typeof error === 'object' && 'code' in error
+          ? String((error as { code?: string }).code)
+          : '';
+      if (code === '23505') {
+        const raced = await this.profileRepo.findOne({ where: { athleteId } });
+        if (raced) return this.serializeProfile(raced);
+      }
+      throw error;
+    }
   }
 
   async saveProfile(athleteId: string, data: Partial<STPTrainingProfile>) {
@@ -503,6 +517,7 @@ export class TrainingPlannerService {
     athleteId: string,
     macroWeekId?: string | null,
     includePrivate = false,
+    view: 'full' | 'summary' = 'full',
   ) {
     const where: Record<string, string> = { athleteId };
     if (macroWeekId) where.macroWeekId = macroWeekId;
@@ -514,9 +529,31 @@ export class TrainingPlannerService {
       where,
       order: { scheduledDate: 'ASC', sessionOrdinal: 'ASC' },
     });
-    return entities
-      .filter((e) => includePrivate || (e.coachStatus ?? 'published') === 'published')
-      .map((e) => this.serializeSession(e, { includePrivate }));
+    const filtered = entities.filter(
+      (e) => includePrivate || (e.coachStatus ?? 'published') === 'published',
+    );
+    if (view === 'summary') {
+      return filtered.map((e) => this.serializeSessionSummary(e, { includePrivate }));
+    }
+    return filtered.map((e) => this.serializeSession(e, { includePrivate }));
+  }
+
+  /**
+   * Bootstrap del planner: profile + macro activo + sesiones summary en un round-trip.
+   */
+  async getPlannerBootstrap(athleteId: string, includePrivate = false) {
+    const [profile, macroPlan, sessions, activeTags] = await Promise.all([
+      this.ensureProfile(athleteId),
+      this.getMacroPlan(athleteId),
+      this.listSessions(athleteId, null, includePrivate, 'summary'),
+      this.injuriesService.getActiveTags(athleteId).catch(() => []),
+    ]);
+    return {
+      profile,
+      macroPlan,
+      sessions,
+      activeTags,
+    };
   }
 
   async getSession(
@@ -708,7 +745,7 @@ export class TrainingPlannerService {
 
   /**
    * Best-effort: refleja athleteCompletionStatus en reservas del día.
-   * Nunca lanza — la sesión ya quedó guardada.
+   * Batch update (sin loop N× findOne/save). Nunca lanza — la sesión ya quedó guardada.
    */
   private async syncAttendanceFromSessionCompletion(
     athleteId: string,
@@ -727,27 +764,60 @@ export class TrainingPlannerService {
 
     try {
       const dateKey = toDateOnlyKey(scheduledDate) ?? scheduledDate;
+      // Rango [dateKey, dateKey+1) para usar índice en time_slot.date (evita DATE()).
+      const dayStart = new Date(`${dateKey}T00:00:00.000Z`);
+      const dayEnd = new Date(dayStart);
+      dayEnd.setUTCDate(dayEnd.getUTCDate() + 1);
+
       const reservations = await this.reservationRepo
         .createQueryBuilder('r')
         .innerJoinAndSelect('r.timeSlot', 'slot')
         .innerJoin('r.user', 'user')
         .where('user.id = :athleteId', { athleteId })
-        .andWhere('DATE(slot.date) = DATE(:dateKey)', { dateKey })
+        .andWhere('slot.date >= :dayStart AND slot.date < :dayEnd', {
+          dayStart,
+          dayEnd,
+        })
         .getMany();
 
       if (reservations.length === 0) {
         return { status: 'no_reservation', reservationsUpdated: 0 };
       }
 
-      let updated = 0;
+      // Delta de attendedCount por timeslot (solo cuando cambia a/de true).
+      const attendedDeltaBySlot = new Map<string, number>();
       for (const reservation of reservations) {
-        await this.reservationsService.updateAttendance(
-          reservation.id,
-          mappedAttendance,
-        );
-        updated += 1;
+        const previous = reservation.attendanceStatus;
+        let delta = 0;
+        if (previous !== true && mappedAttendance === true) delta = 1;
+        else if (previous === true && mappedAttendance !== true) delta = -1;
+        if (delta !== 0) {
+          const slotId = reservation.timeSlotId;
+          attendedDeltaBySlot.set(
+            slotId,
+            (attendedDeltaBySlot.get(slotId) ?? 0) + delta,
+          );
+        }
       }
-      return { status: 'synced', reservationsUpdated: updated };
+
+      const reservationIds = reservations.map((r) => r.id);
+      await this.reservationRepo
+        .createQueryBuilder()
+        .update(Reservation)
+        .set({ attendanceStatus: mappedAttendance })
+        .whereInIds(reservationIds)
+        .execute();
+
+      for (const [slotId, delta] of attendedDeltaBySlot) {
+        if (delta === 0) continue;
+        const slot = await this.timeSlotRepo.findOne({ where: { id: slotId } });
+        if (!slot) continue;
+        const next = Math.max(0, (slot.attendedCount || 0) + delta);
+        slot.attendedCount = Math.min(next, slot.reservedCount || 0);
+        await this.timeSlotRepo.save(slot);
+      }
+
+      return { status: 'synced', reservationsUpdated: reservations.length };
     } catch (error) {
       this.logger.warn(
         `[syncAttendance] Failed for athlete ${athleteId} on ${scheduledDate}: ${
@@ -765,6 +835,112 @@ export class TrainingPlannerService {
     if (!entity) return false;
     await this.sessionRepo.remove(entity);
     return true;
+  }
+
+  /** Vista liviana para calendario/strip: sin blocks, feedback, review ni configs pesadas. */
+  private serializeSessionSummary(
+    e: STPSessionInstance,
+    options: { includePrivate?: boolean } = {},
+  ) {
+    const { includePrivate = false } = options;
+    const blocks = Array.isArray(e.blocks) ? e.blocks : [];
+    return {
+      id: e.id,
+      athleteId: e.athleteId,
+      macroPlanId: e.macroPlanId ?? null,
+      macroWeekId: e.macroWeekId,
+      weekStartDate: e.weekStartDate,
+      weekLabel: e.weekLabel,
+      sessionOrdinal: e.sessionOrdinal,
+      scheduledDate: e.scheduledDate,
+      phase: e.phase,
+      weekType: e.weekType,
+      pattern: e.pattern,
+      templateId: e.templateId,
+      templateDayId: e.templateDayId,
+      enduranceFormat: e.enduranceFormat ?? null,
+      warnings: e.warnings ?? [],
+      blocks: [] as unknown[],
+      /** Cantidad de circuitos (summary no envía blocks). */
+      blockCount: blocks.length,
+      /** Volumen estimado para el calendario sin enviar blocks. */
+      tonnageKg: this.estimateSessionTonnageKg(blocks),
+      feedbackStatus: e.feedbackStatus,
+      athleteCompletionStatus: e.athleteCompletionStatus ?? 'pending',
+      coachStatus: e.coachStatus ?? 'published',
+      sourceWorkoutTemplateId: e.sourceWorkoutTemplateId ?? null,
+      safetyConflicts: Array.isArray(e.safetyConflicts) ? e.safetyConflicts : [],
+      attendanceMarkedByUserId: e.attendanceMarkedByUserId ?? null,
+      attendanceMarkedByName: e.attendanceMarkedByName ?? null,
+      attendanceMarkedAt: e.attendanceMarkedAt
+        ? toIso(e.attendanceMarkedAt)
+        : null,
+      attendanceSource: e.attendanceSource ?? null,
+      notes: e.notes ?? null,
+      ...(includePrivate
+        ? { coachObservations: e.coachObservations ?? null }
+        : {}),
+      createdAt: toIso(e.createdAt),
+      updatedAt: toIso(e.updatedAt),
+    };
+  }
+
+  /** Estimación liviana de tonelaje (vueltas × reps × kg) para listados summary. */
+  private estimateSessionTonnageKg(blocks: unknown[]): number {
+    let total = 0;
+    for (const raw of blocks) {
+      if (!raw || typeof raw !== 'object') continue;
+      const block = raw as {
+        isEC?: boolean;
+        sets?: number;
+        exercises?: Array<{
+          prescribedLoad?: number | null;
+          prescribedReps?: string | number | null;
+          sets?: number;
+        }>;
+      };
+      if (block.isEC) continue;
+      const blockSets = typeof block.sets === 'number' && block.sets > 0 ? block.sets : 1;
+      for (const ex of block.exercises ?? []) {
+        const load =
+          typeof ex.prescribedLoad === 'number' && Number.isFinite(ex.prescribedLoad)
+            ? ex.prescribedLoad
+            : null;
+        if (load == null || load <= 0) continue;
+        const repsMatch = String(ex.prescribedReps ?? '').match(/\d+/);
+        const reps = repsMatch ? Number(repsMatch[0]) : null;
+        if (reps == null || !Number.isFinite(reps)) continue;
+        const exSets =
+          typeof ex.sets === 'number' && ex.sets > 0 ? ex.sets : blockSets;
+        total += exSets * reps * load;
+      }
+    }
+    return Math.round(total);
+  }
+
+  /** Respuesta mínima del PATCH de asistencia (el FE ya tiene blocks en cache). */
+  private serializeSessionCompletionPatch(
+    e: STPSessionInstance,
+    attendanceSync?: {
+      status: 'synced' | 'no_reservation' | 'sync_failed';
+      reservationsUpdated: number;
+    },
+  ) {
+    return {
+      id: e.id,
+      athleteId: e.athleteId,
+      macroWeekId: e.macroWeekId,
+      scheduledDate: e.scheduledDate,
+      athleteCompletionStatus: e.athleteCompletionStatus ?? 'pending',
+      attendanceMarkedByUserId: e.attendanceMarkedByUserId ?? null,
+      attendanceMarkedByName: e.attendanceMarkedByName ?? null,
+      attendanceMarkedAt: e.attendanceMarkedAt
+        ? toIso(e.attendanceMarkedAt)
+        : null,
+      attendanceSource: e.attendanceSource ?? null,
+      updatedAt: toIso(e.updatedAt),
+      ...(attendanceSync ? { attendanceSync } : {}),
+    };
   }
 
   private serializeSession(
@@ -1743,8 +1919,8 @@ export class TrainingPlannerService {
       );
     }
 
-    const serialized = this.serializeSession(saved, { includePrivate: true });
-    return attendanceSync ? { ...serialized, attendanceSync } : serialized;
+    const serialized = this.serializeSessionCompletionPatch(saved, attendanceSync);
+    return serialized;
   }
 
   async validateSessionSafety(sessionId: string, athleteId: string) {

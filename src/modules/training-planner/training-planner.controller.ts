@@ -285,11 +285,29 @@ export class TrainingPlannerController {
   async listSessions(
     @Query('athleteId') athleteId: string,
     @Query('macroWeekId') macroWeekId: string | undefined,
+    @Query('view') view: string | undefined,
     @GetUser() user: User,
   ) {
     await this.service.assertCanAccessTrainingAthlete(user, athleteId, false);
     const includePrivate = user.role !== UserRole.ATHLETE;
-    return this.service.listSessions(athleteId, macroWeekId ?? null, includePrivate);
+    const sessionView = view === 'summary' ? 'summary' : 'full';
+    return this.service.listSessions(
+      athleteId,
+      macroWeekId ?? null,
+      includePrivate,
+      sessionView,
+    );
+  }
+
+  /** Bootstrap planner: profile + macro + sessions summary (+ active tags). */
+  @Get('athletes/:athleteId/bootstrap')
+  async getPlannerBootstrap(
+    @Param('athleteId') athleteId: string,
+    @GetUser() user: User,
+  ) {
+    await this.service.assertCanAccessTrainingAthlete(user, athleteId, false);
+    const includePrivate = user.role !== UserRole.ATHLETE;
+    return this.service.getPlannerBootstrap(athleteId, includePrivate);
   }
 
   @Get('sessions/:id')

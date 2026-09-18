@@ -9,13 +9,13 @@ import { STPWorkoutCollection } from 'src/entities/stp-workout-collection.entity
 import { Exercise } from 'src/entities/excercise.entity';
 import { AthleteInvitation } from 'src/entities/athlete-invitation.entity';
 import { Reservation } from 'src/entities/reservation.entity';
+import { TimeSlot } from 'src/entities/timeSlot.entity';
 import { Company } from 'src/entities/company.entity';
 import { Division } from 'src/entities/division.entity';
 import { SubscriptionSuspension } from 'src/entities/subscription-suspension.entity';
 import { User } from 'src/entities/user.entity';
 import { TrainingPlannerService } from './training-planner.service';
 import { TrainingPlannerController } from './training-planner.controller';
-import { ReservationsModule } from '../reservation/reservation.module';
 import { CompanyModule } from '../company/company.module';
 import { AthletesModule } from '../athletes/athletes.module';
 import { InjuriesModule } from '../injuries/injuries.module';
@@ -32,12 +32,12 @@ import { InjuriesModule } from '../injuries/injuries.module';
       Exercise,
       AthleteInvitation,
       Reservation,
+      TimeSlot,
       Company,
       Division,
       SubscriptionSuspension,
       User,
     ]),
-    forwardRef(() => ReservationsModule),
     CompanyModule,
     AthletesModule,
     forwardRef(() => InjuriesModule),
