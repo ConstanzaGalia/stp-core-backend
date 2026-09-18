@@ -1,10 +1,11 @@
-import { BadRequestException, Injectable, NotFoundException } from '@nestjs/common';
+import { BadRequestException, Injectable, NotFoundException, Inject, forwardRef } from '@nestjs/common';
 import { InjectRepository } from '@nestjs/typeorm';
 import { Repository, In } from 'typeorm';
 import { Injury, InjuryKind, InjuryStatus } from 'src/entities/injury.entity';
 import { User } from 'src/entities/user.entity';
 import { SafetyTag } from 'src/entities/safety-tag.entity';
 import { CreateInjuryDto, UpdateInjuryDto, UpdateInjuryStatusDto } from './dto/injury.dto';
+import { TrainingPlannerService } from '../training-planner/training-planner.service';
 
 @Injectable()
 export class InjuriesService {
@@ -15,9 +16,25 @@ export class InjuriesService {
     private readonly userRepo: Repository<User>,
     @InjectRepository(SafetyTag)
     private readonly safetyTagRepo: Repository<SafetyTag>,
+    @Inject(forwardRef(() => TrainingPlannerService))
+    private readonly trainingPlannerService: TrainingPlannerService,
   ) {}
 
-  async create(userId: string, dto: CreateInjuryDto): Promise<Injury> {
+  private async reauditAfterInjuryChange(userId: string): Promise<{
+    blockedCount: number;
+    sessionIds: string[];
+  }> {
+    try {
+      return await this.trainingPlannerService.reauditFutureSessionsForAthlete(
+        userId,
+      );
+    } catch {
+      return { blockedCount: 0, sessionIds: [] };
+    }
+  }
+  async create(userId: string, dto: CreateInjuryDto): Promise<Injury & {
+    sessionsBlocked?: number;
+  }> {
     const user = await this.userRepo.findOneBy({ id: userId });
     if (!user) throw new NotFoundException(`User ${userId} not found`);
 
@@ -43,7 +60,11 @@ export class InjuriesService {
       injury.restrictionTags = await this.safetyTagRepo.findBy({ id: In(dto.restrictionTagIds) });
     }
 
-    return this.injuryRepo.save(injury);
+    const saved = await this.injuryRepo.save(injury);
+    const reaudit = alreadyEnded
+      ? { blockedCount: 0 }
+      : await this.reauditAfterInjuryChange(userId);
+    return Object.assign(saved, { sessionsBlocked: reaudit.blockedCount });
   }
 
   async findByUser(userId: string): Promise<Injury[]> {
@@ -54,10 +75,12 @@ export class InjuriesService {
     });
   }
 
-  async updateStatus(injuryId: string, dto: UpdateInjuryStatusDto): Promise<Injury> {
+  async updateStatus(injuryId: string, dto: UpdateInjuryStatusDto): Promise<Injury & {
+    sessionsBlocked?: number;
+  }> {
     const injury = await this.injuryRepo.findOne({
       where: { id: injuryId },
-      relations: ['restrictionTags'],
+      relations: ['restrictionTags', 'user'],
     });
     if (!injury) throw new NotFoundException(`Injury ${injuryId} not found`);
 
@@ -79,13 +102,20 @@ export class InjuriesService {
       injury.fechaResolucion = null;
     }
 
-    return this.injuryRepo.save(injury);
+    const saved = await this.injuryRepo.save(injury);
+    const userId = injury.user?.id;
+    const reaudit = userId
+      ? await this.reauditAfterInjuryChange(userId)
+      : { blockedCount: 0 };
+    return Object.assign(saved, { sessionsBlocked: reaudit.blockedCount });
   }
 
-  async update(injuryId: string, dto: UpdateInjuryDto): Promise<Injury> {
+  async update(injuryId: string, dto: UpdateInjuryDto): Promise<Injury & {
+    sessionsBlocked?: number;
+  }> {
     const injury = await this.injuryRepo.findOne({
       where: { id: injuryId },
-      relations: ['restrictionTags'],
+      relations: ['restrictionTags', 'user'],
     });
     if (!injury) throw new NotFoundException(`Injury ${injuryId} not found`);
 
@@ -133,7 +163,12 @@ export class InjuriesService {
         : [];
     }
 
-    return this.injuryRepo.save(injury);
+    const saved = await this.injuryRepo.save(injury);
+    const userId = injury.user?.id;
+    const reaudit = userId
+      ? await this.reauditAfterInjuryChange(userId)
+      : { blockedCount: 0 };
+    return Object.assign(saved, { sessionsBlocked: reaudit.blockedCount });
   }
 
   async remove(injuryId: string): Promise<void> {

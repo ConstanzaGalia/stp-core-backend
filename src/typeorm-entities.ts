@@ -61,6 +61,8 @@ import { STPTrainingProfile } from './entities/stp-training-profile.entity';
 import { STPMacroPlan } from './entities/stp-macro-plan.entity';
 import { STPWeeklyTemplate } from './entities/stp-weekly-template.entity';
 import { STPSessionInstance } from './entities/stp-session-instance.entity';
+import { STPWorkoutTemplate } from './entities/stp-workout-template.entity';
+import { STPWorkoutCollection } from './entities/stp-workout-collection.entity';
 import { User } from './entities/user.entity';
 import { UserPaymentSubscription } from './entities/user-payment-subscription.entity';
 import { UserPlan } from './entities/userPlan.entity';
@@ -125,6 +127,8 @@ export const TYPEORM_ENTITIES = [
   STPMacroPlan,
   STPWeeklyTemplate,
   STPSessionInstance,
+  STPWorkoutTemplate,
+  STPWorkoutCollection,
   User,
   UserPaymentSubscription,
   UserPlan,

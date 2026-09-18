@@ -95,6 +95,44 @@ export class STPSessionInstance {
   })
   athleteCompletionStatus: string;
 
+  /**
+   * Visibilidad para el atleta: draft (oculto) | published (visible).
+   * Sesiones con conflictos de lesión deben permanecer en draft.
+   */
+  @Column({
+    name: 'coach_status',
+    type: 'varchar',
+    length: 20,
+    default: 'published',
+  })
+  coachStatus: string;
+
+  /** Workout de biblioteca del que se materializó esta sesión (opcional). */
+  @Column({ name: 'source_workout_template_id', type: 'uuid', nullable: true })
+  sourceWorkoutTemplateId: string | null;
+
+  /** Conflictos estructurados de seguridad clínica (fuente de verdad). */
+  @Column({
+    name: 'safety_conflicts',
+    type: 'jsonb',
+    nullable: true,
+    default: () => "'[]'",
+  })
+  safetyConflicts: unknown[];
+
+  @Column({ name: 'attendance_marked_by_user_id', type: 'uuid', nullable: true })
+  attendanceMarkedByUserId: string | null;
+
+  @Column({ name: 'attendance_marked_by_name', type: 'text', nullable: true })
+  attendanceMarkedByName: string | null;
+
+  @Column({ name: 'attendance_marked_at', type: 'timestamptz', nullable: true })
+  attendanceMarkedAt: Date | null;
+
+  /** coach | athlete_feedback | sync | null */
+  @Column({ name: 'attendance_source', type: 'varchar', length: 40, nullable: true })
+  attendanceSource: string | null;
+
   /** Texto libre del entrenador. Usado principalmente en sesiones de tipo "libre". */
   @Column({ type: 'text', nullable: true, default: () => 'null' })
   notes: string | null;
