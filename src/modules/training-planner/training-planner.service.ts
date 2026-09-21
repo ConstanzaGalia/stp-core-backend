@@ -1937,6 +1937,103 @@ export class TrainingPlannerService {
     return this.serializeSession(saved, { includePrivate: true });
   }
 
+  /**
+   * El atleta marca asistencia de sesión/circuitos (y fecha en libres).
+   * No permite reescribir bloques/ejercicios de la planilla.
+   */
+  async patchAthleteOwnProgress(
+    sessionId: string,
+    data: {
+      athleteId: string;
+      athleteCompletionStatus?: 'pending' | 'completed' | 'skipped';
+      scheduledDate?: string;
+      blocks?: Array<{ id?: string; athleteCompletionStatus?: string }>;
+    },
+    actor: User,
+  ) {
+    if (actor.role === UserRole.SECRETARIA) {
+      throw new ForbiddenException(
+        'El rol Secretaría solo puede consultar entrenamientos.',
+      );
+    }
+    if (actor.role !== UserRole.ATHLETE || actor.id !== data.athleteId) {
+      throw new ForbiddenException(
+        'Solo el atleta puede actualizar su propio progreso',
+      );
+    }
+
+    const entity = await this.sessionRepo.findOne({
+      where: { id: sessionId, athleteId: data.athleteId },
+    });
+    if (!entity) throw new NotFoundException('Sesión no encontrada');
+    if ((entity.coachStatus ?? 'published') !== 'published') {
+      throw new ForbiddenException('La sesión no está publicada');
+    }
+
+    const previous = entity.athleteCompletionStatus ?? 'pending';
+    const validStatuses = new Set(['pending', 'completed', 'skipped']);
+
+    if (
+      typeof data.scheduledDate === 'string' &&
+      data.scheduledDate.trim() &&
+      data.scheduledDate !== entity.scheduledDate
+    ) {
+      entity.scheduledDate = data.scheduledDate.trim();
+    }
+
+    if (Array.isArray(data.blocks) && data.blocks.length > 0) {
+      const incomingById = new Map(
+        data.blocks
+          .filter((b) => typeof b?.id === 'string' && b.id.length > 0)
+          .map((b) => [b.id as string, b]),
+      );
+      const existingBlocks = Array.isArray(entity.blocks) ? entity.blocks : [];
+      entity.blocks = existingBlocks.map((block: any) => {
+        const incoming = incomingById.get(block.id);
+        if (!incoming) return block;
+        const nextStatus = incoming.athleteCompletionStatus;
+        if (typeof nextStatus !== 'string' || !validStatuses.has(nextStatus)) {
+          return block;
+        }
+        return { ...block, athleteCompletionStatus: nextStatus };
+      }) as any;
+    }
+
+    if (data.athleteCompletionStatus != null) {
+      if (!validStatuses.has(data.athleteCompletionStatus)) {
+        throw new BadRequestException('Estado de asistencia inválido');
+      }
+      entity.athleteCompletionStatus = data.athleteCompletionStatus;
+      entity.attendanceMarkedByUserId = actor.id;
+      entity.attendanceMarkedByName = formatStaffDisplayName(actor);
+      entity.attendanceMarkedAt = new Date();
+      entity.attendanceSource = 'athlete';
+    }
+
+    entity.lastSavedByUserId = actor.id;
+    entity.lastSavedByName = formatStaffDisplayName(actor);
+
+    const saved = await this.sessionRepo.save(entity);
+
+    let attendanceSync:
+      | { status: 'synced' | 'no_reservation' | 'sync_failed'; reservationsUpdated: number }
+      | undefined;
+
+    if (
+      data.athleteCompletionStatus != null &&
+      previous !== data.athleteCompletionStatus
+    ) {
+      attendanceSync = await this.syncAttendanceFromSessionCompletion(
+        data.athleteId,
+        saved.scheduledDate,
+        data.athleteCompletionStatus,
+      );
+    }
+
+    const serialized = this.serializeSession(saved, { includePrivate: false });
+    return attendanceSync ? { ...serialized, attendanceSync } : serialized;
+  }
+
   async updateSessionCompletion(
     sessionId: string,
     athleteId: string,

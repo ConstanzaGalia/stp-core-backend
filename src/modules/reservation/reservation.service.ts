@@ -242,7 +242,46 @@ export class ReservationsService {
     );
   }
 
-  async createReservation(userId: string, timeSlotId: string): Promise<Reservation> {
+  /**
+   * Respuesta plana de alta de reserva: evita JSON circular
+   * (Reservation ↔ AvailableClass, TimeSlot ↔ Reservation).
+   */
+  private toReservationCreateResponse(reservation: Reservation) {
+    const availableClass = reservation.availableClass
+      ? {
+          id: reservation.availableClass.id,
+          status: reservation.availableClass.status,
+          usedAt: reservation.availableClass.usedAt,
+          expiresAt: reservation.availableClass.expiresAt,
+          intendedDate: reservation.availableClass.intendedDate,
+        }
+      : null;
+
+    const timeSlot = reservation.timeSlot
+      ? {
+          id: reservation.timeSlot.id,
+          date: reservation.timeSlot.date,
+          startTime: reservation.timeSlot.startTime,
+          endTime: reservation.timeSlot.endTime,
+          capacity: reservation.timeSlot.capacity,
+          reservedCount: reservation.timeSlot.reservedCount,
+          companyId: reservation.timeSlot.company?.id ?? null,
+          resourceId: reservation.timeSlot.resource?.id ?? null,
+        }
+      : null;
+
+    return {
+      id: reservation.id,
+      timeSlotId: reservation.timeSlotId,
+      attendanceStatus: reservation.attendanceStatus,
+      createdAt: reservation.createdAt,
+      updatedAt: reservation.updatedAt,
+      availableClass,
+      timeSlot,
+    };
+  }
+
+  async createReservation(userId: string, timeSlotId: string): Promise<Reservation | Record<string, unknown>> {
     this.logger.debug(`createReservation -> userId=${userId}, timeSlotId=${timeSlotId}`);
 
     // 1. Validar que el time slot existe
@@ -333,7 +372,7 @@ export class ReservationsService {
           
           this.logger.log(`createReservation -> used available class id=${validAvailableClass.id} instead of period class`);
           // NO registrar uso de clase del período, ya que se usó una clase disponible
-          return savedReservation;
+          return this.toReservationCreateResponse(savedReservation);
         } catch (error) {
           this.logger.error(`createReservation -> error consuming available class: ${error?.message}`, error?.stack);
           // Si falla, continuar con el registro normal de uso de clase
@@ -357,7 +396,7 @@ export class ReservationsService {
         throw error;
       }
 
-      return savedReservation;
+      return this.toReservationCreateResponse(savedReservation);
     } else {
       this.logger.warn(`createReservation -> timeSlot full id=${timeSlot.id}`);
       throw new BadRequestException('No hay cupo disponible en este horario. Elegí otro turno.');

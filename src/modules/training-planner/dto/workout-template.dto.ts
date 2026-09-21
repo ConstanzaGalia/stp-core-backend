@@ -208,3 +208,22 @@ export class UpdateSessionCompletionDto {
   @IsString()
   athleteCompletionStatus: 'pending' | 'completed' | 'skipped';
 }
+
+/** Progreso propio del atleta (asistencia sesión/circuitos, fecha libre). No modifica la planilla. */
+export class UpdateAthleteOwnProgressDto {
+  @IsUUID()
+  athleteId: string;
+
+  @IsOptional()
+  @IsString()
+  athleteCompletionStatus?: 'pending' | 'completed' | 'skipped';
+
+  @IsOptional()
+  @IsString()
+  scheduledDate?: string;
+
+  /** Solo se aplican id + athleteCompletionStatus por bloque; no se pisan ejercicios. */
+  @IsOptional()
+  @IsArray()
+  blocks?: Array<{ id: string; athleteCompletionStatus?: string }>;
+}

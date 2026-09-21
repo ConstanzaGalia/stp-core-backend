@@ -20,6 +20,7 @@ import {
   CreateWorkoutTemplateDto,
   InstantiateWorkoutTemplateDto,
   PublishSessionDto,
+  UpdateAthleteOwnProgressDto,
   UpdateSessionCompletionDto,
   UpdateWorkoutTemplateDto,
   CreateWorkoutCollectionDto,
@@ -373,6 +374,16 @@ export class TrainingPlannerController {
       body.athleteCompletionStatus,
       user,
     );
+  }
+
+  /** Asistencia / circuitos del propio atleta (no usa saveSession ni write de planilla). */
+  @Patch('sessions/:id/athlete-progress')
+  async patchAthleteProgress(
+    @Param('id') sessionId: string,
+    @Body() body: UpdateAthleteOwnProgressDto,
+    @GetUser() user: User,
+  ) {
+    return this.service.patchAthleteOwnProgress(sessionId, body, user);
   }
 
   @Post('sessions/:id/validate-safety')
