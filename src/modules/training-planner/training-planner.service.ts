@@ -891,9 +891,14 @@ export class TrainingPlannerService {
       blocks: [] as unknown[],
       /** Cantidad de circuitos (summary no envía blocks). */
       blockCount: blocks.length,
+      /** IDs de ejercicios (sin blocks) para alertas de repetición / rotación. */
+      exerciseIds: this.collectWorkExerciseIdsFromBlocks(blocks),
       /** Volumen estimado para el calendario sin enviar blocks. */
       tonnageKg: this.estimateSessionTonnageKg(blocks),
       feedbackStatus: e.feedbackStatus,
+      /** Feedback completo es liviano vs blocks; lo necesitamos en el panel del planner. */
+      feedback: e.feedback ?? null,
+      progressionConfig: e.progressionConfig ?? null,
       athleteCompletionStatus: e.athleteCompletionStatus ?? 'pending',
       coachStatus: e.coachStatus ?? 'published',
       sourceWorkoutTemplateId: e.sourceWorkoutTemplateId ?? null,
@@ -1025,6 +1030,25 @@ export class TrainingPlannerService {
     const ids = new Set<string>();
     for (const block of blocks) {
       if (!block || typeof block !== 'object') continue;
+      const exercises = (block as { exercises?: unknown[] }).exercises;
+      if (!Array.isArray(exercises)) continue;
+      for (const exercise of exercises) {
+        if (!exercise || typeof exercise !== 'object') continue;
+        const exerciseId = (exercise as { exerciseId?: string }).exerciseId;
+        if (typeof exerciseId === 'string' && exerciseId.trim()) {
+          ids.add(exerciseId.trim());
+        }
+      }
+    }
+    return [...ids];
+  }
+
+  /** IDs para summary/rotación: excluye EC (movilidad no cuenta como repetición de fuerza). */
+  private collectWorkExerciseIdsFromBlocks(blocks: unknown[]): string[] {
+    const ids = new Set<string>();
+    for (const block of blocks) {
+      if (!block || typeof block !== 'object') continue;
+      if ((block as { isEC?: boolean }).isEC) continue;
       const exercises = (block as { exercises?: unknown[] }).exercises;
       if (!Array.isArray(exercises)) continue;
       for (const exercise of exercises) {
