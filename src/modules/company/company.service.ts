@@ -259,6 +259,7 @@ export class CompanyService {
           name: d.name,
           lastName: d.lastName,
           email: d.email,
+          phoneNumber: d.phoneNumber != null ? String(d.phoneNumber) : null,
         })),
         staffCount,
         platformSubscription: platformSub
