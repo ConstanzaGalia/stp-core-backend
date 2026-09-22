@@ -6,6 +6,8 @@ import {
   BadRequestException,
   NotFoundException,
   ForbiddenException,
+  Inject,
+  forwardRef,
 } from '@nestjs/common';
 import { CreateCompanyDto } from './dto/create-company.dto';
 import { UpdateCompanyDto } from './dto/update-company.dto';
@@ -27,11 +29,12 @@ import { MailingService } from '../mailer/mailing.service';
 import { inviteStudentEmail, staffAssociationApprovedEmail, staffAssociationRejectedEmail, staffAssociationRequestEmail } from '../../utils/emailTemplates';
 import { EncryptService } from 'src/services/bcrypt.service';
 import { getStpOperatingCompanyId } from 'src/common/constants/stp-operating-company';
-import { assertStpAdmin } from 'src/common/helpers/company-access.helper';
+import { assertStpPlatformOperator } from 'src/common/helpers/company-access.helper';
 import { UpdateCompanySubscriptionDto } from './dto/update-company-subscription.dto';
 import { UpdateCompanyModulesDto } from './dto/update-company-modules.dto';
 import { UpdateCompanyAccountTypeDto } from './dto/update-company-account-type.dto';
 import { isCenterCurrency, resolveCompanyCurrencies } from 'src/common/center-currencies';
+import { StpPlatformBillingService } from '../stp-platform-billing/stp-platform-billing.service';
 
 const STAFF_ROLES = [
   UserRole.TRAINER,
@@ -58,6 +61,8 @@ export class CompanyService {
     private pagination: Pagination,
     private readonly mailingService: MailingService,
     private readonly encryptService: EncryptService,
+    @Inject(forwardRef(() => StpPlatformBillingService))
+    private readonly platformBillingService: StpPlatformBillingService,
   ) {}
   public async create(createCompanyDto: CreateCompanyDto, user: User) {
     try {
@@ -158,11 +163,22 @@ export class CompanyService {
     return this.companyRepository.findOne({ where: { id } });
   }
 
+  public async assertCanManagePlatformCompanies(user: User): Promise<void> {
+    await assertStpPlatformOperator(user, this.companyRepository);
+  }
+
   public async listCompaniesForAdmin(
     offset: number,
     limit: number,
     path: string,
-    options?: { active?: boolean; search?: string; accountType?: string },
+    options?: {
+      active?: boolean;
+      search?: string;
+      accountType?: string;
+      plan?: string;
+      billingKind?: string;
+      due?: 'overdue' | 'upcoming';
+    },
   ): Promise<PaginatedListDto<unknown>> {
     const qb = this.companyRepository
       .createQueryBuilder('company')
@@ -182,18 +198,54 @@ export class CompanyService {
     }
 
     if (options?.accountType?.trim()) {
-      qb.andWhere('company.account_type = :accountType', { accountType: options.accountType.trim() });
+      qb.andWhere('company.account_type = :accountType', {
+        accountType: options.accountType.trim(),
+      });
+    }
+
+    const [planIds, dueIds] = await Promise.all([
+      this.platformBillingService.filterCompanyIdsByPlan(
+        options?.plan,
+        options?.billingKind,
+      ),
+      this.platformBillingService.filterCompanyIdsByDue(options?.due),
+    ]);
+
+    if (planIds) {
+      if (planIds.length === 0) {
+        return new PaginatedListDto(
+          [],
+          this.pagination.buildPaginationDto(limit, offset, 0, path),
+        );
+      }
+      qb.andWhere('company.id IN (:...planIds)', { planIds });
+    }
+    if (dueIds) {
+      if (dueIds.length === 0) {
+        return new PaginatedListDto(
+          [],
+          this.pagination.buildPaginationDto(limit, offset, 0, path),
+        );
+      }
+      qb.andWhere('company.id IN (:...dueIds)', { dueIds });
     }
 
     const [companies, count] = await qb.skip(offset).take(limit).getManyAndCount();
+    const companyIds = companies.map((c) => c.id);
+    const [subMap, chargeMap] = await Promise.all([
+      this.platformBillingService.getActiveSubscriptionMap(companyIds),
+      this.platformBillingService.getChargeSummaryMap(companyIds),
+    ]);
 
-    const items = companies.map(company => {
+    const items = companies.map((company) => {
       const directors = (company.users ?? []).filter(
-        u => u.role === UserRole.DIRECTOR || u.role === UserRole.STP_ADMIN,
+        (u) => u.role === UserRole.DIRECTOR || u.role === UserRole.STP_ADMIN,
       );
-      const staffCount = (company.users ?? []).filter(u =>
+      const staffCount = (company.users ?? []).filter((u) =>
         STAFF_ROLES.includes(u.role),
       ).length;
+      const platformSub = subMap.get(company.id) ?? null;
+      const chargeSummary = chargeMap.get(company.id) ?? null;
 
       return {
         id: company.id,
@@ -202,13 +254,39 @@ export class CompanyService {
         accountType: company.accountType,
         enabledModules: company.enabledModules ?? null,
         createdAt: company.created_at,
-        directors: directors.map(d => ({
+        directors: directors.map((d) => ({
           id: d.id,
           name: d.name,
           lastName: d.lastName,
           email: d.email,
         })),
         staffCount,
+        platformSubscription: platformSub
+          ? {
+              id: platformSub.id,
+              plan: platformSub.plan,
+              billingKind: platformSub.billingKind,
+              status: platformSub.status,
+              subscriptionAmount:
+                platformSub.subscriptionAmount == null
+                  ? null
+                  : Number(platformSub.subscriptionAmount),
+              currency: platformSub.currency,
+              periodStart: platformSub.periodStart,
+              periodEnd: platformSub.periodEnd,
+              notes: platformSub.notes,
+            }
+          : null,
+        platformBilling: chargeSummary
+          ? {
+              pendingSubscription: chargeSummary.pendingSubscription,
+              pendingOnboarding: chargeSummary.pendingOnboarding,
+              overdue: chargeSummary.overdue,
+              lastPaidAt: chargeSummary.lastPaidAt,
+              lastPaidAmount: chargeSummary.lastPaidAmount,
+              lastPaidCurrency: chargeSummary.lastPaidCurrency,
+            }
+          : null,
       };
     });
 
@@ -223,7 +301,7 @@ export class CompanyService {
     dto: UpdateCompanySubscriptionDto,
     admin: User,
   ): Promise<Company> {
-    assertStpAdmin(admin);
+    await assertStpPlatformOperator(admin, this.companyRepository);
 
     const company = await this.companyRepository.findOne({ where: { id: companyId } });
     if (!company) {
@@ -239,7 +317,7 @@ export class CompanyService {
     dto: UpdateCompanyModulesDto,
     admin: User,
   ): Promise<Company> {
-    assertStpAdmin(admin);
+    await assertStpPlatformOperator(admin, this.companyRepository);
 
     const company = await this.companyRepository.findOne({ where: { id: companyId } });
     if (!company) {
@@ -256,7 +334,7 @@ export class CompanyService {
     dto: UpdateCompanyAccountTypeDto,
     admin: User,
   ): Promise<Company> {
-    assertStpAdmin(admin);
+    await assertStpPlatformOperator(admin, this.companyRepository);
 
     const company = await this.companyRepository.findOne({ where: { id: companyId } });
     if (!company) {

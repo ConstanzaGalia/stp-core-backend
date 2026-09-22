@@ -67,6 +67,8 @@ import { User } from './entities/user.entity';
 import { UserPaymentSubscription } from './entities/user-payment-subscription.entity';
 import { UserPlan } from './entities/userPlan.entity';
 import { WaitlistReservation } from './entities/waitlist-reservation.entity';
+import { StpPlatformSubscription } from './entities/stp-platform-subscription.entity';
+import { StpPlatformCharge } from './entities/stp-platform-charge.entity';
 
 export const TYPEORM_ENTITIES = [
   AthleteEvaluation,
@@ -133,4 +135,6 @@ export const TYPEORM_ENTITIES = [
   UserPaymentSubscription,
   UserPlan,
   WaitlistReservation,
+  StpPlatformSubscription,
+  StpPlatformCharge,
 ];

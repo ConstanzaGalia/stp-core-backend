@@ -16,6 +16,7 @@ import { FixedExpenseTemplate } from '../../entities/fixed-expense-template.enti
 import { FixedExpenseMonthStatus } from '../../entities/fixed-expense-month-status.entity';
 import { Reservation } from '../../entities/reservation.entity';
 import { TimeSlot } from '../../entities/timeSlot.entity';
+import { StpPlatformCharge } from '../../entities/stp-platform-charge.entity';
 import { ReservationsModule } from '../reservation/reservation.module';
 import { MailingModule } from '../mailer/mailing.module';
 import { CompanyModule } from '../company/company.module';
@@ -35,7 +36,8 @@ import { CompanyModule } from '../company/company.module';
       FixedExpenseTemplate,
       FixedExpenseMonthStatus,
       Reservation,
-      TimeSlot
+      TimeSlot,
+      StpPlatformCharge,
     ]),
     forwardRef(() => ReservationsModule),
     MailingModule,

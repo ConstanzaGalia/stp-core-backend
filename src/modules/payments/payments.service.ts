@@ -10,6 +10,11 @@ import { Company } from '../../entities/company.entity';
 import { SubscriptionSuspension } from '../../entities/subscription-suspension.entity';
 import { Expense } from '../../entities/expense.entity';
 import { ExtraIncome } from '../../entities/extra-income.entity';
+import { StpPlatformCharge } from '../../entities/stp-platform-charge.entity';
+import {
+  StpPlatformChargeConcept,
+  StpPlatformChargeStatus,
+} from '../../common/enums/enums';
 import {
   FixedExpenseMonthStatus,
   FixedExpenseMonthSource,
@@ -137,6 +142,8 @@ export class PaymentsService {
     private readonly expenseRepository: Repository<Expense>,
     @InjectRepository(ExtraIncome)
     private readonly extraIncomeRepository: Repository<ExtraIncome>,
+    @InjectRepository(StpPlatformCharge)
+    private readonly platformChargeRepository: Repository<StpPlatformCharge>,
     @InjectRepository(FixedExpenseTemplate)
     private readonly fixedExpenseTemplateRepository: Repository<FixedExpenseTemplate>,
     @InjectRepository(FixedExpenseMonthStatus)
@@ -1025,6 +1032,205 @@ export class PaymentsService {
     };
   }
 
+  private buildIncomeSummary(
+    payments: Array<{
+      amount: number;
+      concept?: string | null;
+      planName?: string | null;
+      currency?: string;
+    }>,
+    extraItems: Array<{ amount: number; currency?: string }>,
+    platformItems: Array<{
+      amount: number;
+      concept: StpPlatformChargeConcept;
+      currency?: string;
+    }> = [],
+  ): Array<{
+    key: string;
+    kind: string;
+    label: string;
+    count: number;
+    amount: number;
+    currency: string;
+  }> {
+    type Acc = {
+      key: string;
+      kind: string;
+      label: string;
+      count: number;
+      amount: number;
+      currency: string;
+    };
+    const map = new Map<string, Acc>();
+
+    const bump = (
+      key: string,
+      kind: string,
+      label: string,
+      currency: string,
+      amount: number,
+    ) => {
+      const cur = normalizeMoneyCurrency(currency);
+      const existing = map.get(key);
+      if (existing) {
+        existing.count += 1;
+        existing.amount += amount;
+        return;
+      }
+      map.set(key, { key, kind, label, count: 1, amount, currency: cur });
+    };
+
+    for (const p of payments) {
+      const amount = Number(p.amount || 0);
+      const currency = normalizeMoneyCurrency(p.currency);
+      if (p.concept === PaymentConcept.MATRICULA) {
+        bump(`matricula:${currency}`, 'matricula', 'Matrícula', currency, amount);
+      } else if (p.concept === PaymentConcept.NUTRICIONISTA) {
+        bump(
+          `nutricionista:${currency}`,
+          'nutricionista',
+          'Nutricionista',
+          currency,
+          amount,
+        );
+      } else {
+        const planName = (p.planName || 'Sin plan').trim() || 'Sin plan';
+        bump(`plan:${planName}:${currency}`, 'plan', planName, currency, amount);
+      }
+    }
+
+    for (const item of extraItems) {
+      const currency = normalizeMoneyCurrency(item.currency);
+      bump(
+        `extraordinario:${currency}`,
+        'extraordinario',
+        'Ingresos extraordinarios',
+        currency,
+        Number(item.amount || 0),
+      );
+    }
+
+    for (const item of platformItems) {
+      const currency = normalizeMoneyCurrency(item.currency);
+      const amount = Number(item.amount || 0);
+      if (item.concept === StpPlatformChargeConcept.ONBOARDING) {
+        bump(
+          `platform_onboarding:${currency}`,
+          'platform_onboarding',
+          'Capacitación inicial (plataforma)',
+          currency,
+          amount,
+        );
+      } else {
+        bump(
+          `platform_subscription:${currency}`,
+          'platform_subscription',
+          'Suscripción plataforma',
+          currency,
+          amount,
+        );
+      }
+    }
+
+    const kindOrder: Record<string, number> = {
+      plan: 1,
+      matricula: 2,
+      nutricionista: 3,
+      extraordinario: 4,
+      platform_subscription: 5,
+      platform_onboarding: 6,
+    };
+
+    return Array.from(map.values()).sort((a, b) => {
+      const ka = kindOrder[a.kind] ?? 99;
+      const kb = kindOrder[b.kind] ?? 99;
+      if (ka !== kb) return ka - kb;
+      if (a.currency !== b.currency) return a.currency.localeCompare(b.currency);
+      return a.label.localeCompare(b.label, 'es');
+    });
+  }
+
+  private buildExpenseSummary(
+    expenses: Array<{
+      amount: number;
+      category?: string | null;
+      description?: string | null;
+      currency?: string;
+    }>,
+  ): Array<{
+    key: string;
+    kind: string;
+    label: string;
+    count: number;
+    amount: number;
+    currency: string;
+  }> {
+    type Acc = {
+      key: string;
+      kind: string;
+      label: string;
+      count: number;
+      amount: number;
+      currency: string;
+    };
+    const map = new Map<string, Acc>();
+
+    for (const e of expenses) {
+      const currency = normalizeMoneyCurrency(e.currency);
+      const category = (e.category ?? '').toString().trim();
+      const description = (e.description ?? '').toString().trim();
+      const label = category || description || 'Sin categoría';
+      const kind = category ? 'category' : 'expense';
+      const key = `${kind}:${label}:${currency}`;
+      const amount = Number(e.amount || 0);
+      const existing = map.get(key);
+      if (existing) {
+        existing.count += 1;
+        existing.amount += amount;
+      } else {
+        map.set(key, { key, kind, label, count: 1, amount, currency });
+      }
+    }
+
+    return Array.from(map.values()).sort((a, b) => {
+      if (a.currency !== b.currency) return a.currency.localeCompare(b.currency);
+      return a.label.localeCompare(b.label, 'es');
+    });
+  }
+
+  private async getPaidPlatformChargesInRange(
+    startDate: Date,
+    endDate: Date,
+  ): Promise<
+    Array<{
+      id: string;
+      amount: number;
+      date: Date;
+      concept: StpPlatformChargeConcept;
+      currency: string;
+      type: 'platform';
+      companyId: string;
+    }>
+  > {
+    const charges = await this.platformChargeRepository.find({
+      where: {
+        status: StpPlatformChargeStatus.PAID,
+        paidAt: Between(startDate, endDate),
+      },
+      order: { paidAt: 'DESC' },
+    });
+
+    return charges.map((c) => ({
+      id: c.id,
+      amount: Number(c.amount),
+      date: c.paidAt ?? c.createdAt,
+      concept: c.concept,
+      currency: normalizeMoneyCurrency(c.currency),
+      type: 'platform' as const,
+      companyId: c.companyId,
+    }));
+  }
+
   async getMonthBalance(companyId: string, year: number, month: number): Promise<{
     income: number;
     expenses: number;
@@ -1033,27 +1239,78 @@ export class PaymentsService {
     expensesByCurrency: Record<CenterCurrency, number>;
     balanceByCurrency: Record<CenterCurrency, number>;
     incomeDetail: any[];
+    incomeSummary: Array<{
+      key: string;
+      kind: string;
+      label: string;
+      count: number;
+      amount: number;
+      currency: string;
+    }>;
+    expensesSummary: Array<{
+      key: string;
+      kind: string;
+      label: string;
+      count: number;
+      amount: number;
+      currency: string;
+    }>;
     expensesDetail: any[];
+    includesPlatformIncome: boolean;
   }> {
-    const [incomeResult, extraIncomeResult, expensesResult] = await Promise.all([
-      this.getMonthIncome(companyId, year, month),
-      this.getMonthExtraIncome(companyId, year, month),
-      this.getMonthExpenses(companyId, year, month)
-    ]);
+    const startDate = new Date(year, month - 1, 1);
+    const endDate = new Date(year, month, 0, 23, 59, 59, 999);
+    const isOperatingCenter = companyId === getStpOperatingCompanyId();
 
-    const totalIncome = incomeResult.total + extraIncomeResult.total;
-    const incomeDetail = [
-      ...incomeResult.payments,
-      ...extraIncomeResult.items
-    ].sort((a, b) => new Date(b.date).getTime() - new Date(a.date).getTime());
-    const incomeByCurrency: Record<CenterCurrency, number> = { ARS: 0, USD: 0, EUR: 0 };
-    const expensesByCurrency: Record<CenterCurrency, number> = { ARS: 0, USD: 0, EUR: 0 };
+    const [incomeResult, extraIncomeResult, expensesResult, platformItems] =
+      await Promise.all([
+        this.getMonthIncome(companyId, year, month),
+        this.getMonthExtraIncome(companyId, year, month),
+        this.getMonthExpenses(companyId, year, month),
+        isOperatingCenter
+          ? this.getPaidPlatformChargesInRange(startDate, endDate)
+          : Promise.resolve([]),
+      ]);
 
-    for (const item of incomeDetail) {
-      incomeByCurrency[normalizeMoneyCurrency(item.currency)] += Number(item.amount || 0);
+    const platformTotal = platformItems.reduce(
+      (sum, p) => sum + Number(p.amount || 0),
+      0,
+    );
+    const totalIncome =
+      incomeResult.total + extraIncomeResult.total + platformTotal;
+
+    // Detalle editable: solo extraordinarios (los pagos de alumno van agrupados).
+    const incomeDetail = [...extraIncomeResult.items].sort(
+      (a, b) => new Date(b.date).getTime() - new Date(a.date).getTime(),
+    );
+
+    const incomeSummary = this.buildIncomeSummary(
+      incomeResult.payments,
+      extraIncomeResult.items,
+      platformItems,
+    );
+    const expensesSummary = this.buildExpenseSummary(expensesResult.expenses);
+
+    const incomeByCurrency: Record<CenterCurrency, number> = {
+      ARS: 0,
+      USD: 0,
+      EUR: 0,
+    };
+    const expensesByCurrency: Record<CenterCurrency, number> = {
+      ARS: 0,
+      USD: 0,
+      EUR: 0,
+    };
+
+    for (const row of incomeSummary) {
+      incomeByCurrency[normalizeMoneyCurrency(row.currency)] += Number(
+        row.amount || 0,
+      );
     }
-    for (const item of expensesResult.expenses) {
-      expensesByCurrency[normalizeMoneyCurrency(item.currency)] += Number(item.amount || 0);
+    for (const row of expensesSummary) {
+      expensesByCurrency[normalizeMoneyCurrency(row.currency)] += Number(
+        row.amount || 0,
+      );
     }
     const balanceByCurrency: Record<CenterCurrency, number> = {
       ARS: incomeByCurrency.ARS - expensesByCurrency.ARS,
@@ -1069,7 +1326,10 @@ export class PaymentsService {
       expensesByCurrency,
       balanceByCurrency,
       incomeDetail,
-      expensesDetail: expensesResult.expenses
+      incomeSummary,
+      expensesSummary,
+      expensesDetail: expensesResult.expenses,
+      includesPlatformIncome: isOperatingCenter,
     };
   }
 
@@ -1550,12 +1810,25 @@ export class PaymentsService {
       expenseWhere.date = Between(startDate, endDate);
     }
 
-    const [payments, extraIncomes, expenses, company] = await Promise.all([
-      this.paymentRepository.find({ where: paymentWhere, relations: ['paymentPlan'] }),
-      this.extraIncomeRepository.find({ where: extraWhere }),
-      this.expenseRepository.find({ where: expenseWhere }),
-      this.companyRepository.findOne({ where: { id: companyId } }),
-    ]);
+    const isOperatingCenter = companyId === getStpOperatingCompanyId();
+
+    const [payments, extraIncomes, expenses, company, platformCharges] =
+      await Promise.all([
+        this.paymentRepository.find({
+          where: paymentWhere,
+          relations: ['paymentPlan'],
+        }),
+        this.extraIncomeRepository.find({ where: extraWhere }),
+        this.expenseRepository.find({ where: expenseWhere }),
+        this.companyRepository.findOne({ where: { id: companyId } }),
+        isOperatingCenter && startDate && endDate
+          ? this.getPaidPlatformChargesInRange(startDate, endDate)
+          : isOperatingCenter
+            ? this.platformChargeRepository.find({
+                where: { status: StpPlatformChargeStatus.PAID },
+              })
+            : Promise.resolve([]),
+      ]);
 
     const { enabledCurrencies, defaultCurrency } = resolveCompanyCurrencies(company ?? undefined);
     const income: Record<CenterCurrency, number> = { ARS: 0, USD: 0, EUR: 0 };
@@ -1566,6 +1839,9 @@ export class PaymentsService {
       income[currency] += Number(payment.totalAmount || 0);
     }
     for (const item of extraIncomes) {
+      income[normalizeMoneyCurrency(item.currency)] += Number(item.amount || 0);
+    }
+    for (const item of platformCharges) {
       income[normalizeMoneyCurrency(item.currency)] += Number(item.amount || 0);
     }
     for (const item of expenses) {

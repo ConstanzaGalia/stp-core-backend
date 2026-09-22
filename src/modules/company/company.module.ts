@@ -1,4 +1,4 @@
-import { Module } from '@nestjs/common';
+import { Module, forwardRef } from '@nestjs/common';
 import { APP_GUARD } from '@nestjs/core';
 import { CompanyService } from './company.service';
 import { CompanyController } from './company.controller';
@@ -11,12 +11,14 @@ import { AuthModule } from '../auth/auth.module';
 import { MailingModule } from '../mailer/mailing.module';
 import { EncryptService } from 'src/services/bcrypt.service';
 import { CompanySubscriptionGuard } from 'src/common/guards/company-subscription.guard';
+import { StpPlatformBillingModule } from '../stp-platform-billing/stp-platform-billing.module';
 
 @Module({
   imports: [
-    TypeOrmModule.forFeature([Company, User, StaffAssociationRequest]), 
+    TypeOrmModule.forFeature([Company, User, StaffAssociationRequest]),
     AuthModule,
-    MailingModule
+    MailingModule,
+    forwardRef(() => StpPlatformBillingModule),
   ],
   controllers: [CompanyController],
   providers: [
@@ -29,6 +31,6 @@ import { CompanySubscriptionGuard } from 'src/common/guards/company-subscription
       useClass: CompanySubscriptionGuard,
     },
   ],
-  exports: [CompanyService]
+  exports: [CompanyService],
 })
 export class CompanyModule {}

@@ -25,6 +25,7 @@ import { DivisionsModule } from './modules/divisions/divisions.module';
 import { SportPositionsModule } from './modules/sport-positions/sport-positions.module';
 import { ClubAnalyticsModule } from './modules/club-analytics/club-analytics.module';
 import { CompetitionsModule } from './modules/competitions/competitions.module';
+import { StpPlatformBillingModule } from './modules/stp-platform-billing/stp-platform-billing.module';
 import { TYPEORM_ENTITIES } from './typeorm-entities';
 
 /** Supabase Session pooler (puerto 5432): límite bajo → MaxClientsInSessionMode si el pool es grande. */
@@ -121,6 +122,7 @@ function resolvePostgresPoolMax(config: ConfigService): number {
     SportPositionsModule,
     ClubAnalyticsModule,
     CompetitionsModule,
+    StpPlatformBillingModule,
   ],
   controllers: [],
   providers: [Pagination],

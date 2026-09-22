@@ -55,17 +55,27 @@ export class CompanyController {
     @Query('active') active?: string,
     @Query('search') search?: string,
     @Query('accountType') accountType?: string,
+    @Query('plan') plan?: string,
+    @Query('billingKind') billingKind?: string,
+    @Query('due') due?: string,
   ) {
-    if (user.role !== UserRole.STP_ADMIN) {
-      throw new ForbiddenException('Only STP_ADMIN can list all companies');
-    }
+    await this.companyService.assertCanManagePlatformCompanies(user);
     const activeFilter =
       active === 'true' ? true : active === 'false' ? false : undefined;
+    const dueFilter =
+      due === 'overdue' || due === 'upcoming' ? due : undefined;
     return this.companyService.listCompaniesForAdmin(
       pagination.offset,
       pagination.limit,
       request.url,
-      { active: activeFilter, search, accountType },
+      {
+        active: activeFilter,
+        search,
+        accountType,
+        plan,
+        billingKind,
+        due: dueFilter,
+      },
     );
   }
 
@@ -73,9 +83,7 @@ export class CompanyController {
   @UseGuards(AuthGuard('jwt'))
   @SkipCompanySubscriptionCheck()
   public async getOperatingCompany(@GetUser() user: User) {
-    if (user.role !== UserRole.STP_ADMIN) {
-      throw new ForbiddenException('Only STP_ADMIN can access operating company');
-    }
+    await this.companyService.assertCanManagePlatformCompanies(user);
     return this.companyService.getOperatingCompany();
   }
 
