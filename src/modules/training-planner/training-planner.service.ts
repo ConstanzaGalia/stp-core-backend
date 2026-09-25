@@ -92,6 +92,96 @@ function formatStaffDisplayName(user: User): string {
   return `${user.name} ${user.lastName}`.trim();
 }
 
+/** Quita athleteCompletionStatus de bloques para comparar contenido de rutina. */
+function stripCompletionFromBlocks(blocks: unknown): unknown {
+  if (!Array.isArray(blocks)) return [];
+  return blocks.map((raw) => {
+    if (!raw || typeof raw !== 'object') return raw;
+    const { athleteCompletionStatus: _acs, ...rest } = raw as Record<
+      string,
+      unknown
+    >;
+    return rest;
+  });
+}
+
+/**
+ * True si el save no cambia la rutina: solo asistencia / completion
+ * (o es un no-op de contenido). En ese caso no se toca lastSavedBy*.
+ */
+function isRoutineContentUnchanged(
+  existing: {
+    scheduledDate?: string | null;
+    macroWeekId?: string | null;
+    weekStartDate?: string | null;
+    weekLabel?: string | null;
+    sessionOrdinal?: number | null;
+    phase?: string | null;
+    weekType?: string | null;
+    pattern?: string | null;
+    templateId?: string | null;
+    templateDayId?: string | null;
+    notes?: string | null;
+    coachObservations?: string | null;
+    coachStatus?: string | null;
+    enduranceFormat?: string | null;
+    enduranceConfig?: unknown;
+    progressionConfig?: unknown;
+    blocks?: unknown;
+  },
+  data: {
+    scheduledDate: string;
+    macroWeekId: string;
+    weekStartDate: string;
+    weekLabel: string;
+    sessionOrdinal: number;
+    phase: string;
+    weekType: string;
+    pattern: string;
+    templateId: string;
+    templateDayId: string;
+    notes?: string | null;
+    coachObservations?: string | null;
+    coachStatus?: string;
+    enduranceFormat?: string | null;
+    enduranceConfig?: unknown | null;
+    progressionConfig?: unknown;
+  },
+  nextBlocks: unknown[],
+): boolean {
+  const nextCoachStatus =
+    data.coachStatus ?? existing.coachStatus ?? 'published';
+  const nextEnduranceFormat =
+    data.enduranceFormat === undefined ? null : data.enduranceFormat;
+  const nextEnduranceConfig =
+    data.enduranceConfig === undefined || data.enduranceConfig === null
+      ? null
+      : data.enduranceConfig;
+
+  return (
+    (existing.scheduledDate ?? '') === data.scheduledDate &&
+    (existing.macroWeekId ?? '') === data.macroWeekId &&
+    (existing.weekStartDate ?? '') === data.weekStartDate &&
+    (existing.weekLabel ?? '') === data.weekLabel &&
+    (existing.sessionOrdinal ?? 0) === data.sessionOrdinal &&
+    (existing.phase ?? '') === data.phase &&
+    (existing.weekType ?? '') === data.weekType &&
+    (existing.pattern ?? '') === data.pattern &&
+    (existing.templateId ?? '') === data.templateId &&
+    (existing.templateDayId ?? '') === data.templateDayId &&
+    (existing.notes ?? null) === (data.notes ?? null) &&
+    (existing.coachObservations ?? null) === (data.coachObservations ?? null) &&
+    (existing.coachStatus ?? 'published') === nextCoachStatus &&
+    (existing.enduranceFormat ?? null) === nextEnduranceFormat &&
+    JSON.stringify(existing.enduranceConfig ?? null) ===
+      JSON.stringify(nextEnduranceConfig) &&
+    JSON.stringify(existing.progressionConfig ?? null) ===
+      JSON.stringify(data.progressionConfig ?? null) &&
+    JSON.stringify(stripCompletionFromBlocks(existing.blocks)) ===
+      JSON.stringify(stripCompletionFromBlocks(nextBlocks))
+  );
+}
+
 function exerciseFeedbackHasData(fb: {
   actualReps?: number | null;
   actualLoad?: number | null;
@@ -686,8 +776,15 @@ export class TrainingPlannerService {
         entity.createdByUserId = actor.id;
         entity.createdByName = displayName;
       }
-      entity.lastSavedByUserId = actor.id;
-      entity.lastSavedByName = displayName;
+      // lastSavedBy* solo refleja ediciones de rutina, no marcas de asistencia.
+      const skipLastSavedAttribution =
+        !isNew &&
+        existing != null &&
+        isRoutineContentUnchanged(existing, data, blocks);
+      if (!skipLastSavedAttribution) {
+        entity.lastSavedByUserId = actor.id;
+        entity.lastSavedByName = displayName;
+      }
     }
 
     const previousCompletion = existing?.athleteCompletionStatus ?? 'pending';
@@ -2010,9 +2107,8 @@ export class TrainingPlannerService {
       entity.attendanceSource = 'athlete';
     }
 
-    entity.lastSavedByUserId = actor.id;
-    entity.lastSavedByName = formatStaffDisplayName(actor);
-
+    // No actualizar lastSavedBy*: es atribución de cambios de rutina del coach,
+    // no de asistencia / progreso del atleta.
     const saved = await this.sessionRepo.save(entity);
 
     let attendanceSync:
@@ -2052,8 +2148,7 @@ export class TrainingPlannerService {
     entity.attendanceMarkedByName = formatStaffDisplayName(actor);
     entity.attendanceMarkedAt = new Date();
     entity.attendanceSource = 'coach';
-    entity.lastSavedByUserId = actor.id;
-    entity.lastSavedByName = formatStaffDisplayName(actor);
+    // No actualizar lastSavedBy*: solo refleja ediciones de rutina, no asistencia.
 
     const saved = await this.sessionRepo.save(entity);
     let attendanceSync:
