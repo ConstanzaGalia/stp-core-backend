@@ -233,7 +233,8 @@ export class AthletesService {
   }
 
   /**
-   * Obtener todos los centros a los que está suscrito un atleta
+   * Obtener todos los centros a los que está suscrito un atleta.
+   * Devuelve shape centrado en company (branding) + metadatos de membresía.
    */
   async getMySubscribedCenters(athleteId: string) {
     const invitations = await this.invitationRepository.find({
@@ -245,12 +246,26 @@ export class AthletesService {
       order: { approvedAt: 'DESC' }
     });
 
-    return invitations.map((invitation) =>
-      Object.assign(invitation, {
+    return invitations
+      .filter((invitation) => invitation.company?.id)
+      .map((invitation) => ({
+        id: invitation.company.id,
+        name: invitation.company.name,
+        image: invitation.company.image ?? null,
+        primary_color: invitation.company.primary_color ?? null,
+        secondary_color: invitation.company.secondary_color ?? null,
+        accountType: invitation.company.accountType ?? null,
+        subscriptionActive: invitation.company.subscriptionActive ?? null,
+        enabledModules: invitation.company.enabledModules ?? null,
+        isOnline: invitation.isOnline === true,
+        approvedAt: invitation.approvedAt ?? null,
+        invitationId: invitation.id,
+        companyId: invitation.company.id,
+        company: invitation.company,
         divisionId: invitation.division?.id ?? invitation.divisionId ?? null,
         divisionName: invitation.division?.name ?? null,
-      }),
-    );
+        division: invitation.division ?? null,
+      }));
   }
 
   /**
@@ -292,7 +307,12 @@ export class AthletesService {
   async createAthleteForCompany(
     companyId: string,
     createAthleteDto: CreateAthleteDto,
-  ): Promise<{ user: User; invitation: AthleteInvitation; temporaryPassword?: string }> {
+  ): Promise<{
+    user: User;
+    invitation: AthleteInvitation;
+    temporaryPassword?: string;
+    linked?: boolean;
+  }> {
     const { name, lastName, email, isOnline = false, dateOfBirth, dni, phoneNumber, evaluationPortalOnly, sexo, peso, altura } = createAthleteDto;
 
     // Verificar que el centro existe
@@ -318,38 +338,58 @@ export class AthletesService {
       if (existingInvitation?.status === InvitationStatus.PENDING) {
         throw new ConflictException('Este atleta ya tiene una solicitud pendiente');
       }
-      // Si existe pero no está vinculado, vincularlo
+      // Si existe pero no está vinculado, vincularlo y resetear a la contraseña temporal del centro
       if (existingUser.role === UserRole.ATHLETE) {
-        const invitation = this.invitationRepository.create({
-          user: existingUser,
-          company: { id: companyId },
-          status: InvitationStatus.APPROVED,
-          approvedAt: new Date(),
-          isOnline: isOnline ?? false,
-        });
-        const savedInvitation = await this.invitationRepository.save(invitation);
-        await this.addUserToCompany(existingUser.id, companyId);
-        let touched = false;
+        const temporaryPassword = resolveCenterTemporaryPassword(company);
+        const passwordEncrypted = await this.encryptService.encryptedData(temporaryPassword);
+        existingUser.password = passwordEncrypted;
+        existingUser.isActive = true;
+        existingUser.activeToken = null;
+
         if (evaluationPortalOnly === true) {
           existingUser.evaluationPortalOnly = true;
-          touched = true;
         }
         if (sexo === 'femenino' || sexo === 'masculino') {
           existingUser.sexo = sexo;
-          touched = true;
         }
         if (peso != null && Number.isFinite(Number(peso))) {
           existingUser.peso = Number(peso);
-          touched = true;
         }
         if (altura != null && Number.isFinite(Number(altura))) {
           existingUser.altura = Number(altura);
-          touched = true;
         }
-        if (touched) {
-          await this.userRepository.save(existingUser);
+        await this.userRepository.save(existingUser);
+
+        let savedInvitation: AthleteInvitation;
+        if (
+          existingInvitation &&
+          (existingInvitation.status === InvitationStatus.LEFT ||
+            existingInvitation.status === InvitationStatus.REJECTED)
+        ) {
+          existingInvitation.status = InvitationStatus.APPROVED;
+          existingInvitation.approvedAt = new Date();
+          existingInvitation.leftAt = null as any;
+          existingInvitation.rejectedAt = null as any;
+          existingInvitation.isOnline = isOnline ?? false;
+          savedInvitation = await this.invitationRepository.save(existingInvitation);
+        } else {
+          const invitation = this.invitationRepository.create({
+            user: existingUser,
+            company: { id: companyId },
+            status: InvitationStatus.APPROVED,
+            approvedAt: new Date(),
+            isOnline: isOnline ?? false,
+          });
+          savedInvitation = await this.invitationRepository.save(invitation);
         }
-        return { user: existingUser, invitation: savedInvitation };
+
+        await this.addUserToCompany(existingUser.id, companyId);
+        return {
+          user: existingUser,
+          invitation: savedInvitation,
+          temporaryPassword,
+          linked: true,
+        };
       }
       throw new ConflictException('El email ya está registrado con otro rol');
     }
@@ -393,7 +433,7 @@ export class AthletesService {
     const savedInvitation = await this.invitationRepository.save(invitation);
     await this.addUserToCompany(savedUser.id, companyId);
 
-    return { user: savedUser, invitation: savedInvitation, temporaryPassword };
+    return { user: savedUser, invitation: savedInvitation, temporaryPassword, linked: false };
   }
 
   /**

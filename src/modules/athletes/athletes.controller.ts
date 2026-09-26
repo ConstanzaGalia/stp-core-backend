@@ -168,9 +168,11 @@ export class AthletesController {
     await this.ensureUserBelongsToCompany(user, companyId);
     const result = await this.athletesService.createAthleteForCompany(companyId, createAthleteDto);
     return {
-      message: result.temporaryPassword
-        ? `Atleta creado correctamente. Contraseña temporal: ${result.temporaryPassword}`
-        : 'Atleta vinculado correctamente al centro',
+      message: result.linked
+        ? `Atleta vinculado al centro. Contraseña temporal: ${result.temporaryPassword}`
+        : result.temporaryPassword
+          ? `Atleta creado correctamente. Contraseña temporal: ${result.temporaryPassword}`
+          : 'Atleta vinculado correctamente al centro',
       user: {
         id: result.user.id,
         name: result.user.name,
@@ -178,6 +180,7 @@ export class AthletesController {
         email: result.user.email,
       },
       ...(result.temporaryPassword ? { temporaryPassword: result.temporaryPassword } : {}),
+      ...(result.linked != null ? { linked: result.linked } : {}),
     };
   }
 
