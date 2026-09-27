@@ -28,6 +28,7 @@ import { PaginatedListDto } from 'src/common/pagination/DTOs/paginated-list.dto'
 import { GetUser } from '../auth/get-user.decorator';
 import { User } from 'src/entities/user.entity';
 import { UserRole } from 'src/common/enums/enums';
+import { StaffMembershipStatus } from 'src/entities/company-staff-membership.entity';
 import { UpdateCompanySubscriptionDto } from './dto/update-company-subscription.dto';
 import { UpdateCompanyModulesDto } from './dto/update-company-modules.dto';
 import { UpdateCompanyAccountTypeDto } from './dto/update-company-account-type.dto';
@@ -201,7 +202,7 @@ export class CompanyController {
     @GetUser() director: User,
   ) {
     await this.companyService.removeTrainerFromCompany(companyId, director.id, trainerId);
-    return { message: 'Trainer removed from company successfully' };
+    return { message: 'Miembro desactivado. El registro del centro se conserva.' };
   }
 
   @Get('search-available-trainers')
@@ -300,8 +301,56 @@ export class CompanyController {
   // Endpoints para obtener entrenadores/staff del centro
   @Get(':companyId/trainers/all')
   @UseGuards(AuthGuard('jwt'))
-  public async getAllCompanyTrainers(@Param('companyId') companyId: string) {
-    return await this.companyService.getAllCompanyTrainers(companyId);
+  public async getAllCompanyTrainers(
+    @Param('companyId') companyId: string,
+    @Query('status') status?: string,
+  ) {
+    const allowed = new Set(['ACTIVE', 'INACTIVE', 'all']);
+    const resolved = allowed.has(status ?? '')
+      ? (status as 'ACTIVE' | 'INACTIVE' | 'all')
+      : 'ACTIVE';
+    return await this.companyService.getAllCompanyTrainers(companyId, resolved);
+  }
+
+  @Get(':companyId/trainers/productivity-stats')
+  @UseGuards(AuthGuard('jwt'))
+  public async getTrainerProductivityStats(
+    @Param('companyId') companyId: string,
+    @Query('from') from: string,
+    @Query('to') to: string,
+    @Query('userId') userId: string | undefined,
+    @GetUser() actor: User,
+  ) {
+    return this.companyService.getTrainerProductivityStats(
+      companyId,
+      actor.id,
+      from,
+      to,
+      userId,
+    );
+  }
+
+  @Patch(':companyId/trainers/:trainerId/status')
+  @UseGuards(AuthGuard('jwt'))
+  public async setTrainerMembershipStatus(
+    @Param('companyId') companyId: string,
+    @Param('trainerId') trainerId: string,
+    @Body() body: { status?: string; notes?: string },
+    @GetUser() actor: User,
+  ) {
+    if (body.status !== 'ACTIVE' && body.status !== 'INACTIVE') {
+      throw new BadRequestException('Estado inválido');
+    }
+    const result = await this.companyService.setStaffMembershipStatus(
+      companyId,
+      actor.id,
+      trainerId,
+      body.status === 'ACTIVE'
+        ? StaffMembershipStatus.ACTIVE
+        : StaffMembershipStatus.INACTIVE,
+      body.notes,
+    );
+    return { data: result };
   }
 
   @Post(':companyId/trainers')

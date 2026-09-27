@@ -18,6 +18,10 @@ import { StaffCompensationPeriodRate } from '../../entities/staff-compensation-p
 import { StaffShiftAssignment } from '../../entities/staff-shift-assignment.entity';
 import { StaffShiftClosure } from '../../entities/staff-shift-closure.entity';
 import { StaffWeekNote } from '../../entities/staff-week-note.entity';
+import {
+  CompanyStaffMembership,
+  StaffMembershipStatus,
+} from '../../entities/company-staff-membership.entity';
 import { UserRole } from '../../common/enums/enums';
 import {
   UpsertWeekAssignmentsDto,
@@ -73,6 +77,8 @@ export class StaffSchedulingService {
     private readonly closureRepository: Repository<StaffShiftClosure>,
     @InjectRepository(StaffWeekNote)
     private readonly weekNoteRepository: Repository<StaffWeekNote>,
+    @InjectRepository(CompanyStaffMembership)
+    private readonly membershipRepository: Repository<CompanyStaffMembership>,
   ) {}
 
   private async assertCompanyAccess(user: User, companyId: string): Promise<Company> {
@@ -88,6 +94,12 @@ export class StaffSchedulingService {
     }
     const isMember = (company.users ?? []).some((u) => u.id === user.id);
     if (!isMember || !MANAGE_ROLES.includes(user.role)) {
+      throw new ForbiddenException('No tenés permiso para gestionar horarios del staff');
+    }
+    const membership = await this.membershipRepository.findOne({
+      where: { companyId, userId: user.id },
+    });
+    if (membership && membership.status !== StaffMembershipStatus.ACTIVE) {
       throw new ForbiddenException('No tenés permiso para gestionar horarios del staff');
     }
     return company;
@@ -111,7 +123,15 @@ export class StaffSchedulingService {
       company,
       profiles.map((p) => p.userId),
     );
-    const targetUser = staff.find((s) => s.id === targetUserId);
+    let targetUser = staff.find((s) => s.id === targetUserId) ?? null;
+    if (!targetUser) {
+      const membership = await this.membershipRepository.findOne({
+        where: { companyId, userId: targetUserId },
+      });
+      if (membership) {
+        targetUser = await this.userRepository.findOne({ where: { id: targetUserId } });
+      }
+    }
     if (!targetUser) {
       throw new NotFoundException('Profesional no encontrado en el staff del centro');
     }
@@ -377,17 +397,26 @@ export class StaffSchedulingService {
     const staffIds = new Set(
       this.getSchedulableStaff(company, profiles.map((p) => p.userId)).map((s) => s.id),
     );
+    const today = toCalendarDateString(new Date());
 
     for (const cell of dto.cells) {
       if (cell.date < weekStart || cell.date > weekEnd) {
         throw new BadRequestException(`La fecha ${cell.date} no pertenece a la semana seleccionada`);
       }
-      for (const uid of cell.userIds) {
-        if (!staffIds.has(uid)) {
-          throw new BadRequestException(`Usuario ${uid} no es staff válido del centro`);
-        }
-      }
+      cell.userIds = cell.userIds.filter((uid) => staffIds.has(uid));
     }
+
+    const existing = await this.assignmentRepository.find({
+      where: {
+        companyId,
+        date: Between(parseCalendarDate(weekStart), parseCalendarDate(weekEnd)),
+      },
+    });
+    const preservedHistory = existing.filter(
+      (assignment) =>
+        !staffIds.has(assignment.userId) &&
+        toCalendarDateString(assignment.date) <= today,
+    );
 
     await this.assignmentRepository.delete({
       companyId,
@@ -429,6 +458,20 @@ export class StaffSchedulingService {
 
     if (closures.length) await this.closureRepository.save(closures);
     if (assignments.length) await this.assignmentRepository.save(assignments);
+    if (preservedHistory.length) {
+      await this.assignmentRepository.save(
+        preservedHistory.map((assignment) =>
+          this.assignmentRepository.create({
+            companyId,
+            userId: assignment.userId,
+            date: assignment.date,
+            startTime: assignment.startTime,
+            endTime: assignment.endTime,
+            durationMinutes: assignment.durationMinutes,
+          }),
+        ),
+      );
+    }
 
     if (dto.note !== undefined) {
       let noteEntity = await this.weekNoteRepository.findOne({
@@ -555,7 +598,7 @@ export class StaffSchedulingService {
 
   async getHoursSummary(companyId: string, user: User, year: number) {
     await this.assertCompanyAccess(user, companyId);
-    const { company, staff, profiles } = await this.getCompanyWithSchedulableStaff(companyId);
+    const { staff, profiles } = await this.getCompanyWithSchedulableStaff(companyId);
     const assignments = await this.getAssignmentsForYear(companyId, year);
     const profileOrder = new Map(profiles.map((p, i) => [p.userId, p.sortOrder ?? i]));
 
@@ -579,13 +622,12 @@ export class StaffSchedulingService {
 
     const staffIds = new Set(staff.map((s) => s.id));
     const extraUserIds = [...hoursByUserMonth.keys()].filter((id) => !staffIds.has(id));
-    const companyUsers = new Map((company.users ?? []).map((u) => [u.id, u]));
-    const allRowUsers = [
-      ...staff,
-      ...extraUserIds
-        .map((id) => companyUsers.get(id))
-        .filter((u): u is User => !!u && u.isActive !== false),
-    ];
+    const extraUsers = extraUserIds.length
+      ? await this.userRepository.find({ where: { id: In(extraUserIds) } })
+      : [];
+    const memberships = await this.membershipRepository.find({ where: { companyId } });
+    const statusByUser = new Map(memberships.map((row) => [row.userId, row.status]));
+    const allRowUsers = [...staff, ...extraUsers];
 
     const monthTotals = Array(12).fill(0);
     const rows = allRowUsers
@@ -600,6 +642,7 @@ export class StaffSchedulingService {
           userId: s.id,
           name: formatStaffDisplayNameFromParts(s.name, s.lastName),
           role: s.role,
+          membershipStatus: statusByUser.get(s.id) ?? StaffMembershipStatus.ACTIVE,
           months: Object.fromEntries(months.map((h, i) => [i + 1, h > 0 ? h : null])),
           total: total > 0 ? total : null,
         };
@@ -659,6 +702,7 @@ export class StaffSchedulingService {
         userId: s.id,
         name: formatStaffDisplayNameFromParts(s.name, s.lastName),
         role: s.role,
+        membershipStatus: StaffMembershipStatus.ACTIVE,
         payType: resolved.payType,
         hoursMonth,
         hourlyRate:
@@ -671,6 +715,40 @@ export class StaffSchedulingService {
         hasPeriodRate: !!periodRate,
       };
     });
+
+    const staffIdSet = new Set(staff.map((member) => member.id));
+    const extraIds = [...hoursByUser.keys()].filter((id) => !staffIdSet.has(id));
+    if (extraIds.length) {
+      const extraUsers = await this.userRepository.find({ where: { id: In(extraIds) } });
+      for (const member of extraUsers) {
+        const hoursMonth = hoursByUser.get(member.id) ?? 0;
+        if (hoursMonth <= 0) continue;
+        totalHours += hoursMonth;
+        const profile = profileByUser.get(member.id);
+        const periodRate = periodRateByUser.get(member.id);
+        const resolved = this.resolveCompensationForPeriod(profile, periodRate);
+        const monthlyTotal =
+          resolved.payType === StaffPayType.FIXED_MONTHLY
+            ? resolved.fixedAmount
+            : hoursMonth * resolved.hourlyRate;
+        lines.push({
+          userId: member.id,
+          name: formatStaffDisplayNameFromParts(member.name, member.lastName),
+          role: member.role,
+          membershipStatus: StaffMembershipStatus.INACTIVE,
+          payType: resolved.payType,
+          hoursMonth,
+          hourlyRate:
+            resolved.payType === StaffPayType.FIXED_MONTHLY ? null : resolved.hourlyRate,
+          fixedAmount:
+            resolved.payType === StaffPayType.FIXED_MONTHLY ? resolved.fixedAmount : null,
+          percentOfTotal: 0,
+          monthlyTotal,
+          displayColor: profile?.displayColor,
+          hasPeriodRate: !!periodRate,
+        });
+      }
+    }
 
     for (const line of lines) {
       line.percentOfTotal =

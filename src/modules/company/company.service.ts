@@ -13,6 +13,12 @@ import { CreateCompanyDto } from './dto/create-company.dto';
 import { UpdateCompanyDto } from './dto/update-company.dto';
 import { InjectRepository } from '@nestjs/typeorm';
 import { Company } from 'src/entities/company.entity';
+import {
+  CompanyStaffMembership,
+  StaffMembershipStatus,
+} from 'src/entities/company-staff-membership.entity';
+import { StaffShiftAssignment } from 'src/entities/staff-shift-assignment.entity';
+import { STPSessionInstance } from 'src/entities/stp-session-instance.entity';
 import { InvitationStatus } from 'src/entities/athlete-invitation.entity';
 import { StaffAssociationRequest } from 'src/entities/staff-association-request.entity';
 import { Repository, In } from 'typeorm';
@@ -58,12 +64,118 @@ export class CompanyService {
     private readonly userRepository: Repository<User>,
     @InjectRepository(StaffAssociationRequest)
     private readonly staffAssociationRequestRepository: Repository<StaffAssociationRequest>,
+    @InjectRepository(CompanyStaffMembership)
+    private readonly membershipRepository: Repository<CompanyStaffMembership>,
+    @InjectRepository(StaffShiftAssignment)
+    private readonly shiftAssignmentRepository: Repository<StaffShiftAssignment>,
+    @InjectRepository(STPSessionInstance)
+    private readonly sessionRepository: Repository<STPSessionInstance>,
     private pagination: Pagination,
     private readonly mailingService: MailingService,
     private readonly encryptService: EncryptService,
     @Inject(forwardRef(() => StpPlatformBillingService))
     private readonly platformBillingService: StpPlatformBillingService,
   ) {}
+
+  private isStaffRole(role: UserRole): boolean {
+    return STAFF_ROLES.includes(role) || role === UserRole.STP_ADMIN;
+  }
+
+  private async ensureActiveMembership(
+    companyId: string,
+    user: User,
+    actorId?: string | null,
+  ): Promise<void> {
+    if (!this.isStaffRole(user.role)) return;
+    let row = await this.membershipRepository.findOne({
+      where: { companyId, userId: user.id },
+    });
+    if (!row) {
+      row = this.membershipRepository.create({
+        companyId,
+        userId: user.id,
+        status: StaffMembershipStatus.ACTIVE,
+        joinedAt: new Date(),
+        statusChangedAt: new Date(),
+        statusChangedByUserId: actorId ?? null,
+        roleSnapshot: user.role,
+        notes: null,
+      });
+    } else {
+      row.status = StaffMembershipStatus.ACTIVE;
+      row.statusChangedAt = new Date();
+      row.statusChangedByUserId = actorId ?? null;
+      row.roleSnapshot = user.role;
+      row.notes = null;
+    }
+    await this.membershipRepository.save(row);
+  }
+
+  /** Crea membresías ACTIVE para el staff que ya está en la M2M y todavía no tiene fila. */
+  private async backfillMemberships(company: Company): Promise<void> {
+    const staff = (company.users ?? []).filter((u) => this.isStaffRole(u.role));
+    if (staff.length === 0) return;
+    const existing = await this.membershipRepository.find({
+      where: { companyId: company.id, userId: In(staff.map((u) => u.id)) },
+    });
+    const known = new Set(existing.map((row) => row.userId));
+    const missing = staff.filter((u) => !known.has(u.id));
+    if (missing.length === 0) return;
+    await this.membershipRepository.save(
+      missing.map((u) =>
+        this.membershipRepository.create({
+          companyId: company.id,
+          userId: u.id,
+          status: StaffMembershipStatus.ACTIVE,
+          joinedAt: u.created_at ?? new Date(),
+          statusChangedAt: new Date(),
+          roleSnapshot: u.role,
+        }),
+      ),
+    );
+  }
+
+  private toStaffResponse(
+    member: User,
+    membership?: CompanyStaffMembership | null,
+  ): TrainerResponseDto {
+    const membershipStatus = membership?.status ?? StaffMembershipStatus.ACTIVE;
+    return {
+      id: member.id,
+      email: member.email,
+      name: member.name,
+      lastName: member.lastName,
+      role: member.role,
+      isActive: member.isActive,
+      phoneNumber: member.phoneNumber,
+      country: member.country,
+      city: member.city,
+      imageProfile: member.imageProfile,
+      associationDate: membership?.joinedAt ?? member.created_at,
+      specialty: member.specialty,
+      experience: member.experienceYears?.toString(),
+      status: member.isActive ? 'active' : 'inactive',
+      athletesCount: 0,
+      membershipStatus,
+      statusChangedAt: membership?.statusChangedAt ?? null,
+      membershipNotes: membership?.notes ?? null,
+    };
+  }
+
+  private async releaseFutureShiftAssignments(
+    companyId: string,
+    userId: string,
+  ): Promise<void> {
+    const today = new Date().toISOString().slice(0, 10);
+    await this.shiftAssignmentRepository
+      .createQueryBuilder()
+      .delete()
+      .where('"companyId" = :companyId', { companyId })
+      .andWhere('"userId" = :userId', { userId })
+      .andWhere('date > :today', { today })
+      .execute();
+  }
+
   public async create(createCompanyDto: CreateCompanyDto, user: User) {
     try {
       const payload: Partial<CreateCompanyDto> = {
@@ -94,7 +206,9 @@ export class CompanyService {
       const customTemporaryPassword = createCompanyDto.temporaryPassword?.trim();
       newCompany.temporaryPassword = customTemporaryPassword || null;
       newCompany.users = [user];
-      return await this.companyRepository.save(newCompany);
+      const saved = await this.companyRepository.save(newCompany);
+      await this.ensureActiveMembership(saved.id, user, user.id);
+      return saved;
     } catch (error) {
       if (error.code === '23505') {
         throw new ConflictException('COMPANY_HAS_BEEN_REGISTERED');
@@ -151,7 +265,20 @@ export class CompanyService {
           ],
         })
         .orderBy('company.created_at', 'ASC')
-        .getMany();
+        .getMany()
+        .then(async (companies) => {
+          if (companies.length === 0) return companies;
+          const memberships = await this.membershipRepository.find({
+            where: { userId },
+          });
+          const statusByCompany = new Map(
+            memberships.map((row) => [row.companyId, row.status]),
+          );
+          return companies.filter((company) => {
+            const status = statusByCompany.get(company.id);
+            return status == null || status === StaffMembershipStatus.ACTIVE;
+          });
+        });
     } catch (error) {
       Logger.log('Have an error in get all companies by user', error)
       return []
@@ -461,6 +588,7 @@ export class CompanyService {
     // Asociar el entrenador a la empresa
     company.users.push(trainer);
     await this.companyRepository.save(company);
+    await this.ensureActiveMembership(company.id, trainer, directorId);
 
     return {
       id: trainer.id,
@@ -547,9 +675,13 @@ export class CompanyService {
       throw new NotFoundException('Miembro del equipo no encontrado en este centro');
     }
 
-    // Remover el miembro de la empresa
-    company.users = company.users.filter(user => user.id !== trainerId);
-    await this.companyRepository.save(company);
+    // Remover el acceso operativo y conservar el registro (desactivar).
+    await this.setStaffMembershipStatus(
+      companyId,
+      directorId,
+      trainerId,
+      StaffMembershipStatus.INACTIVE,
+    );
   }
 
   public async searchAvailableTrainers(searchTerm: string): Promise<any[]> {
@@ -638,6 +770,7 @@ export class CompanyService {
     // Asociar el entrenador a la empresa
     company.users.push(trainer);
     await this.companyRepository.save(company);
+    await this.ensureActiveMembership(company.id, trainer, trainer.id);
 
     return {
       id: trainer.id,
@@ -721,8 +854,10 @@ export class CompanyService {
   }
 
   // Método para obtener todo el personal del centro (entrenadores, directores, secretarias)
-  public async getAllCompanyTrainers(companyId: string): Promise<TrainerResponseDto[]> {
-    // Verificar que la empresa existe
+  public async getAllCompanyTrainers(
+    companyId: string,
+    status: 'ACTIVE' | 'INACTIVE' | 'all' = 'ACTIVE',
+  ): Promise<TrainerResponseDto[]> {
     const company = await this.companyRepository.findOne({
       where: { id: companyId },
       relations: ['users'],
@@ -732,32 +867,307 @@ export class CompanyService {
       throw new NotFoundException('Company not found');
     }
 
-    // Verificar que la empresa está activa
     if (company.isDelete) {
       throw new BadRequestException('Company is not active');
     }
 
-    // Filtrar todo el staff: entrenadores, directores, secretarias (excluir atletas)
-    const staff = company.users.filter(user => STAFF_ROLES.includes(user.role));
+    await this.backfillMemberships(company);
 
-    // Mapear a DTO de respuesta (incluye specialty/experience para compatibilidad con frontend)
-    return staff.map(member => ({
-      id: member.id,
-      email: member.email,
-      name: member.name,
-      lastName: member.lastName,
-      role: member.role,
-      isActive: member.isActive,
-      phoneNumber: member.phoneNumber,
-      country: member.country,
-      city: member.city,
-      imageProfile: member.imageProfile,
-      associationDate: member.created_at,
-      specialty: member.specialty,
-      experience: member.experienceYears?.toString(),
-      status: member.isActive ? 'active' : 'inactive',
-      athletesCount: 0, // Se puede calcular si se necesita
-    }));
+    const memberships = await this.membershipRepository.find({
+      where: { companyId },
+    });
+    const filtered = memberships.filter((row) =>
+      status === 'all' ? true : row.status === status,
+    );
+    if (filtered.length === 0) return [];
+
+    const users = await this.userRepository.find({
+      where: { id: In(filtered.map((row) => row.userId)) },
+    });
+    const byId = new Map(users.map((user) => [user.id, user]));
+
+    return filtered
+      .map((row) => {
+        const member = byId.get(row.userId);
+        if (!member || !this.isStaffRole(member.role)) return null;
+        return this.toStaffResponse(member, row);
+      })
+      .filter((row): row is TrainerResponseDto => !!row)
+      .sort((a, b) =>
+        `${a.name} ${a.lastName}`.localeCompare(`${b.name} ${b.lastName}`, 'es'),
+      );
+  }
+
+  public async setStaffMembershipStatus(
+    companyId: string,
+    actorId: string,
+    staffId: string,
+    status: StaffMembershipStatus,
+    notes?: string,
+  ): Promise<TrainerResponseDto> {
+    const company = await this.companyRepository.findOne({
+      where: { id: companyId },
+      relations: ['users'],
+    });
+    if (!company) throw new NotFoundException('Company not found');
+
+    await this.backfillMemberships(company);
+
+    const actor = company.users.find(
+      (user) =>
+        user.id === actorId &&
+        (user.role === UserRole.DIRECTOR || user.role === UserRole.STP_ADMIN),
+    );
+    if (!actor) {
+      throw new ForbiddenException('Solo un director puede cambiar el estado del equipo');
+    }
+
+    const target = await this.userRepository.findOne({ where: { id: staffId } });
+    if (!target || !this.isStaffRole(target.role)) {
+      throw new NotFoundException('Miembro del equipo no encontrado');
+    }
+
+    const membership = await this.membershipRepository.findOne({
+      where: { companyId, userId: staffId },
+    });
+    if (!membership) {
+      throw new NotFoundException('Miembro del equipo no encontrado en este centro');
+    }
+
+    if (
+      status === StaffMembershipStatus.INACTIVE &&
+      target.role === UserRole.DIRECTOR
+    ) {
+      const activeRows = await this.membershipRepository.find({
+        where: { companyId, status: StaffMembershipStatus.ACTIVE },
+      });
+      const activeUsers = activeRows.length
+        ? await this.userRepository.find({
+            where: { id: In(activeRows.map((row) => row.userId)) },
+          })
+        : [];
+      const otherDirectors = activeUsers.filter(
+        (user) => user.role === UserRole.DIRECTOR && user.id !== staffId,
+      );
+      if (otherDirectors.length === 0) {
+        throw new BadRequestException(
+          'No se puede desactivar al único director del centro',
+        );
+      }
+    }
+
+    membership.status = status;
+    membership.statusChangedAt = new Date();
+    membership.statusChangedByUserId = actorId;
+    membership.roleSnapshot = target.role;
+    if (notes !== undefined) {
+      membership.notes = notes.trim() || null;
+    }
+    await this.membershipRepository.save(membership);
+
+    const inCompany = company.users.some((user) => user.id === staffId);
+    if (status === StaffMembershipStatus.ACTIVE) {
+      if (!inCompany) {
+        company.users.push(target);
+        await this.companyRepository.save(company);
+      }
+    } else {
+      if (inCompany) {
+        company.users = company.users.filter((user) => user.id !== staffId);
+        await this.companyRepository.save(company);
+      }
+      await this.releaseFutureShiftAssignments(companyId, staffId);
+    }
+
+    return this.toStaffResponse(target, membership);
+  }
+
+  public async getTrainerProductivityStats(
+    companyId: string,
+    actorId: string,
+    from: string,
+    to: string,
+    userId?: string,
+  ) {
+    const company = await this.companyRepository.findOne({
+      where: { id: companyId },
+      relations: ['users'],
+    });
+    if (!company) throw new NotFoundException('Company not found');
+
+    const actor = company.users.find(
+      (user) =>
+        user.id === actorId &&
+        (user.role === UserRole.DIRECTOR ||
+          user.role === UserRole.STP_ADMIN ||
+          user.role === UserRole.SECRETARIA),
+    );
+    if (!actor) {
+      throw new ForbiddenException('No tenés permiso para ver estas estadísticas');
+    }
+
+    if (!/^\d{4}-\d{2}-\d{2}$/.test(from) || !/^\d{4}-\d{2}-\d{2}$/.test(to) || from > to) {
+      throw new BadRequestException('Rango de fechas inválido');
+    }
+
+    await this.backfillMemberships(company);
+    const memberships = await this.membershipRepository.find({ where: { companyId } });
+    const scoped = userId
+      ? memberships.filter((row) => row.userId === userId)
+      : memberships;
+    if (scoped.length === 0) {
+      return {
+        from,
+        to,
+        feedbackPending: 0,
+        athletesWithoutRecentPlan: 0,
+        rows: [],
+      };
+    }
+
+    const users = await this.userRepository.find({
+      where: { id: In(scoped.map((row) => row.userId)) },
+    });
+    const userById = new Map(users.map((user) => [user.id, user]));
+    const fromDate = new Date(`${from}T00:00:00.000Z`);
+    const toDate = new Date(`${to}T23:59:59.999Z`);
+
+    const assignments = await this.shiftAssignmentRepository
+      .createQueryBuilder('a')
+      .where('a.companyId = :companyId', { companyId })
+      .andWhere('a.date BETWEEN :from AND :to', { from, to })
+      .getMany();
+
+    const hoursByUser = new Map<string, number>();
+    for (const assignment of assignments) {
+      const hours = (assignment.durationMinutes || 60) / 60;
+      hoursByUser.set(
+        assignment.userId,
+        (hoursByUser.get(assignment.userId) ?? 0) + hours,
+      );
+    }
+
+    const athleteIds = (company.users ?? [])
+      .filter((user) => user.role === UserRole.ATHLETE)
+      .map((user) => user.id);
+
+    const sessions = athleteIds.length
+      ? await this.sessionRepository
+          .createQueryBuilder('s')
+          .where('s.athlete_id IN (:...athleteIds)', { athleteIds })
+          .andWhere(
+            `(
+              (s.created_at BETWEEN :fromDate AND :toDate)
+              OR (s.updated_at BETWEEN :fromDate AND :toDate)
+              OR (s.attendance_marked_at BETWEEN :fromDate AND :toDate)
+            )`,
+            { fromDate, toDate },
+          )
+          .getMany()
+      : [];
+
+    const createdByUser = new Map<string, number>();
+    const editedByUser = new Map<string, number>();
+    const publishedByUser = new Map<string, number>();
+    const attendanceByUser = new Map<string, number>();
+    let feedbackPending = 0;
+
+    if (athleteIds.length) {
+      feedbackPending = await this.sessionRepository
+        .createQueryBuilder('s')
+        .where('s.athleteId IN (:...athleteIds)', { athleteIds })
+        .andWhere("s.feedback_status = 'pending_review'")
+        .getCount();
+    }
+
+    for (const session of sessions) {
+      const createdInRange =
+        session.createdAt >= fromDate && session.createdAt <= toDate;
+      const updatedInRange =
+        session.updatedAt >= fromDate && session.updatedAt <= toDate;
+      if (createdInRange && session.createdByUserId) {
+        createdByUser.set(
+          session.createdByUserId,
+          (createdByUser.get(session.createdByUserId) ?? 0) + 1,
+        );
+      }
+      if (updatedInRange && session.lastSavedByUserId) {
+        editedByUser.set(
+          session.lastSavedByUserId,
+          (editedByUser.get(session.lastSavedByUserId) ?? 0) + 1,
+        );
+      }
+      if (
+        session.coachStatus === 'published' &&
+        updatedInRange &&
+        (session.createdByUserId || session.lastSavedByUserId)
+      ) {
+        const publisher = session.lastSavedByUserId || session.createdByUserId;
+        if (publisher) {
+          publishedByUser.set(publisher, (publishedByUser.get(publisher) ?? 0) + 1);
+        }
+      }
+      if (
+        session.attendanceSource === 'coach' &&
+        session.attendanceMarkedByUserId &&
+        session.attendanceMarkedAt &&
+        session.attendanceMarkedAt >= fromDate &&
+        session.attendanceMarkedAt <= toDate
+      ) {
+        attendanceByUser.set(
+          session.attendanceMarkedByUserId,
+          (attendanceByUser.get(session.attendanceMarkedByUserId) ?? 0) + 1,
+        );
+      }
+    }
+
+    const threshold = new Date();
+    threshold.setUTCDate(threshold.getUTCDate() - 7);
+    const thresholdStr = threshold.toISOString().slice(0, 10);
+    let athletesWithoutRecentPlan = 0;
+    if (athleteIds.length) {
+      const planned = await this.sessionRepository
+        .createQueryBuilder('s')
+        .select('s.athlete_id', 'athleteId')
+        .where('s.athlete_id IN (:...athleteIds)', { athleteIds })
+        .andWhere('s.scheduled_date >= :thresholdStr', { thresholdStr })
+        .andWhere(
+          "(jsonb_array_length(COALESCE(s.blocks, '[]'::jsonb)) > 0 OR s.template_id = 'libre')",
+        )
+        .groupBy('s.athlete_id')
+        .getRawMany();
+      const plannedIds = new Set(planned.map((row) => row.athleteId as string));
+      athletesWithoutRecentPlan = athleteIds.filter((id) => !plannedIds.has(id)).length;
+    }
+
+    const bump = (map: Map<string, number>, id: string) => map.get(id) ?? 0;
+
+    const rows = scoped
+      .map((membership) => {
+        const member = userById.get(membership.userId);
+        if (!member) return null;
+        return {
+          userId: member.id,
+          name: `${member.name} ${member.lastName}`.trim(),
+          role: member.role,
+          membershipStatus: membership.status,
+          plannedHours: Math.round((hoursByUser.get(member.id) ?? 0) * 10) / 10,
+          sessionsCreated: bump(createdByUser, member.id),
+          sessionsEdited: bump(editedByUser, member.id),
+          sessionsPublished: bump(publishedByUser, member.id),
+          attendancesMarked: bump(attendanceByUser, member.id),
+        };
+      })
+      .filter((row): row is NonNullable<typeof row> => !!row)
+      .sort((a, b) => b.plannedHours - a.plannedHours || a.name.localeCompare(b.name, 'es'));
+
+    return {
+      from,
+      to,
+      feedbackPending,
+      athletesWithoutRecentPlan,
+      rows,
+    };
   }
 
   // Método para añadir un miembro del equipo al centro (con rol)
@@ -793,6 +1203,12 @@ export class CompanyService {
         throw new BadRequestException('No se puede agregar un atleta como miembro del equipo. Use la sección de atletas.');
       }
 
+      let shouldSaveUser = false;
+      if (user.isActive !== true) {
+        user.isActive = true;
+        shouldSaveUser = true;
+      }
+
       // Actualizar rol si el nuevo rol es diferente y es un rol de staff
       if (STAFF_ROLES.includes(addStaffDto.role) && user.role !== addStaffDto.role) {
         user.role = addStaffDto.role;
@@ -805,29 +1221,18 @@ export class CompanyService {
         if (addStaffDto.phone) {
           user.phoneNumber = parseInt(addStaffDto.phone.replace(/\D/g, ''), 10) || user.phoneNumber;
         }
+        shouldSaveUser = true;
+      }
+
+      if (shouldSaveUser) {
         await this.userRepository.save(user);
       }
 
       company.users.push(user);
       await this.companyRepository.save(company);
+      await this.ensureActiveMembership(company.id, user);
 
-      return {
-        id: user.id,
-        email: user.email,
-        name: user.name,
-        lastName: user.lastName,
-        role: user.role,
-        isActive: user.isActive,
-        phoneNumber: user.phoneNumber,
-        country: user.country,
-        city: user.city,
-        imageProfile: user.imageProfile,
-        associationDate: user.created_at,
-        specialty: user.specialty,
-        experience: user.experienceYears?.toString(),
-        status: user.isActive ? 'active' : 'inactive',
-        athletesCount: 0,
-      };
+      return this.toStaffResponse(user);
     }
 
     // Usuario nuevo: crear y asociar (requiere contraseña)
@@ -845,30 +1250,15 @@ export class CompanyService {
       phoneNumber: addStaffDto.phone ? parseInt(addStaffDto.phone.replace(/\D/g, ''), 10) : undefined,
       specialty: addStaffDto.specialty,
       experienceYears: addStaffDto.experience ? parseInt(addStaffDto.experience, 10) : undefined,
-      isActive: false, // Requiere activación
+      isActive: true,
     });
 
     const savedUser = await this.userRepository.save(newUser);
     company.users.push(savedUser);
     await this.companyRepository.save(company);
+    await this.ensureActiveMembership(company.id, savedUser);
 
-    return {
-      id: savedUser.id,
-      email: savedUser.email,
-      name: savedUser.name,
-      lastName: savedUser.lastName,
-      role: savedUser.role,
-      isActive: savedUser.isActive,
-      phoneNumber: savedUser.phoneNumber,
-      country: savedUser.country,
-      city: savedUser.city,
-      imageProfile: savedUser.imageProfile,
-      associationDate: savedUser.created_at,
-      specialty: savedUser.specialty,
-      experience: savedUser.experienceYears?.toString(),
-      status: savedUser.isActive ? 'active' : 'inactive',
-      athletesCount: 0,
-    };
+    return this.toStaffResponse(savedUser);
   }
 
   // Método para actualizar el rol de un miembro del equipo
@@ -1616,6 +2006,7 @@ export class CompanyService {
       company.users.push(request.user);
       await this.companyRepository.save(company);
     }
+    await this.ensureActiveMembership(company.id, request.user, directorId);
 
     request.status = InvitationStatus.APPROVED;
     request.approvedAt = new Date();

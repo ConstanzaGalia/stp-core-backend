@@ -18,8 +18,11 @@ export class CreatePaymentPlanDto {
 
   @IsNumber()
   @Min(1)
-  @Max(5)
-  classesPerWeek: number; // 1, 2, 3, 4 o 5 clases por semana
+  classesPerWeek: number; // Con tope semanal: 1 a 5. Sin tope: puede igualar el cupo del período
+
+  @IsBoolean()
+  @IsOptional()
+  enforceWeeklyLimit?: boolean; // Por defecto true. false = cupo libre dentro del período
 
   @IsNumber()
   @Min(1)

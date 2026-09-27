@@ -11,6 +11,7 @@ import { StaffCompensationPeriodRate } from '../../entities/staff-compensation-p
 import { StaffShiftAssignment } from '../../entities/staff-shift-assignment.entity';
 import { StaffShiftClosure } from '../../entities/staff-shift-closure.entity';
 import { StaffWeekNote } from '../../entities/staff-week-note.entity';
+import { CompanyStaffMembership } from '../../entities/company-staff-membership.entity';
 import { AuthModule } from '../auth/auth.module';
 
 @Module({
@@ -25,6 +26,7 @@ import { AuthModule } from '../auth/auth.module';
       StaffShiftAssignment,
       StaffShiftClosure,
       StaffWeekNote,
+      CompanyStaffMembership,
     ]),
     AuthModule,
   ],

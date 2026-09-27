@@ -42,6 +42,7 @@ export type CanBookClassReason =
   | 'NO_SUBSCRIPTION'
   | 'OUTSIDE_PERIOD'
   | 'WEEKLY_LIMIT'
+  | 'PERIOD_LIMIT'
   | 'PENDING_PAYMENT';
 
 export interface CanBookClassResult {
@@ -55,6 +56,8 @@ export const CAN_BOOK_CLASS_MESSAGES: Record<CanBookClassReason, string> = {
   OUTSIDE_PERIOD: 'La fecha del turno está fuera de tu período de plan vigente. Contactá a tu centro.',
   WEEKLY_LIMIT:
     'Ya usaste tus clases de esta semana. Para reservar otro día, cancelá o modificá el turno al que no vas a asistir.',
+  PERIOD_LIMIT:
+    'Ya usaste todas las clases de tu plan en este período.',
   PENDING_PAYMENT:
     'Tenés un pago pendiente. Contactá a tu centro para regularizar tu situación y poder reservar.',
 };
@@ -165,6 +168,21 @@ export class PaymentsService {
     return currency;
   }
 
+  private assertPlanClassLimits(
+    classesPerWeek: number,
+    maxClassesPerPeriod: number,
+    enforceWeeklyLimit: boolean,
+  ): void {
+    if (enforceWeeklyLimit && classesPerWeek > 5) {
+      throw new BadRequestException('Con tope semanal, las clases por semana no pueden ser más de 5');
+    }
+    if (maxClassesPerPeriod < classesPerWeek) {
+      throw new BadRequestException(
+        `maxClassesPerPeriod debe ser al menos ${classesPerWeek} para ${classesPerWeek} clases por semana`,
+      );
+    }
+  }
+
   // ===== PLANES DE PAGO =====
   async createPaymentPlan(companyId: string, createPaymentPlanDto: CreatePaymentPlanDto): Promise<PaymentPlan> {
     const company = await this.companyRepository.findOne({ where: { id: companyId } });
@@ -172,16 +190,18 @@ export class PaymentsService {
       throw new NotFoundException('Company not found');
     }
 
-    if (createPaymentPlanDto.maxClassesPerPeriod < createPaymentPlanDto.classesPerWeek) {
-      throw new BadRequestException(
-        `maxClassesPerPeriod debe ser al menos ${createPaymentPlanDto.classesPerWeek} para ${createPaymentPlanDto.classesPerWeek} clases por semana`
-      );
-    }
+    const enforceWeeklyLimit = createPaymentPlanDto.enforceWeeklyLimit ?? true;
+    this.assertPlanClassLimits(
+      createPaymentPlanDto.classesPerWeek,
+      createPaymentPlanDto.maxClassesPerPeriod,
+      enforceWeeklyLimit,
+    );
 
     const currency = this.resolvePlanCurrency(company, createPaymentPlanDto.currency);
 
     const paymentPlan = this.paymentPlanRepository.create({
       ...createPaymentPlanDto,
+      enforceWeeklyLimit,
       currency,
       frequencyDays: 30, // Siempre 30 días
       totalInstallments: 1, // Siempre 1 cuota
@@ -229,14 +249,10 @@ export class PaymentsService {
       updateData.currency = this.resolvePlanCurrency(paymentPlan.company, updateData.currency);
     }
 
-    // Validar coherencia mínima: el período debe cubrir al menos una semana de clases
     const classesPerWeek = updateData.classesPerWeek ?? paymentPlan.classesPerWeek;
     const maxClassesPerPeriod = updateData.maxClassesPerPeriod ?? paymentPlan.maxClassesPerPeriod;
-    if (maxClassesPerPeriod < classesPerWeek) {
-      throw new BadRequestException(
-        `maxClassesPerPeriod debe ser al menos ${classesPerWeek} para ${classesPerWeek} clases por semana`
-      );
-    }
+    const enforceWeeklyLimit = updateData.enforceWeeklyLimit ?? paymentPlan.enforceWeeklyLimit ?? true;
+    this.assertPlanClassLimits(classesPerWeek, maxClassesPerPeriod, enforceWeeklyLimit);
 
     Object.assign(paymentPlan, updateData);
     return await this.paymentPlanRepository.save(paymentPlan);
@@ -460,6 +476,37 @@ export class PaymentsService {
     return reservations.filter((reservation) => {
       const key = toDateOnlyKey(reservation.timeSlot?.date);
       return !!key && key >= weekStart && key <= weekEnd;
+    }).length;
+  }
+
+  /**
+   * Reservas reales del alumno entre dos días calendario (inclusive).
+   * Usa la misma ventana amplia y el filtro por toDateOnlyKey que el conteo semanal.
+   */
+  private async countUserReservationsInPeriod(
+    userId: string,
+    companyId: string | undefined,
+    periodStart: Date,
+    periodEnd: Date,
+  ): Promise<number> {
+    const startKey = this.formatLocalYmd(periodStart);
+    const endKey = this.formatLocalYmd(periodEnd);
+
+    const qb = this.reservationRepository
+      .createQueryBuilder('reservation')
+      .innerJoinAndSelect('reservation.timeSlot', 'slot')
+      .where('reservation.userId = :userId', { userId })
+      .andWhere('slot.date >= :from', { from: `${this.addCalendarDaysYmd(startKey, -1)}T00:00:00.000Z` })
+      .andWhere('slot.date < :to', { to: `${this.addCalendarDaysYmd(endKey, 2)}T00:00:00.000Z` });
+
+    if (companyId) {
+      qb.andWhere('slot.companyId = :companyId', { companyId });
+    }
+
+    const reservations = await qb.getMany();
+    return reservations.filter((reservation) => {
+      const key = toDateOnlyKey(reservation.timeSlot?.date);
+      return !!key && key >= startKey && key <= endKey;
     }).length;
   }
 
@@ -723,21 +770,41 @@ export class PaymentsService {
 
     await this.syncSubscriptionPlanFromPaidAccess(subscription, paidPeriodAccess.plan);
 
-    const allowedThisWeek = this.resolveWeeklyClassAllowance(
-      paidPeriodAccess.plan,
-      subscription,
-    );
-    const targetDate = reservationDate ? (this.toCalendarDate(reservationDate) ?? new Date()) : new Date();
-    const usedInTargetWeek = userId
-      ? await this.countUserReservationsInWeek(userId, companyId, targetDate)
-      : 0;
+    const plan = paidPeriodAccess.plan;
+    const maxClassesPerPeriod = plan?.maxClassesPerPeriod ?? 0;
+    const periodStart = paidPeriodAccess.periodStartDate;
+    const periodEnd = paidPeriodAccess.periodEndDate;
+    if (userId && maxClassesPerPeriod > 0 && periodStart && periodEnd) {
+      const usedInPeriod = await this.countUserReservationsInPeriod(
+        userId,
+        companyId,
+        periodStart,
+        periodEnd,
+      );
+      if (usedInPeriod >= maxClassesPerPeriod) {
+        return {
+          canBook: false,
+          reason: 'PERIOD_LIMIT',
+          message: CAN_BOOK_CLASS_MESSAGES.PERIOD_LIMIT,
+        };
+      }
+    }
 
-    if (allowedThisWeek <= 0 || usedInTargetWeek >= allowedThisWeek) {
-      return {
-        canBook: false,
-        reason: 'WEEKLY_LIMIT',
-        message: CAN_BOOK_CLASS_MESSAGES.WEEKLY_LIMIT,
-      };
+    const enforceWeeklyLimit = plan?.enforceWeeklyLimit !== false;
+    if (enforceWeeklyLimit) {
+      const allowedThisWeek = this.resolveWeeklyClassAllowance(plan, subscription);
+      const targetDate = reservationDate ? (this.toCalendarDate(reservationDate) ?? new Date()) : new Date();
+      const usedInTargetWeek = userId
+        ? await this.countUserReservationsInWeek(userId, companyId, targetDate)
+        : 0;
+
+      if (allowedThisWeek <= 0 || usedInTargetWeek >= allowedThisWeek) {
+        return {
+          canBook: false,
+          reason: 'WEEKLY_LIMIT',
+          message: CAN_BOOK_CLASS_MESSAGES.WEEKLY_LIMIT,
+        };
+      }
     }
 
     await this.renewWeeklyCounters(subscription);
@@ -3667,6 +3734,7 @@ export class PaymentsService {
         description: plan.description,
         amount: plan.amount,
         classesPerWeek: plan.classesPerWeek,
+        enforceWeeklyLimit: plan.enforceWeeklyLimit !== false,
         maxClassesPerPeriod: plan.maxClassesPerPeriod,
         frequencyDays: plan.frequencyDays,
         gracePeriodDays: plan.gracePeriodDays,

@@ -507,6 +507,7 @@ export class ReservationsService {
       }
 
       const paymentPlan = activeSubscription.paymentPlan;
+      const enforceWeeklyLimit = paymentPlan?.enforceWeeklyLimit !== false;
       const classesPerWeek = paymentPlan?.classesPerWeek || 0;
 
       // Obtener la semana actual (lunes a domingo)
@@ -547,8 +548,7 @@ export class ReservationsService {
         };
       }
 
-      // Si tiene plan de 3 días y ya tiene 3 reservas esta semana, no puede recuperar
-      if (classesPerWeek === 3 && reservationsThisWeek >= 3) {
+      if (enforceWeeklyLimit && classesPerWeek > 0 && reservationsThisWeek >= classesPerWeek) {
         return {
           canModify: true,
           canRecover: false,
@@ -2271,8 +2271,9 @@ export class ReservationsService {
     const recurringStartTime = this.normalizeTimeString(athleteSchedule.startTime);
     const recurringEndTime = this.normalizeTimeString(athleteSchedule.endTime);
 
-    // Contador semanal para respetar classesPerWeek
+    // Contador semanal: solo si el plan limita el cupo por semana
     const weeklyReservationCount = new Map<string, number>();
+    const enforceWeeklyLimit = activeSubscription.paymentPlan?.enforceWeeklyLimit !== false;
     const classesPerWeek = activeSubscription.paymentPlan?.classesPerWeek ?? 0;
 
     // OPTIMIZACIÓN: Pre-cargar datos fuera del loop
@@ -2457,8 +2458,7 @@ export class ReservationsService {
           continue;
         }
 
-        // Validar límite semanal (classesPerWeek)
-        if (classesPerWeek > 0) {
+        if (enforceWeeklyLimit && classesPerWeek > 0) {
           const weekKey = this.getWeekKey(slotDate);
           const currentWeekCount = weeklyReservationCount.get(weekKey) || 0;
           
@@ -2516,8 +2516,7 @@ export class ReservationsService {
           remainingOccurrences--;
           generatedCount++;
           
-          // Actualizar contador semanal
-          if (classesPerWeek > 0) {
+          if (enforceWeeklyLimit && classesPerWeek > 0) {
             const weekKey = this.getWeekKey(slotDate);
             const currentWeekCount = weeklyReservationCount.get(weekKey) || 0;
             weeklyReservationCount.set(weekKey, currentWeekCount + 1);

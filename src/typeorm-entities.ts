@@ -12,6 +12,7 @@ import { AvailableClass } from './entities/available-class.entity';
 import { Category } from './entities/category.entity';
 import { ClassUsage } from './entities/class-usage.entity';
 import { Company } from './entities/company.entity';
+import { CompanyStaffMembership } from './entities/company-staff-membership.entity';
 import { AthleteEvaluation } from './entities/athlete-evaluation.entity';
 import { PhysicalEvaluation } from './entities/physical-evaluation.entity';
 import { PhysicalEvaluationTest } from './entities/physical-evaluation-test.entity';
@@ -90,6 +91,7 @@ export const TYPEORM_ENTITIES = [
   Category,
   ClassUsage,
   Company,
+  CompanyStaffMembership,
   Exercise,
   Expense,
   FixedExpenseTemplate,

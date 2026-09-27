@@ -4,7 +4,10 @@ import { CompanyService } from './company.service';
 import { CompanyController } from './company.controller';
 import { Pagination } from 'src/common/pagination/pagination';
 import { Company } from 'src/entities/company.entity';
+import { CompanyStaffMembership } from 'src/entities/company-staff-membership.entity';
 import { StaffAssociationRequest } from 'src/entities/staff-association-request.entity';
+import { StaffShiftAssignment } from 'src/entities/staff-shift-assignment.entity';
+import { STPSessionInstance } from 'src/entities/stp-session-instance.entity';
 import { User } from 'src/entities/user.entity';
 import { TypeOrmModule } from '@nestjs/typeorm';
 import { AuthModule } from '../auth/auth.module';
@@ -15,7 +18,14 @@ import { StpPlatformBillingModule } from '../stp-platform-billing/stp-platform-b
 
 @Module({
   imports: [
-    TypeOrmModule.forFeature([Company, User, StaffAssociationRequest]),
+    TypeOrmModule.forFeature([
+      Company,
+      User,
+      StaffAssociationRequest,
+      CompanyStaffMembership,
+      StaffShiftAssignment,
+      STPSessionInstance,
+    ]),
     AuthModule,
     MailingModule,
     forwardRef(() => StpPlatformBillingModule),

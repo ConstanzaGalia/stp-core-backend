@@ -27,7 +27,10 @@ export class PaymentPlan {
   totalInstallments: number; // Siempre 1 (mensual)
 
   @Column({ type: 'int' })
-  classesPerWeek: number; // 1, 2, 3, 4 o 5 clases por semana
+  classesPerWeek: number; // Tope semanal cuando enforceWeeklyLimit es true
+
+  @Column({ type: 'boolean', default: true })
+  enforceWeeklyLimit: boolean; // false: el alumno usa libremente el cupo del período
 
   @Column({ type: 'int' })
   maxClassesPerPeriod: number; // Máximo total de clases en el período (ej: 12 para 3x semana en 30 días)

@@ -16,4 +16,7 @@ export class TrainerResponseDto {
   experience?: string;
   status?: string;
   athletesCount?: number;
+  membershipStatus?: 'ACTIVE' | 'INACTIVE';
+  statusChangedAt?: Date | null;
+  membershipNotes?: string | null;
 } 
