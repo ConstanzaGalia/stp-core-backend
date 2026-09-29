@@ -16,6 +16,7 @@ import {
   InvitationStatus,
 } from 'src/entities/athlete-invitation.entity';
 import { UserRole } from 'src/common/enums/enums';
+import { parseDateOnlyLocal } from 'src/common/utils/date-only.util';
 import { CompanyService } from '../company/company.service';
 import { AthletesService } from '../athletes/athletes.service';
 import { ReservationsService } from '../reservation/reservation.service';
@@ -401,13 +402,22 @@ export class DataMigrationService {
           email: data.email,
           phoneNumber: data.phoneNumber,
           dni: data.dni,
-          dateOfBirth: data.dateOfBirth,
           sexo: data.sexo,
           peso: data.peso,
           altura: data.altura,
           isOnline: false,
         });
+        if (data.dateOfBirth && result.user?.id) {
+          await this.patchAthleteProfile(result.user.id, {
+            dateOfBirth: data.dateOfBirth,
+          });
+        }
         if (result.temporaryPassword) {
+          temporaryPasswords.push({
+            email: data.email,
+            temporaryPassword: result.temporaryPassword,
+          });
+        }
           temporaryPasswords.push({
             email: data.email,
             temporaryPassword: result.temporaryPassword,
@@ -455,8 +465,11 @@ export class DataMigrationService {
       touched = true;
     }
     if (row.dateOfBirth) {
-      user.dateOfBirth = new Date(row.dateOfBirth);
-      touched = true;
+      const parsed = parseDateOnlyLocal(row.dateOfBirth);
+      if (parsed) {
+        user.dateOfBirth = parsed;
+        touched = true;
+      }
     }
     if (row.phoneNumber) {
       const digits = String(row.phoneNumber).replace(/\D/g, '');
