@@ -312,6 +312,15 @@ export class CompanyController {
     return await this.companyService.getAllCompanyTrainers(companyId, resolved);
   }
 
+  @Get(':companyId/trainers/athlete-roster')
+  @UseGuards(AuthGuard('jwt'))
+  public async getTrainerAthleteRoster(
+    @Param('companyId') companyId: string,
+    @GetUser() actor: User,
+  ) {
+    return this.companyService.getTrainerAthleteRoster(companyId, actor.id);
+  }
+
   @Get(':companyId/trainers/productivity-stats')
   @UseGuards(AuthGuard('jwt'))
   public async getTrainerProductivityStats(

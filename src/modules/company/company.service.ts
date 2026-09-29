@@ -55,6 +55,18 @@ const STAFF_ASSOCIATION_REQUEST_ROLES = [
   UserRole.SECRETARIA,
 ];
 
+type LatestPlannedAthlete = {
+  athleteId: string;
+  name: string;
+  lastScheduledDate: string;
+  weekLabel: string;
+  phase: string;
+  coachStatus: string;
+  sessionCount: number;
+  createdByUserId: string | null;
+  createdByName: string | null;
+};
+
 @Injectable()
 export class CompanyService {
   constructor(
@@ -138,6 +150,7 @@ export class CompanyService {
   private toStaffResponse(
     member: User,
     membership?: CompanyStaffMembership | null,
+    athletesCount = 0,
   ): TrainerResponseDto {
     const membershipStatus = membership?.status ?? StaffMembershipStatus.ACTIVE;
     return {
@@ -155,7 +168,7 @@ export class CompanyService {
       specialty: member.specialty,
       experience: member.experienceYears?.toString(),
       status: member.isActive ? 'active' : 'inactive',
-      athletesCount: 0,
+      athletesCount,
       membershipStatus,
       statusChangedAt: membership?.statusChangedAt ?? null,
       membershipNotes: membership?.notes ?? null,
@@ -886,12 +899,13 @@ export class CompanyService {
       where: { id: In(filtered.map((row) => row.userId)) },
     });
     const byId = new Map(users.map((user) => [user.id, user]));
+    const athleteCounts = await this.countAthletesByLatestPlanAuthor(company);
 
     return filtered
       .map((row) => {
         const member = byId.get(row.userId);
         if (!member || !this.isStaffRole(member.role)) return null;
-        return this.toStaffResponse(member, row);
+        return this.toStaffResponse(member, row, athleteCounts.get(member.id) ?? 0);
       })
       .filter((row): row is TrainerResponseDto => !!row)
       .sort((a, b) =>
@@ -1169,6 +1183,205 @@ export class CompanyService {
       athletesWithoutRecentPlan,
       rows,
     };
+  }
+
+  /**
+   * Alumnos del centro con al menos una sesión planificada, agrupados por el
+   * autor de su sesión más reciente (scheduled_date).
+   */
+  public async getTrainerAthleteRoster(companyId: string, actorId: string) {
+    const company = await this.companyRepository.findOne({
+      where: { id: companyId },
+      relations: ['users'],
+    });
+    if (!company) throw new NotFoundException('Company not found');
+
+    const actor = company.users.find(
+      (user) =>
+        user.id === actorId &&
+        (user.role === UserRole.DIRECTOR ||
+          user.role === UserRole.STP_ADMIN ||
+          user.role === UserRole.SECRETARIA),
+    );
+    if (!actor) {
+      throw new ForbiddenException('No tenés permiso para ver los alumnos del equipo');
+    }
+
+    await this.backfillMemberships(company);
+    const planned = await this.loadLatestPlannedAthletes(company);
+
+    const memberships = await this.membershipRepository.find({ where: { companyId } });
+    const staffIds = memberships.map((row) => row.userId);
+    const staffUsers = staffIds.length
+      ? await this.userRepository.find({ where: { id: In(staffIds) } })
+      : [];
+    const staffById = new Map(staffUsers.map((user) => [user.id, user]));
+    const membershipByUser = new Map(memberships.map((row) => [row.userId, row]));
+
+    const authorIds = [
+      ...new Set(
+        planned
+          .map((row) => row.createdByUserId)
+          .filter((id): id is string => !!id),
+      ),
+    ];
+    const missingAuthorIds = authorIds.filter((id) => !staffById.has(id));
+    if (missingAuthorIds.length) {
+      const extra = await this.userRepository.find({
+        where: { id: In(missingAuthorIds) },
+      });
+      for (const user of extra) staffById.set(user.id, user);
+    }
+
+    const athletesByAuthor = new Map<string | null, LatestPlannedAthlete[]>();
+    for (const row of planned) {
+      const key = row.createdByUserId;
+      const list = athletesByAuthor.get(key) ?? [];
+      list.push(row);
+      athletesByAuthor.set(key, list);
+    }
+    for (const list of athletesByAuthor.values()) {
+      list.sort((a, b) => a.name.localeCompare(b.name, 'es'));
+    }
+
+    const toAthlete = (row: LatestPlannedAthlete) => ({
+      athleteId: row.athleteId,
+      name: row.name,
+      lastScheduledDate: row.lastScheduledDate,
+      weekLabel: row.weekLabel,
+      phase: row.phase,
+      coachStatus: row.coachStatus,
+      sessionCount: row.sessionCount,
+    });
+
+    const included = new Set<string>();
+    const trainers: Array<{
+      userId: string;
+      name: string;
+      role: UserRole | null;
+      membershipStatus: StaffMembershipStatus | null;
+      athletes: ReturnType<typeof toAthlete>[];
+    }> = [];
+
+    const pushAuthor = (userId: string) => {
+      if (included.has(userId)) return;
+      const member = staffById.get(userId);
+      const membership = membershipByUser.get(userId);
+      const authored = athletesByAuthor.get(userId) ?? [];
+      const role = member?.role ?? null;
+      const isCoachRole =
+        role === UserRole.TRAINER || role === UserRole.SUB_TRAINER;
+      const isActive =
+        !membership || membership.status === StaffMembershipStatus.ACTIVE;
+      if (authored.length === 0 && (!isCoachRole || !isActive)) return;
+
+      included.add(userId);
+      const authoredName = authored.find((row) => row.createdByName)?.createdByName;
+      trainers.push({
+        userId,
+        name: member
+          ? `${member.name} ${member.lastName}`.trim()
+          : authoredName?.trim() || 'Entrenador',
+        role,
+        membershipStatus: membership?.status ?? null,
+        athletes: authored.map(toAthlete),
+      });
+    };
+
+    for (const membership of memberships) {
+      const member = staffById.get(membership.userId);
+      if (!member || !this.isStaffRole(member.role)) continue;
+      pushAuthor(membership.userId);
+    }
+    for (const authorId of authorIds) pushAuthor(authorId);
+
+    trainers.sort((a, b) => a.name.localeCompare(b.name, 'es'));
+
+    return {
+      trainers,
+      unassigned: (athletesByAuthor.get(null) ?? []).map(toAthlete),
+    };
+  }
+
+  private async countAthletesByLatestPlanAuthor(
+    company: Company,
+  ): Promise<Map<string, number>> {
+    const planned = await this.loadLatestPlannedAthletes(company);
+    const counts = new Map<string, number>();
+    for (const row of planned) {
+      if (!row.createdByUserId) continue;
+      counts.set(row.createdByUserId, (counts.get(row.createdByUserId) ?? 0) + 1);
+    }
+    return counts;
+  }
+
+  private async loadLatestPlannedAthletes(
+    company: Company,
+  ): Promise<LatestPlannedAthlete[]> {
+    const athletes = (company.users ?? []).filter(
+      (user) => user.role === UserRole.ATHLETE,
+    );
+    if (athletes.length === 0) return [];
+
+    const athleteIds = athletes.map((user) => user.id);
+    const nameById = new Map(
+      athletes.map((user) => [user.id, `${user.name} ${user.lastName}`.trim()]),
+    );
+    const plannedSql = `(
+      jsonb_array_length(COALESCE(blocks, '[]'::jsonb)) > 0
+      OR template_id = 'libre'
+    )`;
+
+    const latest = await this.sessionRepository.query(
+      `
+      SELECT DISTINCT ON (athlete_id)
+        athlete_id AS "athleteId",
+        created_by_user_id AS "createdByUserId",
+        created_by_name AS "createdByName",
+        scheduled_date AS "scheduledDate",
+        week_label AS "weekLabel",
+        phase AS "phase",
+        coach_status AS "coachStatus"
+      FROM stp_session_instances
+      WHERE athlete_id = ANY($1::text[])
+        AND ${plannedSql}
+      ORDER BY athlete_id, scheduled_date DESC, updated_at DESC
+      `,
+      [athleteIds],
+    );
+
+    const counts: Array<{ athleteId: string; sessionCount: string | number }> =
+      await this.sessionRepository.query(
+        `
+        SELECT athlete_id AS "athleteId", COUNT(*)::int AS "sessionCount"
+        FROM stp_session_instances
+        WHERE athlete_id = ANY($1::text[])
+          AND ${plannedSql}
+        GROUP BY athlete_id
+        `,
+        [athleteIds],
+      );
+    const countByAthlete = new Map(
+      counts.map((row) => [String(row.athleteId), Number(row.sessionCount)]),
+    );
+
+    return (latest as Array<Record<string, unknown>>).map((row) => {
+      const athleteId = String(row.athleteId ?? '');
+      const createdByUserId = row.createdByUserId
+        ? String(row.createdByUserId)
+        : null;
+      return {
+        athleteId,
+        name: nameById.get(athleteId) || 'Sin nombre',
+        lastScheduledDate: String(row.scheduledDate ?? ''),
+        weekLabel: String(row.weekLabel ?? ''),
+        phase: String(row.phase ?? ''),
+        coachStatus: String(row.coachStatus ?? 'published'),
+        sessionCount: countByAthlete.get(athleteId) ?? 1,
+        createdByUserId,
+        createdByName: row.createdByName ? String(row.createdByName) : null,
+      };
+    });
   }
 
   // Método para añadir un miembro del equipo al centro (con rol)
