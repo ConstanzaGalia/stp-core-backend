@@ -442,7 +442,10 @@ export class DataMigrationService {
     };
   }
 
-  private async patchAthleteProfile(userId: string, row: MigrateAthleteRowDto): Promise<void> {
+  private async patchAthleteProfile(
+    userId: string,
+    row: Partial<MigrateAthleteRowDto>,
+  ): Promise<void> {
     const user = await this.userRepository.findOne({ where: { id: userId } });
     if (!user) return;
 
