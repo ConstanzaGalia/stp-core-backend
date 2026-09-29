@@ -418,11 +418,6 @@ export class DataMigrationService {
             temporaryPassword: result.temporaryPassword,
           });
         }
-          temporaryPasswords.push({
-            email: data.email,
-            temporaryPassword: result.temporaryPassword,
-          });
-        }
         if (result.linked || previewRow.action === 'link') {
           linked += 1;
         } else {
