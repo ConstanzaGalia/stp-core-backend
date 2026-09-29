@@ -409,6 +409,7 @@ export class CompanyService {
           ? {
               pendingSubscription: chargeSummary.pendingSubscription,
               pendingOnboarding: chargeSummary.pendingOnboarding,
+              onboardingPaid: chargeSummary.onboardingPaid,
               overdue: chargeSummary.overdue,
               lastPaidAt: chargeSummary.lastPaidAt,
               lastPaidAmount: chargeSummary.lastPaidAmount,

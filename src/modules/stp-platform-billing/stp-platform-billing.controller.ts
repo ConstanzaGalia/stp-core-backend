@@ -1,6 +1,7 @@
 import {
   Body,
   Controller,
+  Delete,
   Get,
   Param,
   Patch,
@@ -69,5 +70,10 @@ export class StpPlatformBillingController {
     @GetUser() user: User,
   ) {
     return this.billingService.updateCharge(chargeId, dto, user);
+  }
+
+  @Delete('platform-charges/:id')
+  async deleteCharge(@Param('id') chargeId: string, @GetUser() user: User) {
+    return this.billingService.deleteCharge(chargeId, user);
   }
 }

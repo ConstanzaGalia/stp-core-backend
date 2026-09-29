@@ -120,6 +120,7 @@ export class StpPlatformBillingService {
       {
         pendingSubscription: boolean;
         pendingOnboarding: boolean;
+        onboardingPaid: boolean;
         overdue: boolean;
         lastPaidAt: string | null;
         lastPaidAmount: number | null;
@@ -132,6 +133,7 @@ export class StpPlatformBillingService {
       {
         pendingSubscription: boolean;
         pendingOnboarding: boolean;
+        onboardingPaid: boolean;
         overdue: boolean;
         lastPaidAt: string | null;
         lastPaidAmount: number | null;
@@ -142,6 +144,7 @@ export class StpPlatformBillingService {
       map.set(id, {
         pendingSubscription: false,
         pendingOnboarding: false,
+        onboardingPaid: false,
         overdue: false,
         lastPaidAt: null,
         lastPaidAmount: null,
@@ -169,6 +172,12 @@ export class StpPlatformBillingService {
         if (charge.dueDate && charge.dueDate < today) {
           summary.overdue = true;
         }
+      }
+      if (
+        charge.status === StpPlatformChargeStatus.PAID &&
+        charge.concept === StpPlatformChargeConcept.ONBOARDING
+      ) {
+        summary.onboardingPaid = true;
       }
       if (
         charge.status === StpPlatformChargeStatus.PAID &&
@@ -381,12 +390,27 @@ export class StpPlatformBillingService {
     const charge = await this.chargeRepo.findOne({ where: { id: chargeId } });
     if (!charge) throw new NotFoundException('Cargo no encontrado');
 
+    if (dto.concept != null) charge.concept = dto.concept;
     if (dto.amount != null) charge.amount = dto.amount;
     if (dto.currency != null) charge.currency = dto.currency.toUpperCase();
     if (dto.dueDate !== undefined) charge.dueDate = dto.dueDate;
     if (dto.reference !== undefined) charge.reference = dto.reference;
     if (dto.notes !== undefined) charge.notes = dto.notes;
     if (dto.method !== undefined) charge.method = dto.method;
+
+    if (
+      charge.concept === StpPlatformChargeConcept.SUBSCRIPTION &&
+      !charge.subscriptionId
+    ) {
+      const active = await this.subscriptionRepo.findOne({
+        where: {
+          companyId: charge.companyId,
+          status: StpPlatformSubscriptionStatus.ACTIVE,
+        },
+        order: { createdAt: 'DESC' },
+      });
+      charge.subscriptionId = active?.id ?? null;
+    }
 
     if (dto.status != null) {
       charge.status = dto.status;
@@ -406,7 +430,32 @@ export class StpPlatformBillingService {
     }
 
     const saved = await this.chargeRepo.save(charge);
+
+    if (
+      saved.concept === StpPlatformChargeConcept.SUBSCRIPTION &&
+      saved.subscriptionId &&
+      (saved.dueDate || saved.amount != null)
+    ) {
+      const sub = await this.subscriptionRepo.findOne({
+        where: { id: saved.subscriptionId },
+      });
+      if (sub && sub.status === StpPlatformSubscriptionStatus.ACTIVE) {
+        if (saved.dueDate) sub.periodEnd = saved.dueDate;
+        if (saved.amount != null) sub.subscriptionAmount = toNumber(saved.amount);
+        if (saved.currency) sub.currency = saved.currency;
+        await this.subscriptionRepo.save(sub);
+      }
+    }
+
     return this.serializeCharge(saved);
+  }
+
+  async deleteCharge(chargeId: string, admin: User) {
+    await assertStpPlatformOperator(admin, this.companyRepo);
+    const charge = await this.chargeRepo.findOne({ where: { id: chargeId } });
+    if (!charge) throw new NotFoundException('Cargo no encontrado');
+    await this.chargeRepo.remove(charge);
+    return { deleted: true };
   }
 
   async getStats(admin: User) {

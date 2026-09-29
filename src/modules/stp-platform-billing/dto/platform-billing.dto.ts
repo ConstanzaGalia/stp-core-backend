@@ -138,6 +138,10 @@ export class CreatePlatformChargeDto {
 
 export class UpdatePlatformChargeDto {
   @IsOptional()
+  @IsEnum(StpPlatformChargeConcept)
+  concept?: StpPlatformChargeConcept;
+
+  @IsOptional()
   @IsNumber({ maxDecimalPlaces: 2 })
   @Min(0.01)
   amount?: number;
