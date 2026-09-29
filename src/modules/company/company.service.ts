@@ -1187,7 +1187,8 @@ export class CompanyService {
 
   /**
    * Alumnos del centro con al menos una sesión planificada, agrupados por el
-   * autor de su sesión más reciente (scheduled_date).
+   * autor de su sesión más reciente. Solo se listan entrenadores con membresía
+   * activa en este centro; planes de alguien de otro gimnasio van a sin asignar.
    */
   public async getTrainerAthleteRoster(companyId: string, actorId: string) {
     const company = await this.companyRepository.findOne({
@@ -1217,25 +1218,22 @@ export class CompanyService {
       : [];
     const staffById = new Map(staffUsers.map((user) => [user.id, user]));
     const membershipByUser = new Map(memberships.map((row) => [row.userId, row]));
-
-    const authorIds = [
-      ...new Set(
-        planned
-          .map((row) => row.createdByUserId)
-          .filter((id): id is string => !!id),
-      ),
-    ];
-    const missingAuthorIds = authorIds.filter((id) => !staffById.has(id));
-    if (missingAuthorIds.length) {
-      const extra = await this.userRepository.find({
-        where: { id: In(missingAuthorIds) },
-      });
-      for (const user of extra) staffById.set(user.id, user);
-    }
+    const localStaffIds = new Set(
+      memberships
+        .filter((row) => row.status === StaffMembershipStatus.ACTIVE)
+        .map((row) => row.userId)
+        .filter((userId) => {
+          const member = staffById.get(userId);
+          return !!member && this.isStaffRole(member.role);
+        }),
+    );
 
     const athletesByAuthor = new Map<string | null, LatestPlannedAthlete[]>();
     for (const row of planned) {
-      const key = row.createdByUserId;
+      const key =
+        row.createdByUserId && localStaffIds.has(row.createdByUserId)
+          ? row.createdByUserId
+          : null;
       const list = athletesByAuthor.get(key) ?? [];
       list.push(row);
       athletesByAuthor.set(key, list);
@@ -1289,11 +1287,11 @@ export class CompanyService {
     };
 
     for (const membership of memberships) {
+      if (membership.status !== StaffMembershipStatus.ACTIVE) continue;
       const member = staffById.get(membership.userId);
       if (!member || !this.isStaffRole(member.role)) continue;
       pushAuthor(membership.userId);
     }
-    for (const authorId of authorIds) pushAuthor(authorId);
 
     trainers.sort((a, b) => a.name.localeCompare(b.name, 'es'));
 
