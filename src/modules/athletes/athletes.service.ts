@@ -12,6 +12,11 @@ import { AthleteInvitation, InvitationStatus } from '../../entities/athlete-invi
 import { User } from '../../entities/user.entity';
 import { Company } from '../../entities/company.entity';
 import { Division } from '../../entities/division.entity';
+import {
+  SubscriptionStatus,
+  UserPaymentSubscription,
+} from '../../entities/user-payment-subscription.entity';
+import { PaymentPlan } from '../../entities/payment-plan.entity';
 import { CompanyAccountType, UserRole } from '../../common/enums/enums';
 import {
   isCoachScopedRole,
@@ -41,6 +46,8 @@ export class AthletesService {
     private readonly companyRepository: Repository<Company>,
     @InjectRepository(Division)
     private readonly divisionRepository: Repository<Division>,
+    @InjectRepository(UserPaymentSubscription)
+    private readonly subscriptionRepository: Repository<UserPaymentSubscription>,
     private readonly mailingService: MailingService,
     private readonly encryptService: EncryptService,
   ) {}
@@ -592,7 +599,11 @@ export class AthletesService {
         .orderBy('inv.approvedAt', 'DESC')
         .getMany();
 
-      return rows.filter((inv) => !inv.user?.evaluationPortalOnly);
+      const visible = rows.filter((inv) => !inv.user?.evaluationPortalOnly);
+      if (company?.accountType !== CompanyAccountType.SPORTS_CLUB) {
+        await this.attachActivePlanSummaries(companyId, visible);
+      }
+      return visible;
     }
 
     const isSportsClub = company?.accountType === CompanyAccountType.SPORTS_CLUB;
@@ -605,7 +616,68 @@ export class AthletesService {
       relations,
       order: { approvedAt: 'DESC' },
     });
-    return rows.filter((inv) => !inv.user?.evaluationPortalOnly);
+    const visible = rows.filter((inv) => !inv.user?.evaluationPortalOnly);
+    if (!isSportsClub) {
+      await this.attachActivePlanSummaries(companyId, visible);
+    }
+    return visible;
+  }
+
+  /** Cupo y vencimiento del plan activo, sin pagos ni reservas. */
+  private async attachActivePlanSummaries(
+    companyId: string,
+    invitations: AthleteInvitation[],
+  ): Promise<void> {
+    const userIds = [...new Set(invitations.map((row) => row.user?.id).filter((id): id is string => Boolean(id)))];
+    if (userIds.length === 0) return;
+
+    const meta = this.subscriptionRepository.metadata;
+    const quote = (name: string) => `"${name.replace(/"/g, '""')}"`;
+    const column = (property: string) => {
+      const found = meta.findColumnWithPropertyName(property);
+      if (!found) throw new Error(`Columna de suscripción no encontrada: ${property}`);
+      return found.databaseName;
+    };
+    const userFk = meta.findRelationWithPropertyPath('user')?.joinColumns[0]?.databaseName;
+    if (!userFk) throw new Error('Relación de usuario de la suscripción no encontrada');
+
+    const planMeta = this.subscriptionRepository.manager.getRepository(PaymentPlan).metadata;
+    const planPk = planMeta.primaryColumns[0]?.databaseName;
+    const maxCol = planMeta.findColumnWithPropertyName('maxClassesPerPeriod')?.databaseName;
+    if (!planPk || !maxCol) throw new Error('Cupo del plan no encontrado');
+
+    const summaries: Array<{
+      userId: string;
+      planExpiresAt: string | null;
+      classesUsed: number | string | null;
+      classesMax: number | string | null;
+    }> = await this.subscriptionRepository.query(
+      `SELECT DISTINCT ON (s.${quote(userFk)})
+         s.${quote(userFk)} AS "userId",
+         to_char(s.${quote(column('periodEndDate'))}, 'YYYY-MM-DD') AS "planExpiresAt",
+         s.${quote(column('classesUsedThisPeriod'))} AS "classesUsed",
+         p.${quote(maxCol)} AS "classesMax"
+       FROM ${quote(meta.tableName)} s
+       LEFT JOIN ${quote(planMeta.tableName)} p ON p.${quote(planPk)} = s.${quote(column('paymentPlanId'))}
+       WHERE s.${quote(column('companyId'))} = $1
+         AND s.${quote(column('status'))} = $2
+         AND s.${quote(userFk)} = ANY($3::uuid[])
+       ORDER BY s.${quote(userFk)}, s.${quote(column('periodEndDate'))} DESC`,
+      [companyId, SubscriptionStatus.ACTIVE, userIds],
+    );
+
+    const byUser = new Map(summaries.map((row) => [row.userId, row]));
+    for (const invitation of invitations) {
+      const summary = invitation.user?.id ? byUser.get(invitation.user.id) : undefined;
+      const target = invitation as AthleteInvitation & {
+        planExpiresAt?: string | null;
+        classesUsed?: number | null;
+        classesMax?: number | null;
+      };
+      target.planExpiresAt = summary?.planExpiresAt ?? null;
+      target.classesUsed = summary ? Number(summary.classesUsed ?? 0) : null;
+      target.classesMax = summary?.classesMax == null ? null : Number(summary.classesMax);
+    }
   }
 
   /** Incluye participantes solo evaluaciones (para hub de evaluaciones físicas). */
