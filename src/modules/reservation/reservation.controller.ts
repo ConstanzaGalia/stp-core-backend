@@ -140,11 +140,18 @@ export class ReservationsController {
     @GetUser() user: User,
     @Query('startDate') startDate?: string,
     @Query('endDate') endDate?: string,
+    @Query('athleteUserId') athleteUserId?: string,
   ) {
     const start = startOfDateOnlyLocal(startDate);
     const end = endOfDateOnlyLocal(endDate);
 
-    return this.reservationsService.getAvailableTimeSlots(companyId, start, end, user.id);
+    let viewerId = user.id;
+    if (athleteUserId && athleteUserId !== user.id) {
+      const canViewAthleteSlots = await this.reservationsService.callerCanLoadAthleteSlots(user.id, companyId);
+      if (canViewAthleteSlots) viewerId = athleteUserId;
+    }
+
+    return this.reservationsService.getAvailableTimeSlots(companyId, start, end, viewerId);
   }
 
   /**
@@ -316,8 +323,11 @@ export class ReservationsController {
 
   @Get('user/:userId')
   @UseGuards(AuthGuard('jwt'))
-  async getUserReservations(@Param('userId') userId: string) {
-    return this.reservationsService.getUserReservations(userId);
+  async getUserReservations(
+    @Param('userId') userId: string,
+    @Query('companyId') companyId?: string,
+  ) {
+    return this.reservationsService.getUserReservations(userId, companyId);
   }
 
   // Endpoints para gestión de excepciones de horarios

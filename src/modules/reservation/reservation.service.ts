@@ -184,6 +184,157 @@ export class ReservationsService {
     return athleteSchedule;
   }
 
+  async callerCanLoadAthleteSlots(callerId: string, companyId?: string | null): Promise<boolean> {
+    return this.isDirectorOrSecretaryOfCompany(callerId, companyId);
+  }
+
+  private async isDirectorOrSecretaryOfCompany(callerId: string, companyId?: string | null): Promise<boolean> {
+    if (!companyId) return false;
+    const company = await this.companyRepository.findOne({
+      where: { id: companyId },
+      relations: ['users'],
+    });
+    const roles = [UserRole.STP_ADMIN, UserRole.DIRECTOR, UserRole.SECRETARIA];
+    return !!company?.users?.some((user) => user.id === callerId && roles.includes(user.role));
+  }
+
+  private async hasOtherReservationAtSameTime(
+    userId: string,
+    timeSlot: TimeSlot,
+    excludeReservationId: string,
+  ): Promise<boolean> {
+    const companyId = timeSlot.company?.id;
+    if (!companyId) return false;
+
+    const sameTimeSlotsQb = this.timeSlotRepository
+      .createQueryBuilder('slot')
+      .select('slot.id')
+      .innerJoin('slot.company', 'company')
+      .where('company.id = :companyId', { companyId })
+      .andWhere('DATE(slot.date) = DATE(:slotDate)', { slotDate: timeSlot.date })
+      .andWhere('slot.startTime = :startTime', { startTime: timeSlot.startTime });
+
+    const count = await this.reservationRepository
+      .createQueryBuilder('reservation')
+      .where('reservation.userId = :userId', { userId })
+      .andWhere('reservation.id != :excludeReservationId', { excludeReservationId })
+      .andWhere(`reservation.timeSlotId IN (${sameTimeSlotsQb.getQuery()})`)
+      .setParameters({ userId, excludeReservationId, ...sameTimeSlotsQb.getParameters() })
+      .getCount();
+
+    return count > 0;
+  }
+
+  /**
+   * Reasignación de un turno por director o secretaria del centro.
+   * No cambia créditos del período. El tope semanal aplica solo si el plan lo tiene activo.
+   */
+  private async canStaffReassignReservation(
+    reservation: Reservation,
+    newTimeSlotId?: string,
+  ): Promise<{ canModify: boolean; reason?: string; canRecover?: boolean }> {
+    if (reservation.attendanceStatus != null) {
+      return {
+        canModify: false,
+        reason: 'Este turno ya tiene asistencia marcada',
+      };
+    }
+
+    if (isSlotInThePast(reservation.timeSlot.date, reservation.timeSlot.startTime)) {
+      return {
+        canModify: false,
+        reason: 'Este turno ya comenzó',
+      };
+    }
+
+    if (!newTimeSlotId) {
+      return { canModify: true, canRecover: true };
+    }
+
+    if (newTimeSlotId === reservation.timeSlot.id) {
+      return {
+        canModify: false,
+        reason: 'Elegí otro horario',
+      };
+    }
+
+    const newTimeSlot = await this.timeSlotRepository.findOne({
+      where: { id: newTimeSlotId },
+      relations: ['company', 'resource'],
+    });
+
+    if (!newTimeSlot) {
+      return { canModify: false, reason: 'El nuevo horario no existe' };
+    }
+
+    const companyId = reservation.timeSlot.company?.id;
+    if (!newTimeSlot.company?.id || newTimeSlot.company.id !== companyId) {
+      return { canModify: false, reason: 'El horario no pertenece a este centro' };
+    }
+
+    if (isSlotInThePast(newTimeSlot.date, newTimeSlot.startTime)) {
+      return { canModify: false, reason: 'El horario elegido ya pasó' };
+    }
+
+    if (!newTimeSlot.isAvailable()) {
+      return { canModify: false, reason: 'El nuevo horario no tiene disponibilidad' };
+    }
+
+    const athleteId = reservation.user.id;
+    try {
+      await this.assertUserCanBookResourceSlot(athleteId, newTimeSlot);
+    } catch (error) {
+      if (error instanceof BadRequestException) {
+        const response = error.getResponse();
+        const reason = typeof response === 'string'
+          ? response
+          : (response as { message?: string })?.message || 'Este turno no está disponible para el atleta';
+        return { canModify: false, reason: Array.isArray(reason) ? reason[0] : reason };
+      }
+      throw error;
+    }
+
+    if (await this.hasOtherReservationAtSameTime(athleteId, newTimeSlot, reservation.id)) {
+      return { canModify: false, reason: 'El atleta ya tiene una reserva en ese horario' };
+    }
+
+    const destinationDate = newTimeSlot.date;
+    const activeSubscription = await this.getActiveSubscriptionForUser(athleteId, companyId, destinationDate);
+    if (!activeSubscription) {
+      return {
+        canModify: false,
+        reason: 'El horario queda fuera del período pago del atleta',
+      };
+    }
+
+    const enforceWeeklyLimit = activeSubscription.paymentPlan?.enforceWeeklyLimit !== false;
+    const classesPerWeek = activeSubscription.paymentPlan?.classesPerWeek || 0;
+    if (enforceWeeklyLimit && classesPerWeek > 0) {
+      const dateKey = toDateOnlyKey(destinationDate);
+      const weekAnchor = dateKey ? new Date(`${dateKey}T12:00:00.000Z`) : new Date(destinationDate);
+      const weekStart = this.getWeekStartDate(weekAnchor);
+      const weekEnd = this.getWeekEndDate(weekAnchor);
+      const weekReservations = await this.reservationRepository.find({
+        where: {
+          user: { id: athleteId },
+          timeSlot: {
+            date: Between(weekStart, weekEnd),
+            company: { id: companyId },
+          },
+        },
+      });
+      const othersThisWeek = weekReservations.filter((row) => row.id !== reservation.id).length;
+      if (othersThisWeek >= classesPerWeek) {
+        return {
+          canModify: false,
+          reason: 'Esa semana ya alcanzó el cupo semanal del plan',
+        };
+      }
+    }
+
+    return { canModify: true, canRecover: true };
+  }
+
   /**
    * Obtener clave de semana en formato YYYY-WW
    */
@@ -480,7 +631,12 @@ export class ReservationsService {
     }
 
     if (reservation.user.id !== userId) {
-      throw new ForbiddenException('Solo puedes modificar tus propias reservas');
+      const companyId = reservation.timeSlot?.company?.id;
+      const canReassign = await this.isDirectorOrSecretaryOfCompany(userId, companyId);
+      if (!canReassign) {
+        throw new ForbiddenException('Solo puedes modificar tus propias reservas');
+      }
+      return this.canStaffReassignReservation(reservation, newTimeSlotId);
     }
 
     const timeSlot = reservation.timeSlot;
@@ -583,16 +739,18 @@ export class ReservationsService {
 
     const reservation = await this.reservationRepository.findOne({
       where: { id: reservationId },
-      relations: ['timeSlot', 'user'],
+      relations: ['timeSlot', 'timeSlot.company', 'user'],
     });
 
     if (!reservation) {
       throw new BadRequestException('Reserva no encontrada');
     }
 
+    const isOwner = reservation.user.id === userId;
+
     const newTimeSlot = await this.timeSlotRepository.findOne({
       where: { id: newTimeSlotId },
-      relations: ['reservations'],
+      relations: ['reservations', 'company'],
     });
 
     if (!newTimeSlot) {
@@ -620,6 +778,27 @@ export class ReservationsService {
     this.logger.log(
       `modifyReservation -> reservation ${reservationId} modified from ${oldTimeSlot.id} to ${newTimeSlot.id}`
     );
+
+    if (!isOwner) {
+      const companyId = oldTimeSlot.company?.id ?? newTimeSlot.company?.id;
+      const activeSubscription = await this.getActiveSubscriptionForUser(
+        reservation.user.id,
+        companyId,
+        newTimeSlot.date,
+      );
+      if (activeSubscription) {
+        await this.paymentsService.refreshWeeklyClassCounters(activeSubscription.id);
+      }
+
+      try {
+        const waitlistResult = await this.processWaitlistForTimeSlot(oldTimeSlot.id);
+        if (waitlistResult.createdReservations > 0) {
+          this.logger.log(`modifyReservation -> processed waitlist: ${waitlistResult.createdReservations} reservations created from waitlist`);
+        }
+      } catch (error) {
+        this.logger.error(`modifyReservation -> error processing waitlist: ${error?.message}`, error?.stack);
+      }
+    }
 
     return updatedReservation;
   }
@@ -1563,17 +1742,23 @@ export class ReservationsService {
     };
   }
 
-  async getUserReservations(userId: string): Promise<any[]> {
+  async getUserReservations(userId: string, companyId?: string): Promise<any[]> {
     const reservations = await this.reservationRepository.find({
       where: { user: { id: userId } },
       relations: ['user', 'timeSlot', 'timeSlot.company'],
     });
 
     const now = new Date();
+    const creditLookup = companyId
+      ? await this.buildPeriodCreditLookup(userId, companyId, reservations)
+      : null;
 
     const upcoming = reservations
       .filter(reservation => {
         if (!reservation.timeSlot || !reservation.timeSlot.date) {
+          return false;
+        }
+        if (companyId && reservation.timeSlot.company?.id !== companyId) {
           return false;
         }
         const startDateTime = slotInstantInArgentina(
@@ -1599,7 +1784,7 @@ export class ReservationsService {
       const capacity = reservation.timeSlot.capacity ?? 0;
       const reservedCount = reservation.timeSlot.reservedCount ?? 0;
 
-      return {
+      const item: Record<string, unknown> = {
         id: reservation.id,
         userId: reservation.user.id,
         timeSlotId: reservation.timeSlot.id,
@@ -1620,7 +1805,47 @@ export class ReservationsService {
           company: reservation.timeSlot.company ? { name: reservation.timeSlot.company.name } : null,
         },
       };
+      if (companyId) {
+        item.companyId = reservation.timeSlot.company?.id ?? companyId;
+        item.creditIndex = creditLookup?.byReservationId.get(reservation.id) ?? null;
+        item.creditTotal = creditLookup?.creditTotal ?? null;
+      }
+      return item;
     });
+  }
+
+  /** Posición de cada reserva del período (pasadas y próximas), ordenadas por fecha, sobre el cupo del plan. */
+  private async buildPeriodCreditLookup(
+    userId: string,
+    companyId: string,
+    reservations: Reservation[],
+  ): Promise<{ byReservationId: Map<string, number>; creditTotal: number | null }> {
+    const subscription = await this.getActiveSubscriptionForUser(userId, companyId);
+    const creditTotal = subscription?.paymentPlan?.maxClassesPerPeriod ?? null;
+    const periodStart = toDateOnlyKey(subscription?.periodStartDate);
+    const periodEnd = toDateOnlyKey(subscription?.periodEndDate);
+    const byReservationId = new Map<string, number>();
+    if (!periodStart || !periodEnd) {
+      return { byReservationId, creditTotal };
+    }
+
+    const inPeriod = reservations
+      .filter((reservation) => {
+        if (!reservation.timeSlot?.date || reservation.timeSlot.company?.id !== companyId) return false;
+        const key = toDateOnlyKey(reservation.timeSlot.date);
+        return !!key && key >= periodStart && key <= periodEnd;
+      })
+      .sort((a, b) => {
+        const dateA = slotInstantInArgentina(a.timeSlot.date, a.timeSlot.startTime);
+        const dateB = slotInstantInArgentina(b.timeSlot.date, b.timeSlot.startTime);
+        return (dateA?.getTime() ?? 0) - (dateB?.getTime() ?? 0);
+      });
+
+    inPeriod.forEach((reservation, index) => {
+      byReservationId.set(reservation.id, index + 1);
+    });
+
+    return { byReservationId, creditTotal };
   }
 
   // Métodos para gestión de excepciones de horarios
