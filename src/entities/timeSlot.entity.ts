@@ -2,6 +2,7 @@ import { Entity, PrimaryGeneratedColumn, Column, ManyToOne, OneToMany, JoinColum
 import { Company } from './company.entity';
 import { Reservation } from './reservation.entity';
 import { ScheduleResource } from './schedule-resource.entity';
+import { Branch } from './branch.entity';
 
 @Entity()
 export class TimeSlot {
@@ -41,6 +42,13 @@ export class TimeSlot {
 
   @ManyToOne(() => Company, company => company.timeSlots, { onDelete: 'CASCADE' })
   company: Company;
+
+  @ManyToOne(() => Branch, { nullable: true, onDelete: 'SET NULL' })
+  @JoinColumn({ name: 'branch_id' })
+  branch: Branch | null;
+
+  @Column({ name: 'branch_id', type: 'uuid', nullable: true })
+  branchId: string | null;
 
   @OneToMany(() => Reservation, reservation => reservation.timeSlot)
   reservations: Reservation[];

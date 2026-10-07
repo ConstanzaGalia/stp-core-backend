@@ -1,4 +1,4 @@
-import { IsNotEmpty, IsNumber, IsEnum, Min } from 'class-validator';
+import { IsNotEmpty, IsNumber, IsEnum, IsOptional, IsUUID, Min } from 'class-validator';
 
 export enum StockSource {
   DEPOSIT = 'DEPOSIT',
@@ -25,4 +25,8 @@ export class TransferStockDto {
   @IsNumber()
   @Min(1)
   quantity: number;
+
+  @IsOptional()
+  @IsUUID()
+  branchId?: string;
 }

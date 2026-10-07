@@ -10,6 +10,7 @@ import {
 } from 'typeorm';
 import { Company } from './company.entity';
 import { FixedExpenseMonthStatus } from './fixed-expense-month-status.entity';
+import { Branch } from './branch.entity';
 
 @Entity('fixed_expense_template')
 export class FixedExpenseTemplate {
@@ -31,9 +32,19 @@ export class FixedExpenseTemplate {
   @Column({ type: 'boolean', default: true, name: 'is_active' })
   isActive: boolean;
 
+  @Column({ name: 'is_shared', type: 'boolean', default: false })
+  isShared: boolean;
+
   @ManyToOne(() => Company, { onDelete: 'CASCADE' })
   @JoinColumn({ name: 'companyId' })
   company: Company;
+
+  @ManyToOne(() => Branch, { nullable: true, onDelete: 'SET NULL' })
+  @JoinColumn({ name: 'branch_id' })
+  branch: Branch | null;
+
+  @Column({ name: 'branch_id', type: 'uuid', nullable: true })
+  branchId: string | null;
 
   @OneToMany(() => FixedExpenseMonthStatus, (status) => status.template)
   monthStatuses: FixedExpenseMonthStatus[];

@@ -1,6 +1,7 @@
 import { Entity, PrimaryGeneratedColumn, Column, ManyToOne, JoinColumn, CreateDateColumn, UpdateDateColumn } from 'typeorm';
 import { Company } from './company.entity';
 import { ScheduleResource } from './schedule-resource.entity';
+import { Branch } from './branch.entity';
 
 @Entity('schedule_config')
 export class ScheduleConfig {
@@ -43,6 +44,13 @@ export class ScheduleConfig {
 
   @ManyToOne(() => Company, company => company.scheduleConfigs, { onDelete: 'CASCADE' })
   company: Company;
+
+  @ManyToOne(() => Branch, { nullable: true, onDelete: 'SET NULL' })
+  @JoinColumn({ name: 'branch_id' })
+  branch: Branch | null;
+
+  @Column({ name: 'branch_id', type: 'uuid', nullable: true })
+  branchId: string | null;
 
   @CreateDateColumn()
   createdAt: Date;

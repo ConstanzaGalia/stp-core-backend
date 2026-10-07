@@ -34,10 +34,15 @@ import { UpdateCompanyModulesDto } from './dto/update-company-modules.dto';
 import { UpdateCompanyAccountTypeDto } from './dto/update-company-account-type.dto';
 import { SkipCompanySubscriptionCheck } from 'src/common/decorators/skip-company-subscription-check.decorator';
 import { ParseSanitizedUUIDPipe } from 'src/common/pipes/parse-sanitized-uuid.pipe';
+import { BranchService } from './branch.service';
+import { CreateBranchDto, EnableBranchesDto, UpdateBranchDto } from './dto/branch.dto';
 
 @Controller('company')
 export class CompanyController {
-  constructor(private readonly companyService: CompanyService) {}
+  constructor(
+    private readonly companyService: CompanyService,
+    private readonly branchService: BranchService,
+  ) {}
 
   @Post()
   @UseGuards(AuthGuard('jwt'))
@@ -150,6 +155,49 @@ export class CompanyController {
   @SkipCompanySubscriptionCheck()
   public async getMyStaffAssociationRequest(@GetUser() user: User) {
     return this.companyService.getMyStaffAssociationRequest(user.id);
+  }
+
+  @Get(':id/branches')
+  @UseGuards(AuthGuard('jwt'))
+  public async listBranches(@Param('id') id: string, @GetUser() user: User) {
+    return this.branchService.list(id, user);
+  }
+
+  @Post(':id/branches/enable')
+  @UseGuards(AuthGuard('jwt'))
+  public async enableBranches(
+    @Param('id') id: string,
+    @Body() dto: EnableBranchesDto,
+    @GetUser() user: User,
+  ) {
+    return this.branchService.enable(id, user, dto);
+  }
+
+  @Post(':id/branches/disable')
+  @UseGuards(AuthGuard('jwt'))
+  public async disableBranches(@Param('id') id: string, @GetUser() user: User) {
+    return this.branchService.disable(id, user);
+  }
+
+  @Post(':id/branches')
+  @UseGuards(AuthGuard('jwt'))
+  public async createBranch(
+    @Param('id') id: string,
+    @Body() dto: CreateBranchDto,
+    @GetUser() user: User,
+  ) {
+    return this.branchService.create(id, user, dto);
+  }
+
+  @Patch(':id/branches/:branchId')
+  @UseGuards(AuthGuard('jwt'))
+  public async updateBranch(
+    @Param('id') id: string,
+    @Param('branchId') branchId: string,
+    @Body() dto: UpdateBranchDto,
+    @GetUser() user: User,
+  ) {
+    return this.branchService.update(id, branchId, user, dto);
   }
 
   @Get(':id')

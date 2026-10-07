@@ -44,4 +44,8 @@ export class CreateScheduleConfigDto {
   @IsUUID()
   @IsOptional()
   resourceId?: string | null;
+
+  @IsUUID()
+  @IsOptional()
+  branchId?: string | null;
 } 

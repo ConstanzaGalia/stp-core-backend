@@ -320,7 +320,7 @@ export class AthletesService {
     temporaryPassword?: string;
     linked?: boolean;
   }> {
-    const { name, lastName, email, isOnline = false, dateOfBirth, dni, phoneNumber, evaluationPortalOnly, sexo, peso, altura } = createAthleteDto;
+    const { name, lastName, email, isOnline = false, dateOfBirth, dni, phoneNumber, evaluationPortalOnly, sexo, peso, altura, homeBranchId } = createAthleteDto;
 
     // Verificar que el centro existe
     const company = await this.companyRepository.findOne({
@@ -378,6 +378,7 @@ export class AthletesService {
           existingInvitation.leftAt = null as any;
           existingInvitation.rejectedAt = null as any;
           existingInvitation.isOnline = isOnline ?? false;
+          if (homeBranchId) existingInvitation.homeBranchId = homeBranchId;
           savedInvitation = await this.invitationRepository.save(existingInvitation);
         } else {
           const invitation = this.invitationRepository.create({
@@ -386,6 +387,7 @@ export class AthletesService {
             status: InvitationStatus.APPROVED,
             approvedAt: new Date(),
             isOnline: isOnline ?? false,
+            homeBranchId: homeBranchId ?? null,
           });
           savedInvitation = await this.invitationRepository.save(invitation);
         }
@@ -436,6 +438,7 @@ export class AthletesService {
       status: InvitationStatus.APPROVED,
       approvedAt: new Date(),
       isOnline: isOnline ?? false,
+      homeBranchId: homeBranchId ?? null,
     });
     const savedInvitation = await this.invitationRepository.save(invitation);
     await this.addUserToCompany(savedUser.id, companyId);
@@ -968,6 +971,25 @@ export class AthletesService {
 
     invitation.isOnline = isOnline;
     return await this.invitationRepository.save(invitation);
+  }
+
+  async updateAthleteHomeBranch(
+    companyId: string,
+    athleteId: string,
+    homeBranchId: string,
+  ): Promise<AthleteInvitation> {
+    const invitation = await this.invitationRepository.findOne({
+      where: {
+        company: { id: companyId },
+        user: { id: athleteId },
+        status: InvitationStatus.APPROVED,
+      },
+    });
+    if (!invitation) {
+      throw new NotFoundException('Athlete not found in this company');
+    }
+    invitation.homeBranchId = homeBranchId;
+    return this.invitationRepository.save(invitation);
   }
 
   // === MÉTODOS AUXILIARES PRIVADOS ===

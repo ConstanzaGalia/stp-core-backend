@@ -11,6 +11,7 @@ import { User } from './user.entity';
 import { Company } from './company.entity';
 import { Division } from './division.entity';
 import { SportPosition } from './sport-position.entity';
+import { Branch } from './branch.entity';
 
 export enum InvitationStatus {
   PENDING = 'pending',
@@ -74,6 +75,13 @@ export class AthleteInvitation {
 
   @Column({ name: 'position_id', type: 'uuid', nullable: true })
   positionId: string | null;
+
+  @ManyToOne(() => Branch, { nullable: true, onDelete: 'SET NULL' })
+  @JoinColumn({ name: 'home_branch_id' })
+  homeBranch: Branch | null;
+
+  @Column({ name: 'home_branch_id', type: 'uuid', nullable: true })
+  homeBranchId: string | null;
 
   @CreateDateColumn()
   createdAt: Date;

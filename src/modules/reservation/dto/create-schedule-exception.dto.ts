@@ -1,4 +1,4 @@
-import { IsString, IsDateString, IsInt, IsBoolean, IsOptional, Min, Max } from 'class-validator';
+import { IsString, IsDateString, IsInt, IsBoolean, IsOptional, IsUUID, Min, Max } from 'class-validator';
 
 export class CreateScheduleExceptionDto {
   @IsDateString()
@@ -25,4 +25,8 @@ export class CreateScheduleExceptionDto {
   @IsString()
   @IsOptional()
   reason?: string; // "Feriado", "Mantenimiento", etc.
+
+  @IsUUID()
+  @IsOptional()
+  branchId?: string | null;
 }

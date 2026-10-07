@@ -1,4 +1,4 @@
-import { IsBoolean, IsEmail, IsIn, IsNotEmpty, IsNumber, IsOptional, IsString, Matches, Max, Min, ValidateIf } from 'class-validator';
+import { IsBoolean, IsEmail, IsIn, IsNotEmpty, IsNumber, IsOptional, IsString, IsUUID, Matches, Max, Min, ValidateIf } from 'class-validator';
 import { Type } from 'class-transformer';
 
 export class CreateAthleteDto {
@@ -17,6 +17,10 @@ export class CreateAthleteDto {
   @IsOptional()
   @IsBoolean()
   isOnline?: boolean;
+
+  @IsOptional()
+  @IsUUID()
+  homeBranchId?: string;
 
   /** Fecha de nacimiento en formato YYYY-MM-DD */
   @IsOptional()

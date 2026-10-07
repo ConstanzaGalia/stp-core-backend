@@ -849,9 +849,9 @@ export class ReservationsService {
   }
 
   // Métodos para la configuración de horarios
-  async listScheduleResources(companyId: string): Promise<ScheduleResource[]> {
+  async listScheduleResources(companyId: string, branchId?: string): Promise<ScheduleResource[]> {
     return this.scheduleResourceRepository.find({
-      where: { companyId },
+      where: { companyId, ...(branchId ? { branchId } : {}) },
       order: { sortOrder: 'ASC', name: 'ASC' },
     });
   }
@@ -868,6 +868,7 @@ export class ReservationsService {
       defaultCapacity: dto.defaultCapacity ?? 10,
       sortOrder: dto.sortOrder ?? 0,
       divisionId: dto.divisionId ?? null,
+      branchId: dto.branchId ?? null,
       companyId,
     });
 
@@ -914,9 +915,11 @@ export class ReservationsService {
     }
 
     const resourceId = createScheduleConfigDto.resourceId ?? null;
+    const branchId = createScheduleConfigDto.branchId ?? null;
     const duplicateWhere: Record<string, unknown> = {
       company: { id: companyId },
       dayOfWeek: createScheduleConfigDto.dayOfWeek,
+      ...(branchId ? { branchId } : { branchId: IsNull() }),
     };
     if (resourceId) {
       duplicateWhere.resourceId = resourceId;
@@ -945,6 +948,7 @@ export class ReservationsService {
     const result = await this.scheduleConfigRepository.insert({
       ...createScheduleConfigDto,
       resourceId,
+      branchId,
       company: { id: companyId },
     });
 
@@ -954,9 +958,12 @@ export class ReservationsService {
     });
   }
 
-  async getScheduleConfigs(companyId: string): Promise<ScheduleConfig[]> {
+  async getScheduleConfigs(companyId: string, branchId?: string): Promise<ScheduleConfig[]> {
     return this.scheduleConfigRepository.find({
-      where: { company: { id: companyId } },
+      where: {
+        company: { id: companyId },
+        ...(branchId ? { branchId } : {}),
+      },
       relations: ['resource'],
       order: { dayOfWeek: 'ASC', startTime: 'ASC' },
     });
@@ -983,8 +990,13 @@ export class ReservationsService {
     await this.scheduleConfigRepository.remove(scheduleConfig);
   }
 
-  async generateTimeSlotsFromConfig(companyId: string, startDate: Date, endDate: Date): Promise<TimeSlot[]> {
-    const scheduleConfigs = await this.getScheduleConfigs(companyId);
+  async generateTimeSlotsFromConfig(
+    companyId: string,
+    startDate: Date,
+    endDate: Date,
+    branchId?: string,
+  ): Promise<TimeSlot[]> {
+    const scheduleConfigs = await this.getScheduleConfigs(companyId, branchId);
     const activeConfigs = scheduleConfigs.filter((config) => config.isActive);
 
     const company = await this.companyRepository.findOne({ where: { id: companyId } });
@@ -1004,6 +1016,7 @@ export class ReservationsService {
       where: {
         company: { id: companyId },
         date: Between(rangeStart, rangeEnd),
+        ...(branchId ? { branchId } : {}),
       },
     });
     const existingKeys = new Set(
@@ -1055,6 +1068,7 @@ export class ReservationsService {
                 durationMinutes: configForDay.slotDurationMinutes || 60,
                 isIntermediateSlot: false,
                 resourceId,
+                branchId: configForDay.branchId ?? branchId ?? null,
                 company: company,
               });
               timeSlots.push(slot);
@@ -1094,6 +1108,7 @@ export class ReservationsService {
                   durationMinutes: configForDay.slotDurationMinutes || 60,
                   isIntermediateSlot: true,
                   resourceId,
+                  branchId: configForDay.branchId ?? branchId ?? null,
                   company: company,
                 });
                 timeSlots.push(intermediateSlot);
@@ -1127,6 +1142,7 @@ export class ReservationsService {
       totalTimeSlots: totalSlotsCreated,
       daysWithConfig: activeConfigs.length,
       daysWithoutConfig: totalDaysProcessed - totalSlotsCreated,
+      branchId: branchId ?? null,
       company: company,
     });
 
@@ -1135,7 +1151,12 @@ export class ReservationsService {
     return savedTimeSlots;
   }
 
-  async getTimeSlots(companyId: string, startDate?: Date, endDate?: Date): Promise<TimeSlot[]> {
+  async getTimeSlots(
+    companyId: string,
+    startDate?: Date,
+    endDate?: Date,
+    branchId?: string,
+  ): Promise<TimeSlot[]> {
     const queryBuilder = this.timeSlotRepository
       .createQueryBuilder('timeSlot')
       .leftJoinAndSelect('timeSlot.company', 'company')
@@ -1144,6 +1165,10 @@ export class ReservationsService {
       .orderBy('timeSlot.date', 'ASC')
       .addOrderBy('timeSlot.startTime', 'ASC')
       .addOrderBy('resource.sortOrder', 'ASC', 'NULLS LAST');
+
+    if (branchId) {
+      queryBuilder.andWhere('timeSlot.branchId = :branchId', { branchId });
+    }
 
     if (startDate) {
       queryBuilder.andWhere('timeSlot.date >= :startDate', { startDate });
@@ -1161,8 +1186,9 @@ export class ReservationsService {
     startDate?: Date,
     endDate?: Date,
     userId?: string,
+    branchId?: string,
   ): Promise<any[]> {
-    const timeSlots = await this.getTimeSlots(companyId, startDate, endDate);
+    const timeSlots = await this.getTimeSlots(companyId, startDate, endDate, branchId);
     const reservedCount = (slot: TimeSlot) => slot.reservedCount ?? 0;
 
     let athleteDivisionId: string | null = null;
@@ -1210,7 +1236,7 @@ export class ReservationsService {
    * @param date Fecha para la cual obtener los time slots (YYYY-MM-DD)
    * @returns Array de time slots con información de reservas y alumnos
    */
-  async getDailyReservationsForAdmin(companyId: string, date: Date): Promise<any[]> {
+  async getDailyReservationsForAdmin(companyId: string, date: Date, branchId?: string): Promise<any[]> {
     // Obtener año, mes y día directamente de la fecha (ya viene parseada correctamente del controller)
     // Usar getFullYear(), getMonth(), getDate() que devuelven valores en hora local
     const year = date.getFullYear();
@@ -1228,6 +1254,7 @@ export class ReservationsService {
       .leftJoinAndSelect('timeSlot.resource', 'resource')
       .where('company.id = :companyId', { companyId })
       .andWhere(`DATE(timeSlot.date) = DATE(:dateString)`, { dateString })
+      .andWhere(branchId ? 'timeSlot.branchId = :branchId' : '1=1', { branchId })
       .orderBy('timeSlot.startTime', 'ASC')
       .addOrderBy('resource.sortOrder', 'ASC', 'NULLS LAST')
       .getMany();
@@ -1862,6 +1889,7 @@ export class ReservationsService {
     // Crear la excepción
     const result = await this.scheduleExceptionRepository.insert({
       ...createScheduleExceptionDto,
+      branchId: createScheduleExceptionDto.branchId ?? null,
       company: { id: companyId },
     });
 
@@ -1885,6 +1913,7 @@ export class ReservationsService {
       where: {
         company: { id: companyId },
         date: exception.exceptionDate,
+        ...(exception.branchId ? { branchId: exception.branchId } : {}),
       },
       relations: ['reservations'],
     });
@@ -2001,9 +2030,12 @@ export class ReservationsService {
     };
   }
 
-  async getScheduleExceptions(companyId: string): Promise<ScheduleException[]> {
+  async getScheduleExceptions(companyId: string, branchId?: string): Promise<ScheduleException[]> {
     return this.scheduleExceptionRepository.find({
-      where: { company: { id: companyId } },
+      where: {
+        company: { id: companyId },
+        ...(branchId ? { branchId } : {}),
+      },
       order: { exceptionDate: 'ASC' },
     });
   }
@@ -2115,9 +2147,10 @@ export class ReservationsService {
     companyId: string,
     startDate: Date,
     endDate: Date,
+    branchId?: string,
   ): Promise<TimeSlot[]> {
-    const scheduleConfigs = await this.getScheduleConfigs(companyId);
-    const scheduleExceptions = await this.getScheduleExceptions(companyId);
+    const scheduleConfigs = await this.getScheduleConfigs(companyId, branchId);
+    const scheduleExceptions = await this.getScheduleExceptions(companyId, branchId);
     const company = await this.companyRepository.findOne({ where: { id: companyId } });
     
     if (!company) {
@@ -2149,6 +2182,7 @@ export class ReservationsService {
               startTime: currentTime.toISOString().split('T')[1].slice(0, 5),
               endTime: new Date(currentTime.getTime() + 60 * 60 * 1000).toISOString().split('T')[1].slice(0, 5),
               capacity: exception.capacity || 5, // Capacidad reducida
+              branchId: exception.branchId ?? branchId ?? null,
               company: company,
             });
 
@@ -2173,6 +2207,7 @@ export class ReservationsService {
               startTime: currentTime.toISOString().split('T')[1].slice(0, 5),
               endTime: new Date(currentTime.getTime() + 60 * 60 * 1000).toISOString().split('T')[1].slice(0, 5),
               capacity: configForDay.capacity,
+              branchId: configForDay.branchId ?? branchId ?? null,
               company: company,
             });
 
@@ -2292,6 +2327,9 @@ export class ReservationsService {
       status: ScheduleStatus.ACTIVE,
       notes,
       resourceId: resourceId ?? null,
+      branchId: resourceId
+        ? (await this.scheduleResourceRepository.findOne({ where: { id: resourceId } }))?.branchId ?? null
+        : null,
       user: { id: userId } as any,
       company: { id: finalCompanyId } as any,
     });

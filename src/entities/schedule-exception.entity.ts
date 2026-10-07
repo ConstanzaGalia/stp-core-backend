@@ -1,5 +1,6 @@
-import { Entity, PrimaryGeneratedColumn, Column, ManyToOne, CreateDateColumn, UpdateDateColumn } from 'typeorm';
+import { Entity, PrimaryGeneratedColumn, Column, ManyToOne, CreateDateColumn, UpdateDateColumn, JoinColumn } from 'typeorm';
 import { Company } from './company.entity';
+import { Branch } from './branch.entity';
 
 @Entity('schedule_exception')
 export class ScheduleException {
@@ -29,6 +30,13 @@ export class ScheduleException {
 
   @ManyToOne(() => Company, company => company.scheduleExceptions, { onDelete: 'CASCADE' })
   company: Company;
+
+  @ManyToOne(() => Branch, { nullable: true, onDelete: 'SET NULL' })
+  @JoinColumn({ name: 'branch_id' })
+  branch: Branch | null;
+
+  @Column({ name: 'branch_id', type: 'uuid', nullable: true })
+  branchId: string | null;
 
   @CreateDateColumn()
   createdAt: Date;

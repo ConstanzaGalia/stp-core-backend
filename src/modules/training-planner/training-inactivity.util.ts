@@ -9,6 +9,7 @@ export type TrainingInactivityAthleteInput = {
   name: string;
   lastName: string;
   phone: string | null;
+  homeBranchId?: string | null;
   /** Último entrenamiento con asistencia confirmada. */
   lastTrainingDate: string | null;
   /** Última sesión con rutina planificada (puede ser futura). */

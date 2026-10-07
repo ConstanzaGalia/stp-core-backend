@@ -1,4 +1,4 @@
-import { IsIn, IsNotEmpty, IsNumber, IsOptional, IsString, MaxLength, IsBoolean } from 'class-validator';
+import { IsIn, IsNotEmpty, IsNumber, IsOptional, IsString, IsUUID, MaxLength, IsBoolean } from 'class-validator';
 
 export class CreateFixedExpenseTemplateDto {
   @IsNotEmpty()
@@ -18,6 +18,14 @@ export class CreateFixedExpenseTemplateDto {
   @IsOptional()
   @IsIn(['ARS', 'USD', 'EUR'])
   defaultCurrency?: 'ARS' | 'USD' | 'EUR';
+
+  @IsOptional()
+  @IsUUID()
+  branchId?: string;
+
+  @IsOptional()
+  @IsBoolean()
+  isShared?: boolean;
 }
 
 export class UpdateFixedExpenseTemplateDto {
@@ -42,4 +50,12 @@ export class UpdateFixedExpenseTemplateDto {
   @IsOptional()
   @IsBoolean()
   isActive?: boolean;
+
+  @IsOptional()
+  @IsUUID()
+  branchId?: string;
+
+  @IsOptional()
+  @IsBoolean()
+  isShared?: boolean;
 }

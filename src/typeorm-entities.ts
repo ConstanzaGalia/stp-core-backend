@@ -4,6 +4,8 @@
  * si el patrón no resuelve igual en watch/dist).
  */
 import { AthleteInvitation } from './entities/athlete-invitation.entity';
+import { Branch } from './entities/branch.entity';
+import { ProductBranchStock } from './entities/product-branch-stock.entity';
 import { Division } from './entities/division.entity';
 import { SportPosition } from './entities/sport-position.entity';
 import { ClubAnalyticsTrainer } from './entities/club-analytics-trainer.entity';
@@ -83,6 +85,8 @@ export const TYPEORM_ENTITIES = [
   BiomechanicalScreeningTestResult,
   BiomechanicalScreeningTestSnapshot,
   AthleteInvitation,
+  Branch,
+  ProductBranchStock,
   AthleteSchedule,
   Division,
   SportPosition,

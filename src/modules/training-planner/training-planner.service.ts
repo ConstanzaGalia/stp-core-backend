@@ -1682,6 +1682,7 @@ export class TrainingPlannerService {
           : null,
       lastTrainingDate: lastTrainingByAthlete.get(inv.user.id) ?? null,
       lastPlannedDate: lastPlannedByAthlete.get(inv.user.id) ?? null,
+      homeBranchId: inv.homeBranchId ?? null,
     }));
 
     return buildTrainingInactivityGroups(athletes, referenceDate);

@@ -7,6 +7,8 @@ import { UserPaymentSubscription, SubscriptionStatus } from '../../entities/user
 import { ClassUsage, ClassUsageType } from '../../entities/class-usage.entity';
 import { User } from '../../entities/user.entity';
 import { Company } from '../../entities/company.entity';
+import { Branch } from '../../entities/branch.entity';
+import { AthleteInvitation, InvitationStatus } from '../../entities/athlete-invitation.entity';
 import { SubscriptionSuspension } from '../../entities/subscription-suspension.entity';
 import { Expense } from '../../entities/expense.entity';
 import { ExtraIncome } from '../../entities/extra-income.entity';
@@ -139,6 +141,10 @@ export class PaymentsService {
     private readonly userRepository: Repository<User>,
     @InjectRepository(Company)
     private readonly companyRepository: Repository<Company>,
+    @InjectRepository(Branch)
+    private readonly branchRepository: Repository<Branch>,
+    @InjectRepository(AthleteInvitation)
+    private readonly invitationRepository: Repository<AthleteInvitation>,
     @InjectRepository(SubscriptionSuspension)
     private readonly suspensionRepository: Repository<SubscriptionSuspension>,
     @InjectRepository(Expense)
@@ -158,6 +164,27 @@ export class PaymentsService {
     private readonly mailingService: MailingService,
     private readonly companyService: CompanyService,
   ) {}
+
+  private async resolveHomeBranchId(companyId: string, userId: string): Promise<string | null> {
+    const company = await this.companyRepository.findOne({ where: { id: companyId } });
+    if (!company?.multiBranchEnabled) return null;
+    const invitation = await this.invitationRepository.findOne({
+      where: {
+        company: { id: companyId },
+        user: { id: userId },
+        status: InvitationStatus.APPROVED,
+      },
+    });
+    if (invitation?.homeBranchId) return invitation.homeBranchId;
+    const primary = await this.branchRepository.findOne({ where: { companyId, isPrimary: true } });
+    return primary?.id ?? null;
+  }
+
+  private async assertBranchOfCompany(companyId: string, branchId?: string | null) {
+    if (!branchId) return;
+    const branch = await this.branchRepository.findOne({ where: { id: branchId, companyId } });
+    if (!branch) throw new BadRequestException('La sede no pertenece a este centro');
+  }
 
   private resolvePlanCurrency(company?: Company | null, requested?: string): CenterCurrency {
     const { enabledCurrencies, defaultCurrency } = resolveCompanyCurrencies(company ?? undefined);
@@ -197,12 +224,18 @@ export class PaymentsService {
       enforceWeeklyLimit,
     );
 
+    if (company.multiBranchEnabled && !createPaymentPlanDto.branchId) {
+      throw new BadRequestException('Elegí la sede del plan');
+    }
+    await this.assertBranchOfCompany(companyId, createPaymentPlanDto.branchId);
+
     const currency = this.resolvePlanCurrency(company, createPaymentPlanDto.currency);
 
     const paymentPlan = this.paymentPlanRepository.create({
       ...createPaymentPlanDto,
       enforceWeeklyLimit,
       currency,
+      branchId: createPaymentPlanDto.branchId ?? null,
       frequencyDays: 30, // Siempre 30 días
       totalInstallments: 1, // Siempre 1 cuota
       isRecurring: true, // Siempre se renueva
@@ -212,9 +245,13 @@ export class PaymentsService {
     return await this.paymentPlanRepository.save(paymentPlan);
   }
 
-  async getPaymentPlans(companyId: string): Promise<PaymentPlan[]> {
+  async getPaymentPlans(companyId: string, branchId?: string): Promise<PaymentPlan[]> {
     return await this.paymentPlanRepository.find({
-      where: { company: { id: companyId }, isActive: true },
+      where: {
+        company: { id: companyId },
+        isActive: true,
+        ...(branchId ? { branchId } : {}),
+      },
       order: { classesPerWeek: 'ASC' }
     });
   }
@@ -371,6 +408,11 @@ export class PaymentsService {
     const dueDate = new Date(subscription.periodStartDate);
     dueDate.setDate(dueDate.getDate() + (paymentPlan.gracePeriodDays || 0));
 
+    const branchId = await this.resolveHomeBranchId(
+      subscription.company.id,
+      subscription.user.id,
+    );
+
     const payment = this.paymentRepository.create({
       amount: paymentPlan.amount,
       totalAmount: paymentPlan.amount,
@@ -380,6 +422,7 @@ export class PaymentsService {
       concept: PaymentConcept.SUBSCRIPTION,
       user: { id: subscription.user.id },
       company: { id: subscription.company.id },
+      branchId,
       paymentPlan: { id: paymentPlan.id },
       subscription: { id: subscription.id }
     });
@@ -1036,7 +1079,8 @@ export class PaymentsService {
         planName: p.paymentPlan?.name || null,
         concept: p.concept,
         type: 'cuota' as const,
-        currency: normalizeMoneyCurrency(p.paymentPlan?.currency, defaultCurrency)
+        currency: normalizeMoneyCurrency(p.paymentPlan?.currency, defaultCurrency),
+        branchId: p.branchId ?? null,
       }))
     };
   }
@@ -1095,6 +1139,8 @@ export class PaymentsService {
         category: e.category,
         currency: normalizeMoneyCurrency(e.currency),
         fixedExpenseTemplateId: e.fixedExpenseTemplate?.id ?? null,
+        branchId: e.branchId ?? null,
+        isShared: e.isShared === true,
       }))
     };
   }
@@ -1298,7 +1344,7 @@ export class PaymentsService {
     }));
   }
 
-  async getMonthBalance(companyId: string, year: number, month: number): Promise<{
+  async getMonthBalance(companyId: string, year: number, month: number, branchId?: string): Promise<{
     income: number;
     expenses: number;
     balance: number;
@@ -1324,12 +1370,18 @@ export class PaymentsService {
     }>;
     expensesDetail: any[];
     includesPlatformIncome: boolean;
+    byBranch: Array<{
+      branchId: string | null;
+      income: number;
+      expenses: number;
+      balance: number;
+    }>;
   }> {
     const startDate = new Date(year, month - 1, 1);
     const endDate = new Date(year, month, 0, 23, 59, 59, 999);
     const isOperatingCenter = companyId === getStpOperatingCompanyId();
 
-    const [incomeResult, extraIncomeResult, expensesResult, platformItems] =
+    const [incomeResultRaw, extraIncomeResult, expensesResultRaw, platformItems] =
       await Promise.all([
         this.getMonthIncome(companyId, year, month),
         this.getMonthExtraIncome(companyId, year, month),
@@ -1339,22 +1391,58 @@ export class PaymentsService {
           : Promise.resolve([]),
       ]);
 
-    const platformTotal = platformItems.reduce(
-      (sum, p) => sum + Number(p.amount || 0),
-      0,
-    );
-    const totalIncome =
-      incomeResult.total + extraIncomeResult.total + platformTotal;
+    const branchTotals = new Map<string, { income: number; expenses: number }>();
+    const bumpBranch = (id: string | null, field: 'income' | 'expenses', amount: number) => {
+      const key = id ?? 'none';
+      const row = branchTotals.get(key) ?? { income: 0, expenses: 0 };
+      row[field] += amount;
+      branchTotals.set(key, row);
+    };
+    for (const payment of incomeResultRaw.payments) {
+      bumpBranch(payment.branchId ?? null, 'income', Number(payment.amount || 0));
+    }
+    for (const expense of expensesResultRaw.expenses) {
+      bumpBranch(expense.branchId ?? null, 'expenses', Number(expense.amount || 0));
+    }
+    const byBranch = [...branchTotals.entries()].map(([key, row]) => ({
+      branchId: key === 'none' ? null : key,
+      income: row.income,
+      expenses: row.expenses,
+      balance: row.income - row.expenses,
+    }));
+
+    const incomeResult = branchId
+      ? {
+          total: incomeResultRaw.payments
+            .filter((payment) => payment.branchId === branchId)
+            .reduce((sum, payment) => sum + Number(payment.amount || 0), 0),
+          payments: incomeResultRaw.payments.filter((payment) => payment.branchId === branchId),
+        }
+      : incomeResultRaw;
+    const expensesResult = branchId
+      ? {
+          total: expensesResultRaw.expenses
+            .filter((expense) => expense.branchId === branchId)
+            .reduce((sum, expense) => sum + Number(expense.amount || 0), 0),
+          expenses: expensesResultRaw.expenses.filter((expense) => expense.branchId === branchId),
+        }
+      : expensesResultRaw;
+
+    const platformTotal = branchId
+      ? 0
+      : platformItems.reduce((sum, p) => sum + Number(p.amount || 0), 0);
+    const extraForTotal = branchId ? { total: 0, items: [] as typeof extraIncomeResult.items } : extraIncomeResult;
+    const totalIncome = incomeResult.total + extraForTotal.total + platformTotal;
 
     // Detalle editable: solo extraordinarios (los pagos de alumno van agrupados).
-    const incomeDetail = [...extraIncomeResult.items].sort(
+    const incomeDetail = [...extraForTotal.items].sort(
       (a, b) => new Date(b.date).getTime() - new Date(a.date).getTime(),
     );
 
     const incomeSummary = this.buildIncomeSummary(
       incomeResult.payments,
-      extraIncomeResult.items,
-      platformItems,
+      extraForTotal.items,
+      branchId ? [] : platformItems,
     );
     const expensesSummary = this.buildExpenseSummary(expensesResult.expenses);
 
@@ -1396,7 +1484,8 @@ export class PaymentsService {
       incomeSummary,
       expensesSummary,
       expensesDetail: expensesResult.expenses,
-      includesPlatformIncome: isOperatingCenter,
+      includesPlatformIncome: isOperatingCenter && !branchId,
+      byBranch,
     };
   }
 
@@ -1439,15 +1528,17 @@ export class PaymentsService {
   async getMonthlyGymStats(
     companyId: string,
     year: number,
+    branchId?: string,
   ): Promise<{
     year: number;
-    months: {
+      months: {
       month: number;
       activeStudents: number;
       subscriptionRevenue: number; // cuotas (PaymentConcept.SUBSCRIPTION)
       matriculaRevenue: number; // matrículas (PaymentConcept.MATRICULA)
       totalRevenue: number; // cuotas + matrículas
     }[];
+    byBranch: Array<{ branchId: string | null; totalRevenue: number }>;
   }> {
     const yearStart = new Date(Date.UTC(year, 0, 1, 0, 0, 0, 0));
     const yearEnd = new Date(Date.UTC(year, 11, 31, 23, 59, 59, 999));
@@ -1470,6 +1561,7 @@ export class PaymentsService {
       .createQueryBuilder('p')
       .leftJoinAndSelect('p.user', 'user')
       .where('p.companyId = :companyId', { companyId })
+      .andWhere(branchId ? 'p.branchId = :branchId' : '1=1', { branchId })
       .andWhere('p.concept = :concept', { concept: PaymentConcept.SUBSCRIPTION })
       .andWhere('p.status = :status', { status: PaymentStatus.PAID })
       .andWhere('p.paidDate IS NOT NULL')
@@ -1552,6 +1644,7 @@ export class PaymentsService {
       .createQueryBuilder('p')
       .leftJoinAndSelect('p.user', 'user')
       .where('p.companyId = :companyId', { companyId })
+      .andWhere(branchId ? 'p.branchId = :branchId' : '1=1', { branchId })
       .andWhere('p.concept = :concept', { concept: PaymentConcept.MATRICULA })
       .andWhere('p.status = :status', { status: PaymentStatus.PAID })
       .andWhere('p.paidDate IS NOT NULL')
@@ -1579,7 +1672,20 @@ export class PaymentsService {
       };
     });
 
-    return { year, months };
+    const revenueByBranch = new Map<string, number>();
+    for (const payment of [...payments, ...matriculaPayments]) {
+      const key = payment.branchId ?? 'none';
+      revenueByBranch.set(key, (revenueByBranch.get(key) ?? 0) + Number(payment.totalAmount || 0));
+    }
+
+    return {
+      year,
+      months,
+      byBranch: [...revenueByBranch.entries()].map(([key, totalRevenue]) => ({
+        branchId: key === 'none' ? null : key,
+        totalRevenue: Math.round(totalRevenue * 100) / 100,
+      })),
+    };
   }
 
   async createExpense(companyId: string, createExpenseDto: CreateExpenseDto): Promise<Expense> {
@@ -1595,14 +1701,19 @@ export class PaymentsService {
       );
     }
 
+    if (company.multiBranchEnabled && !createExpenseDto.branchId) {
+      throw new BadRequestException('Elegí la sede del gasto');
+    }
+    await this.assertBranchOfCompany(companyId, createExpenseDto.branchId);
+
     const expense = this.expenseRepository.create({
       amount: createExpenseDto.amount,
       date: parseCalendarDateInput(createExpenseDto.date),
       description: createExpenseDto.description,
       category: createExpenseDto.category,
-      currency: createExpenseDto.currency || resolveCompanyCurrencies(
-        (await this.companyRepository.findOne({ where: { id: companyId } })) ?? undefined,
-      ).defaultCurrency,
+      currency: createExpenseDto.currency || resolveCompanyCurrencies(company).defaultCurrency,
+      isShared: createExpenseDto.isShared === true,
+      branchId: createExpenseDto.branchId ?? null,
       company: { id: companyId },
       ...(createExpenseDto.fixedExpenseTemplateId
         ? { fixedExpenseTemplate: { id: createExpenseDto.fixedExpenseTemplateId } }
@@ -2976,6 +3087,8 @@ export class PaymentsService {
       paymentPlanId = plan.id;
     }
 
+    const branchId = await this.resolveHomeBranchId(companyId, createPaymentDto.userId);
+
     const payment = this.paymentRepository.create({
       amount,
       totalAmount: amount,
@@ -2988,6 +3101,7 @@ export class PaymentsService {
       notes: createPaymentDto.notes ?? null,
       user: { id: createPaymentDto.userId },
       company: { id: companyId },
+      branchId,
       paymentPlan: { id: paymentPlanId },
       ...(subscriptionId ? { subscription: { id: subscriptionId } } : { subscription: null })
     });
@@ -3911,11 +4025,18 @@ export class PaymentsService {
       .where('t.companyId = :companyId', { companyId })
       .getRawOne();
 
+    if (company.multiBranchEnabled && !dto.branchId) {
+      throw new BadRequestException('Elegí la sede del gasto fijo');
+    }
+    await this.assertBranchOfCompany(companyId, dto.branchId);
+
     const template = this.fixedExpenseTemplateRepository.create({
       name: dto.name.trim(),
       sortOrder: dto.sortOrder ?? (Number(maxSort?.max ?? -1) + 1),
       defaultCategory: dto.defaultCategory?.trim() || null,
       defaultCurrency: dto.defaultCurrency || 'ARS',
+      branchId: dto.branchId ?? null,
+      isShared: dto.isShared === true,
       company: { id: companyId },
     });
     return this.fixedExpenseTemplateRepository.save(template);

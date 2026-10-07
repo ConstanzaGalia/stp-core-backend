@@ -1,4 +1,4 @@
-import { IsNotEmpty, IsNumber, IsOptional, IsString, IsDateString, IsIn, IsUUID } from 'class-validator';
+import { IsBoolean, IsNotEmpty, IsNumber, IsOptional, IsString, IsDateString, IsIn, IsUUID } from 'class-validator';
 
 export class CreateExpenseDto {
   @IsNotEmpty()
@@ -24,4 +24,12 @@ export class CreateExpenseDto {
   @IsOptional()
   @IsUUID()
   fixedExpenseTemplateId?: string;
+
+  @IsOptional()
+  @IsUUID()
+  branchId?: string;
+
+  @IsOptional()
+  @IsBoolean()
+  isShared?: boolean;
 }

@@ -10,10 +10,11 @@ import {
   Index,
 } from 'typeorm';
 import { Company } from './company.entity';
+import { Branch } from './branch.entity';
 
 /** Marca un turno como cerrado ("NO") sin staff asignado. */
 @Entity('staff_shift_closure')
-@Unique(['companyId', 'date', 'startTime'])
+@Unique(['companyId', 'branchId', 'date', 'startTime'])
 @Index(['companyId', 'date'])
 export class StaffShiftClosure {
   @PrimaryGeneratedColumn('uuid')
@@ -21,6 +22,13 @@ export class StaffShiftClosure {
 
   @Column({ type: 'uuid' })
   companyId: string;
+
+  @Column({ name: 'branch_id', type: 'uuid', nullable: true })
+  branchId: string | null;
+
+  @ManyToOne(() => Branch, { nullable: true, onDelete: 'SET NULL' })
+  @JoinColumn({ name: 'branch_id' })
+  branch: Branch | null;
 
   @Column({ type: 'date' })
   date: Date;

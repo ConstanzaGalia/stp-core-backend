@@ -2,6 +2,7 @@ import { Entity, PrimaryGeneratedColumn, Column, ManyToOne, OneToMany, CreateDat
 import { User } from './user.entity';
 import { Company } from './company.entity';
 import { ScheduleResource } from './schedule-resource.entity';
+import { Branch } from './branch.entity';
 
 export enum ScheduleFrequency {
   WEEKLY = 'weekly',
@@ -76,6 +77,13 @@ export class AthleteSchedule {
 
   @ManyToOne(() => Company, company => company.athleteSchedules, { onDelete: 'CASCADE' })
   company: Company;
+
+  @ManyToOne(() => Branch, { nullable: true, onDelete: 'SET NULL' })
+  @JoinColumn({ name: 'branch_id' })
+  branch: Branch | null;
+
+  @Column({ name: 'branch_id', type: 'uuid', nullable: true })
+  branchId: string | null;
 
   @CreateDateColumn()
   createdAt: Date;

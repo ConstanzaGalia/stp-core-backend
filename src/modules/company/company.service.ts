@@ -393,6 +393,7 @@ export class CompanyService {
         subscriptionActive: company.subscriptionActive,
         accountType: company.accountType,
         enabledModules: company.enabledModules ?? null,
+        multiBranchEnabled: company.multiBranchEnabled === true,
         createdAt: company.created_at,
         directors: directors.map((d) => ({
           id: d.id,

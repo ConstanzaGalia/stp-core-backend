@@ -29,8 +29,9 @@ export class StaffSchedulingController {
     @Param('companyId') companyId: string,
     @GetUser() user: User,
     @Query('weekStart') weekStart?: string,
+    @Query('branchId') branchId?: string,
   ) {
-    return this.staffSchedulingService.getGridTemplate(companyId, user, weekStart);
+    return this.staffSchedulingService.getGridTemplate(companyId, user, weekStart, branchId);
   }
 
   @Get('assignments')
@@ -38,8 +39,9 @@ export class StaffSchedulingController {
     @Param('companyId') companyId: string,
     @GetUser() user: User,
     @Query('weekStart') weekStart?: string,
+    @Query('branchId') branchId?: string,
   ) {
-    return this.staffSchedulingService.getWeekAssignments(companyId, user, weekStart);
+    return this.staffSchedulingService.getWeekAssignments(companyId, user, weekStart, branchId);
   }
 
   @Put('assignments')
@@ -47,6 +49,7 @@ export class StaffSchedulingController {
     @Param('companyId') companyId: string,
     @GetUser() user: User,
     @Query('weekStart') weekStart: string,
+    @Query('branchId') branchId: string | undefined,
     @Body() dto: UpsertWeekAssignmentsDto,
   ) {
     return this.staffSchedulingService.upsertWeekAssignments(
@@ -54,6 +57,7 @@ export class StaffSchedulingController {
       user,
       weekStart,
       dto,
+      branchId,
     );
   }
 
@@ -62,6 +66,7 @@ export class StaffSchedulingController {
     @Param('companyId') companyId: string,
     @GetUser() user: User,
     @Query('weekStart') weekStart: string,
+    @Query('branchId') branchId: string | undefined,
     @Body() dto: CopyWeekDto,
   ) {
     return this.staffSchedulingService.copyPreviousWeek(
@@ -69,6 +74,7 @@ export class StaffSchedulingController {
       user,
       weekStart,
       dto.sourceWeekStart,
+      branchId,
     );
   }
 

@@ -4,6 +4,9 @@ import { CompanyService } from './company.service';
 import { CompanyController } from './company.controller';
 import { Pagination } from 'src/common/pagination/pagination';
 import { Company } from 'src/entities/company.entity';
+import { Branch } from 'src/entities/branch.entity';
+import { AthleteInvitation } from 'src/entities/athlete-invitation.entity';
+import { BranchService } from './branch.service';
 import { CompanyStaffMembership } from 'src/entities/company-staff-membership.entity';
 import { StaffAssociationRequest } from 'src/entities/staff-association-request.entity';
 import { StaffShiftAssignment } from 'src/entities/staff-shift-assignment.entity';
@@ -20,6 +23,8 @@ import { StpPlatformBillingModule } from '../stp-platform-billing/stp-platform-b
   imports: [
     TypeOrmModule.forFeature([
       Company,
+      Branch,
+      AthleteInvitation,
       User,
       StaffAssociationRequest,
       CompanyStaffMembership,
@@ -33,6 +38,7 @@ import { StpPlatformBillingModule } from '../stp-platform-billing/stp-platform-b
   controllers: [CompanyController],
   providers: [
     CompanyService,
+    BranchService,
     Pagination,
     EncryptService,
     CompanySubscriptionGuard,
@@ -41,6 +47,6 @@ import { StpPlatformBillingModule } from '../stp-platform-billing/stp-platform-b
       useClass: CompanySubscriptionGuard,
     },
   ],
-  exports: [CompanyService],
+  exports: [CompanyService, BranchService],
 })
 export class CompanyModule {}

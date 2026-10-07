@@ -1,4 +1,4 @@
-import { IsOptional, IsNumber, Min } from 'class-validator';
+import { IsOptional, IsNumber, IsUUID, Min } from 'class-validator';
 
 export class UpdateStockDto {
   @IsOptional()
@@ -15,4 +15,8 @@ export class UpdateStockDto {
   @IsNumber()
   @Min(0)
   stockCounter?: number;
+
+  @IsOptional()
+  @IsUUID()
+  branchId?: string;
 }

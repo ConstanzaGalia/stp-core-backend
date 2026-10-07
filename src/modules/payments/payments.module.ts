@@ -9,6 +9,8 @@ import { UserPaymentSubscription } from '../../entities/user-payment-subscriptio
 import { ClassUsage } from '../../entities/class-usage.entity';
 import { User } from '../../entities/user.entity';
 import { Company } from '../../entities/company.entity';
+import { Branch } from '../../entities/branch.entity';
+import { AthleteInvitation } from '../../entities/athlete-invitation.entity';
 import { SubscriptionSuspension } from '../../entities/subscription-suspension.entity';
 import { Expense } from '../../entities/expense.entity';
 import { ExtraIncome } from '../../entities/extra-income.entity';
@@ -30,6 +32,8 @@ import { CompanyModule } from '../company/company.module';
       ClassUsage,
       User,
       Company,
+      Branch,
+      AthleteInvitation,
       SubscriptionSuspension,
       Expense,
       ExtraIncome,

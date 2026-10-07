@@ -23,6 +23,10 @@ export class CreateScheduleResourceDto {
   @IsUUID()
   @IsOptional()
   divisionId?: string | null;
+
+  @IsUUID()
+  @IsOptional()
+  branchId?: string | null;
 }
 
 export class UpdateScheduleResourceDto {

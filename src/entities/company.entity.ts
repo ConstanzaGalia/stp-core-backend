@@ -69,6 +69,11 @@ export class Company {
   @Column({ type: 'jsonb', nullable: true, name: 'enabled_modules' })
   enabledModules?: string[] | null;
 
+  /** Varias sedes dentro del mismo centro. Default apagado. */
+  @ApiProperty()
+  @Column({ type: 'boolean', default: false, name: 'multi_branch_enabled' })
+  multiBranchEnabled: boolean;
+
   /** Monedas habilitadas en caja y gastos. Default: solo ARS. */
   @ApiProperty({ required: false, type: [String] })
   @Column({ type: 'jsonb', nullable: true, name: 'enabled_currencies' })

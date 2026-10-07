@@ -52,8 +52,11 @@ export class ReservationsController {
 
   @Get('schedule-config/:companyId')
   @UseGuards(AuthGuard('jwt'))
-  async getScheduleConfigs(@Param('companyId') companyId: string) {
-    return this.reservationsService.getScheduleConfigs(companyId);
+  async getScheduleConfigs(
+    @Param('companyId') companyId: string,
+    @Query('branchId') branchId?: string,
+  ) {
+    return this.reservationsService.getScheduleConfigs(companyId, branchId);
   }
 
   @Put('schedule-config/:id')
@@ -73,8 +76,11 @@ export class ReservationsController {
 
   @Get('schedule-resources/:companyId')
   @UseGuards(AuthGuard('jwt'))
-  async listScheduleResources(@Param('companyId') companyId: string) {
-    return this.reservationsService.listScheduleResources(companyId);
+  async listScheduleResources(
+    @Param('companyId') companyId: string,
+    @Query('branchId') branchId?: string,
+  ) {
+    return this.reservationsService.listScheduleResources(companyId, branchId);
   }
 
   @Post('schedule-resources/:companyId')
@@ -110,7 +116,7 @@ export class ReservationsController {
   @UseGuards(AuthGuard('jwt'))
   async generateTimeSlotsFromConfig(
     @Param('companyId') companyId: string,
-    @Body() body: { startDate: string; endDate: string },
+    @Body() body: { startDate: string; endDate: string; branchId?: string },
   ) {
     // Parsear las fechas y ajustar a la zona horaria local
     const startDate = new Date(body.startDate);
@@ -130,6 +136,7 @@ export class ReservationsController {
       companyId,
       adjustedStartDate,
       adjustedEndDate,
+      body.branchId,
     );
   }
 
@@ -141,6 +148,7 @@ export class ReservationsController {
     @Query('startDate') startDate?: string,
     @Query('endDate') endDate?: string,
     @Query('athleteUserId') athleteUserId?: string,
+    @Query('branchId') branchId?: string,
   ) {
     const start = startOfDateOnlyLocal(startDate);
     const end = endOfDateOnlyLocal(endDate);
@@ -151,7 +159,7 @@ export class ReservationsController {
       if (canViewAthleteSlots) viewerId = athleteUserId;
     }
 
-    return this.reservationsService.getAvailableTimeSlots(companyId, start, end, viewerId);
+    return this.reservationsService.getAvailableTimeSlots(companyId, start, end, viewerId, branchId);
   }
 
   /**
@@ -163,6 +171,7 @@ export class ReservationsController {
   async getDailyReservationsForAdmin(
     @Param('companyId') companyId: string,
     @Query('date') date?: string,
+    @Query('branchId') branchId?: string,
   ) {
     // Si no se proporciona fecha, usar la fecha actual
     let targetDate: Date;
@@ -179,7 +188,7 @@ export class ReservationsController {
       throw new BadRequestException('Fecha inválida. Use formato YYYY-MM-DD');
     }
     
-    return this.reservationsService.getDailyReservationsForAdmin(companyId, targetDate);
+    return this.reservationsService.getDailyReservationsForAdmin(companyId, targetDate, branchId);
   }
 
   /**
@@ -258,7 +267,7 @@ export class ReservationsController {
   @UseGuards(AuthGuard('jwt'))
   async generateTimeSlotsWithExceptions(
     @Param('companyId') companyId: string,
-    @Body() body: { startDate: string; endDate: string },
+    @Body() body: { startDate: string; endDate: string; branchId?: string },
   ) {
     const startDate = new Date(body.startDate);
     const endDate = new Date(body.endDate);
@@ -272,6 +281,7 @@ export class ReservationsController {
       companyId,
       startDate,
       endDate,
+      body.branchId,
     );
   }
 
@@ -382,8 +392,11 @@ export class ReservationsController {
 
   @Get('schedule-exception/:companyId')
   @UseGuards(AuthGuard('jwt'))
-  async getScheduleExceptions(@Param('companyId') companyId: string) {
-    return await this.reservationsService.getScheduleExceptions(companyId);
+  async getScheduleExceptions(
+    @Param('companyId') companyId: string,
+    @Query('branchId') branchId?: string,
+  ) {
+    return await this.reservationsService.getScheduleExceptions(companyId, branchId);
   }
 
   @Put('schedule-exception/:id')

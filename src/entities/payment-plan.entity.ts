@@ -1,7 +1,8 @@
-import { Entity, PrimaryGeneratedColumn, Column, ManyToOne, OneToMany, CreateDateColumn, UpdateDateColumn } from 'typeorm';
+import { Entity, PrimaryGeneratedColumn, Column, ManyToOne, OneToMany, CreateDateColumn, UpdateDateColumn, JoinColumn } from 'typeorm';
 import { Company } from './company.entity';
 import { Payment } from './payment.entity';
 import { UserPaymentSubscription } from './user-payment-subscription.entity';
+import { Branch } from './branch.entity';
 
 @Entity('payment_plans')
 export class PaymentPlan {
@@ -55,6 +56,13 @@ export class PaymentPlan {
 
   @ManyToOne(() => Company, company => company.paymentPlans, { onDelete: 'CASCADE' })
   company: Company;
+
+  @ManyToOne(() => Branch, { nullable: true, onDelete: 'SET NULL' })
+  @JoinColumn({ name: 'branch_id' })
+  branch: Branch | null;
+
+  @Column({ name: 'branch_id', type: 'uuid', nullable: true })
+  branchId: string | null;
 
   @OneToMany(() => Payment, payment => payment.paymentPlan)
   payments: Payment[];

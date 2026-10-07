@@ -11,9 +11,10 @@ import {
 } from 'typeorm';
 import { Company } from './company.entity';
 import { User } from './user.entity';
+import { Branch } from './branch.entity';
 
 @Entity('staff_shift_assignment')
-@Unique(['companyId', 'date', 'startTime', 'userId'])
+@Unique(['companyId', 'branchId', 'date', 'startTime', 'userId'])
 @Index(['companyId', 'date'])
 export class StaffShiftAssignment {
   @PrimaryGeneratedColumn('uuid')
@@ -21,6 +22,13 @@ export class StaffShiftAssignment {
 
   @Column({ type: 'uuid' })
   companyId: string;
+
+  @Column({ name: 'branch_id', type: 'uuid', nullable: true })
+  branchId: string | null;
+
+  @ManyToOne(() => Branch, { nullable: true, onDelete: 'SET NULL' })
+  @JoinColumn({ name: 'branch_id' })
+  branch: Branch | null;
 
   @Column({ type: 'uuid' })
   userId: string;

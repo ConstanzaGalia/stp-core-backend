@@ -1,4 +1,4 @@
-import { IsString, IsNumber, IsBoolean, IsOptional, IsIn, Min, Max } from 'class-validator';
+import { IsString, IsNumber, IsBoolean, IsOptional, IsIn, IsUUID, Min, Max } from 'class-validator';
 
 export class CreatePaymentPlanDto {
   @IsString()
@@ -47,4 +47,8 @@ export class CreatePaymentPlanDto {
   @Min(0)
   @IsOptional()
   maxRolloverClasses?: number; // Máximo de clases que pueden pasar
+
+  @IsUUID()
+  @IsOptional()
+  branchId?: string;
 }

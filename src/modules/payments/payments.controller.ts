@@ -37,8 +37,11 @@ export class PaymentsController {
   }
 
   @Get('plans/:companyId')
-  async getPaymentPlans(@Param('companyId') companyId: string) {
-    return await this.paymentsService.getPaymentPlans(companyId);
+  async getPaymentPlans(
+    @Param('companyId') companyId: string,
+    @Query('branchId') branchId?: string,
+  ) {
+    return await this.paymentsService.getPaymentPlans(companyId, branchId);
   }
 
   @Put('plans/:id')
@@ -140,6 +143,7 @@ export class PaymentsController {
   async getGymMonthlyStats(
     @Param('companyId') companyId: string,
     @Query('year') yearStr: string,
+    @Query('branchId') branchId: string | undefined,
     @GetUser() user: User,
   ) {
     if (!user || !hasDirectorPrivileges(user.role)) {
@@ -159,7 +163,7 @@ export class PaymentsController {
       companyId,
       user.role,
     );
-    return this.paymentsService.getMonthlyGymStats(companyId, yearNum);
+    return this.paymentsService.getMonthlyGymStats(companyId, yearNum, branchId);
   }
 
   // ===== INGRESOS, GASTOS Y BALANCE MENSUAL =====
@@ -179,14 +183,15 @@ export class PaymentsController {
   async getMonthBalance(
     @Param('companyId') companyId: string,
     @Query('year') year: string,
-    @Query('month') month: string
+    @Query('month') month: string,
+    @Query('branchId') branchId?: string,
   ) {
     const yearNum = parseInt(year, 10);
     const monthNum = parseInt(month, 10);
     if (isNaN(yearNum) || isNaN(monthNum) || monthNum < 1 || monthNum > 12) {
       throw new BadRequestException('Invalid year or month');
     }
-    return await this.paymentsService.getMonthBalance(companyId, yearNum, monthNum);
+    return await this.paymentsService.getMonthBalance(companyId, yearNum, monthNum, branchId);
   }
 
   @Get('cajas/:companyId')

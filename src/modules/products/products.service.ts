@@ -1,7 +1,9 @@
 import { Injectable, NotFoundException, BadRequestException, ForbiddenException } from '@nestjs/common';
 import { InjectRepository } from '@nestjs/typeorm';
-import { Repository } from 'typeorm';
+import { In, Repository } from 'typeorm';
 import { Product } from '../../entities/product.entity';
+import { ProductBranchStock } from '../../entities/product-branch-stock.entity';
+import { Branch } from '../../entities/branch.entity';
 import { Sale, PaymentMethod, PaymentStatus, StockLocation } from '../../entities/sale.entity';
 import { User } from '../../entities/user.entity';
 import { Company } from '../../entities/company.entity';
@@ -26,7 +28,34 @@ export class ProductsService {
     private readonly userRepository: Repository<User>,
     @InjectRepository(Company)
     private readonly companyRepository: Repository<Company>,
+    @InjectRepository(ProductBranchStock)
+    private readonly branchStockRepository: Repository<ProductBranchStock>,
+    @InjectRepository(Branch)
+    private readonly branchRepository: Repository<Branch>,
   ) {}
+
+  private async ensureBranchStock(productId: string, branchId: string): Promise<ProductBranchStock> {
+    let row = await this.branchStockRepository.findOne({ where: { productId, branchId } });
+    if (!row) {
+      row = await this.branchStockRepository.save(
+        this.branchStockRepository.create({
+          productId,
+          branchId,
+          stockDeposit: 0,
+          stockFridge: 0,
+          stockCounter: 0,
+        }),
+      );
+    }
+    return row;
+  }
+
+  private applyStockRow(product: Product, row: ProductBranchStock): Product {
+    product.stockDeposit = row.stockDeposit;
+    product.stockFridge = row.stockFridge;
+    product.stockCounter = row.stockCounter;
+    return product;
+  }
 
   private async ensureUserBelongsToCompany(userId: string, companyId: string): Promise<void> {
     try {
@@ -71,15 +100,40 @@ export class ProductsService {
       isActive: createProductDto.isActive ?? true,
     });
 
-    return await this.productRepository.save(product);
+    const saved = await this.productRepository.save(product);
+    const company = await this.companyRepository.findOne({ where: { id: companyId } });
+    if (company?.multiBranchEnabled) {
+      const branches = await this.branchRepository.find({ where: { companyId, isActive: true } });
+      for (const branch of branches) {
+        await this.branchStockRepository.save(
+          this.branchStockRepository.create({
+            productId: saved.id,
+            branchId: branch.id,
+            stockDeposit: 0,
+            stockFridge: 0,
+            stockCounter: 0,
+          }),
+        );
+      }
+    }
+    return saved;
   }
 
-  async getProducts(companyId: string, userId: string): Promise<Product[]> {
+  async getProducts(companyId: string, userId: string, branchId?: string): Promise<Product[]> {
     await this.ensureUserBelongsToCompany(userId, companyId);
 
-    return await this.productRepository.find({
+    const products = await this.productRepository.find({
       where: { companyId },
       order: { createdAt: 'DESC' },
+    });
+    if (!branchId || products.length === 0) return products;
+    const rows = await this.branchStockRepository.find({
+      where: { branchId, productId: In(products.map((product) => product.id)) },
+    });
+    const byProduct = new Map(rows.map((row) => [row.productId, row]));
+    return products.map((product) => {
+      const row = byProduct.get(product.id);
+      return row ? this.applyStockRow(product, row) : product;
     });
   }
 
@@ -127,7 +181,15 @@ export class ProductsService {
     await this.ensureUserBelongsToCompany(userId, companyId);
 
     const product = await this.getProductById(productId, companyId, userId);
-    
+    if (updateStockDto.branchId) {
+      const row = await this.ensureBranchStock(productId, updateStockDto.branchId);
+      if (updateStockDto.stockDeposit !== undefined) row.stockDeposit = updateStockDto.stockDeposit;
+      if (updateStockDto.stockFridge !== undefined) row.stockFridge = updateStockDto.stockFridge;
+      if (updateStockDto.stockCounter !== undefined) row.stockCounter = updateStockDto.stockCounter;
+      await this.branchStockRepository.save(row);
+      return this.applyStockRow(product, row);
+    }
+
     if (updateStockDto.stockDeposit !== undefined) {
       product.stockDeposit = updateStockDto.stockDeposit;
     }
@@ -151,6 +213,10 @@ export class ProductsService {
 
     const product = await this.getProductById(productId, companyId, userId);
     const { from, to, quantity } = transferStockDto;
+    if (transferStockDto.branchId) {
+      const row = await this.ensureBranchStock(productId, transferStockDto.branchId);
+      this.applyStockRow(product, row);
+    }
 
     // Validar que no se transfiera al mismo lugar
     if (from.toString() === to.toString()) {
@@ -187,6 +253,15 @@ export class ProductsService {
       product.stockCounter += quantity;
     }
 
+    if (transferStockDto.branchId) {
+      const row = await this.ensureBranchStock(productId, transferStockDto.branchId);
+      row.stockDeposit = product.stockDeposit;
+      row.stockFridge = product.stockFridge;
+      row.stockCounter = product.stockCounter;
+      await this.branchStockRepository.save(row);
+      return product;
+    }
+
     return await this.productRepository.save(product);
   }
 
@@ -196,6 +271,14 @@ export class ProductsService {
     await this.ensureUserBelongsToCompany(userId, companyId);
 
     const product = await this.getProductById(createSaleDto.productId, companyId, userId);
+    const company = await this.companyRepository.findOne({ where: { id: companyId } });
+    if (company?.multiBranchEnabled && !createSaleDto.branchId) {
+      throw new BadRequestException('Elegí la sede de la venta');
+    }
+    if (createSaleDto.branchId) {
+      const row = await this.ensureBranchStock(product.id, createSaleDto.branchId);
+      this.applyStockRow(product, row);
+    }
     const athlete = createSaleDto.athleteId
       ? await this.userRepository.findOne({ where: { id: createSaleDto.athleteId } })
       : null;
@@ -229,6 +312,7 @@ export class ProductsService {
       ...(athlete ? { athlete: { id: athlete.id } as User, athleteId: athlete.id } : { athlete: null, athleteId: null }),
       company: { id: companyId } as Company,
       companyId,
+      branchId: createSaleDto.branchId ?? null,
       quantity: createSaleDto.quantity,
       paymentMethod: createSaleDto.paymentMethod,
       unitPrice,
@@ -240,13 +324,20 @@ export class ProductsService {
 
     const savedSale = await this.saleRepository.save(sale);
 
-    // Actualizar stock del producto
     if (createSaleDto.stockLocation === StockLocation.FRIDGE) {
       product.stockFridge -= createSaleDto.quantity;
     } else {
       product.stockCounter -= createSaleDto.quantity;
     }
-    await this.productRepository.save(product);
+    if (createSaleDto.branchId) {
+      const row = await this.ensureBranchStock(product.id, createSaleDto.branchId);
+      row.stockFridge = product.stockFridge;
+      row.stockCounter = product.stockCounter;
+      row.stockDeposit = product.stockDeposit;
+      await this.branchStockRepository.save(row);
+    } else {
+      await this.productRepository.save(product);
+    }
 
     return savedSale;
   }
@@ -342,7 +433,13 @@ export class ProductsService {
     await this.saleRepository.remove(sale);
   }
 
-  async getSales(companyId: string, userId: string, startDate?: Date, endDate?: Date): Promise<Sale[]> {
+  async getSales(
+    companyId: string,
+    userId: string,
+    startDate?: Date,
+    endDate?: Date,
+    branchId?: string,
+  ): Promise<Sale[]> {
     await this.ensureUserBelongsToCompany(userId, companyId);
 
     try {
@@ -352,6 +449,10 @@ export class ProductsService {
         .leftJoinAndSelect('sale.athlete', 'athlete')
         .where('sale.companyId = :companyId', { companyId })
         .orderBy('sale.createdAt', 'DESC');
+
+      if (branchId) {
+        query.andWhere('sale.branchId = :branchId', { branchId });
+      }
 
       if (startDate) {
         query.andWhere('sale.createdAt >= :startDate', { startDate });

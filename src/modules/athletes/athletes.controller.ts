@@ -282,6 +282,20 @@ export class AthletesController {
     return await this.athletesService.updateAthleteOnlineStatus(companyId, athleteId, isOnline);
   }
 
+  @Patch('company/:companyId/athletes/:athleteId/home-branch')
+  @UseGuards(AuthGuard('jwt'))
+  async updateAthleteHomeBranch(
+    @Param('companyId') companyId: string,
+    @Param('athleteId') athleteId: string,
+    @Body('homeBranchId') homeBranchId: string,
+    @GetUser() user: User,
+  ) {
+    if (!STAFF_ROLES.includes(user.role)) {
+      throw new ForbiddenException('Solo el staff puede actualizar la sede casa');
+    }
+    return await this.athletesService.updateAthleteHomeBranch(companyId, athleteId, homeBranchId);
+  }
+
   @Delete('company/:companyId/athletes/:athleteId')
   @UseGuards(AuthGuard('jwt'))
   async removeAthlete(

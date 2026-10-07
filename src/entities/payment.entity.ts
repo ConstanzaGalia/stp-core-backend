@@ -4,6 +4,7 @@ import { Company } from './company.entity';
 import { PaymentPlan } from './payment-plan.entity';
 import { UserPaymentSubscription } from './user-payment-subscription.entity';
 import { AvailableClass } from './available-class.entity';
+import { Branch } from './branch.entity';
 
 export enum PaymentStatus {
   PENDING = 'pending',
@@ -98,6 +99,13 @@ export class Payment {
 
   @Column({ nullable: true })
   companyId: string;
+
+  @ManyToOne(() => Branch, { nullable: true, onDelete: 'SET NULL' })
+  @JoinColumn({ name: 'branch_id' })
+  branch: Branch | null;
+
+  @Column({ name: 'branch_id', type: 'uuid', nullable: true })
+  branchId: string | null;
 
   @ManyToOne(() => PaymentPlan, paymentPlan => paymentPlan.payments, { onDelete: 'CASCADE' })
   @JoinColumn({ name: 'paymentPlanId' })

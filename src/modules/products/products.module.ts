@@ -6,12 +6,14 @@ import { Product } from '../../entities/product.entity';
 import { Sale } from '../../entities/sale.entity';
 import { User } from '../../entities/user.entity';
 import { Company } from '../../entities/company.entity';
+import { ProductBranchStock } from '../../entities/product-branch-stock.entity';
+import { Branch } from '../../entities/branch.entity';
 import { AuthModule } from '../auth/auth.module';
 import { CompanyModule } from '../company/company.module';
 
 @Module({
   imports: [
-    TypeOrmModule.forFeature([Product, Sale, User, Company]),
+    TypeOrmModule.forFeature([Product, Sale, User, Company, ProductBranchStock, Branch]),
     AuthModule,
     CompanyModule,
   ],

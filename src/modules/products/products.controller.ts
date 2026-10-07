@@ -45,8 +45,9 @@ export class ProductsController {
   async getProducts(
     @Param('companyId', new ParseUUIDPipe({ version: '4' })) companyId: string,
     @GetUser() user: User,
+    @Query('branchId') branchId?: string,
   ) {
-    return await this.productsService.getProducts(companyId, user.id);
+    return await this.productsService.getProducts(companyId, user.id, branchId);
   }
 
   // IMPORTANTE: Rutas de ventas DEBEN ir antes de company/:companyId/:productId
@@ -58,13 +59,14 @@ export class ProductsController {
     @GetUser() user: User,
     @Query('startDate') startDate?: string,
     @Query('endDate') endDate?: string,
+    @Query('branchId') branchId?: string,
   ) {
     if (!uuidValidate(companyId)) {
       throw new BadRequestException('Invalid UUID format');
     }
     const start = startDate ? new Date(startDate) : undefined;
     const end = endDate ? new Date(endDate) : undefined;
-    return await this.productsService.getSales(companyId, user.id, start, end);
+    return await this.productsService.getSales(companyId, user.id, start, end, branchId);
   }
 
   @Get('company/:companyId/sales/statistics')

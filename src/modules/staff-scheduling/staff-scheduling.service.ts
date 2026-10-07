@@ -158,14 +158,14 @@ export class StaffSchedulingService {
     );
   }
 
-  private async buildGridTemplate(companyId: string, weekStartParam?: string) {
+  private async buildGridTemplate(companyId: string, weekStartParam?: string, branchId?: string) {
     const weekStart = weekStartParam
       ? getWeekStartMonday(weekStartParam)
       : getWeekStartMonday(toCalendarDateString(new Date()));
     const weekDates = getWeekDates(weekStart);
     const weekEnd = weekDates[6];
-    const configs = await this.getActiveScheduleConfigs(companyId);
-    const exceptions = await this.getExceptionsForRange(companyId, weekStart, weekEnd);
+    const configs = await this.getActiveScheduleConfigs(companyId, branchId);
+    const exceptions = await this.getExceptionsForRange(companyId, weekStart, weekEnd, branchId);
     const slots = this.mergeWeekSlots(weekDates, configs, exceptions);
 
     const days = weekDates.map((date) => ({
@@ -177,7 +177,11 @@ export class StaffSchedulingService {
     }));
 
     const noteEntity = await this.weekNoteRepository.findOne({
-      where: { companyId, weekStartDate: parseCalendarDate(weekStart) as unknown as Date },
+      where: {
+        companyId,
+        weekStartDate: parseCalendarDate(weekStart) as unknown as Date,
+        ...(branchId ? { branchId } : {}),
+      },
     });
 
     return {
@@ -230,9 +234,13 @@ export class StaffSchedulingService {
     return { company, staff, profiles };
   }
 
-  private async getActiveScheduleConfigs(companyId: string): Promise<ScheduleConfig[]> {
+  private async getActiveScheduleConfigs(companyId: string, branchId?: string): Promise<ScheduleConfig[]> {
     return this.scheduleConfigRepository.find({
-      where: { company: { id: companyId }, isActive: true },
+      where: {
+        company: { id: companyId },
+        isActive: true,
+        ...(branchId ? { branchId } : {}),
+      },
     });
   }
 
@@ -240,12 +248,14 @@ export class StaffSchedulingService {
     companyId: string,
     startDate: string,
     endDate: string,
+    branchId?: string,
   ): Promise<ScheduleException[]> {
     return this.scheduleExceptionRepository.find({
       where: {
         company: { id: companyId },
         isActive: true,
         exceptionDate: Between(parseCalendarDate(startDate), parseCalendarDate(endDate)),
+        ...(branchId ? { branchId } : {}),
       },
     });
   }
@@ -294,12 +304,12 @@ export class StaffSchedulingService {
     );
   }
 
-  async getGridTemplate(companyId: string, user: User, weekStartParam?: string) {
+  async getGridTemplate(companyId: string, user: User, weekStartParam?: string, branchId?: string) {
     await this.assertCompanyAccess(user, companyId);
-    return this.buildGridTemplate(companyId, weekStartParam);
+    return this.buildGridTemplate(companyId, weekStartParam, branchId);
   }
 
-  async getWeekAssignments(companyId: string, user: User, weekStartParam?: string) {
+  async getWeekAssignments(companyId: string, user: User, weekStartParam?: string, branchId?: string) {
     await this.assertCompanyAccess(user, companyId);
     const weekStart = weekStartParam
       ? getWeekStartMonday(weekStartParam)
@@ -311,6 +321,7 @@ export class StaffSchedulingService {
         where: {
           companyId,
           date: Between(parseCalendarDate(weekStart), parseCalendarDate(weekEnd)),
+          ...(branchId ? { branchId } : {}),
         },
         relations: ['user'],
       }),
@@ -318,6 +329,7 @@ export class StaffSchedulingService {
         where: {
           companyId,
           date: Between(parseCalendarDate(weekStart), parseCalendarDate(weekEnd)),
+          ...(branchId ? { branchId } : {}),
         },
       }),
       this.companyRepository.findOne({
@@ -389,6 +401,7 @@ export class StaffSchedulingService {
     user: User,
     weekStartParam: string,
     dto: UpsertWeekAssignmentsDto,
+    branchId?: string,
   ) {
     const company = await this.assertCompanyAccess(user, companyId);
     const weekStart = getWeekStartMonday(weekStartParam);
@@ -406,10 +419,15 @@ export class StaffSchedulingService {
       cell.userIds = cell.userIds.filter((uid) => staffIds.has(uid));
     }
 
+    if (branchId) {
+      await this.assertNoCrossBranchOverlap(companyId, branchId, weekStart, weekEnd, dto);
+    }
+
     const existing = await this.assignmentRepository.find({
       where: {
         companyId,
         date: Between(parseCalendarDate(weekStart), parseCalendarDate(weekEnd)),
+        ...(branchId ? { branchId } : {}),
       },
     });
     const preservedHistory = existing.filter(
@@ -421,10 +439,12 @@ export class StaffSchedulingService {
     await this.assignmentRepository.delete({
       companyId,
       date: Between(parseCalendarDate(weekStart), parseCalendarDate(weekEnd)),
+      ...(branchId ? { branchId } : {}),
     });
     await this.closureRepository.delete({
       companyId,
       date: Between(parseCalendarDate(weekStart), parseCalendarDate(weekEnd)),
+      ...(branchId ? { branchId } : {}),
     });
 
     const assignments: StaffShiftAssignment[] = [];
@@ -435,6 +455,7 @@ export class StaffSchedulingService {
         closures.push(
           this.closureRepository.create({
             companyId,
+            branchId: branchId ?? null,
             date: parseCalendarDate(cell.date) as unknown as Date,
             startTime: cell.startTime,
             endTime: cell.endTime,
@@ -446,6 +467,7 @@ export class StaffSchedulingService {
         assignments.push(
           this.assignmentRepository.create({
             companyId,
+            branchId: branchId ?? null,
             userId,
             date: parseCalendarDate(cell.date) as unknown as Date,
             startTime: cell.startTime,
@@ -463,6 +485,7 @@ export class StaffSchedulingService {
         preservedHistory.map((assignment) =>
           this.assignmentRepository.create({
             companyId,
+            branchId: assignment.branchId ?? branchId ?? null,
             userId: assignment.userId,
             date: assignment.date,
             startTime: assignment.startTime,
@@ -475,11 +498,16 @@ export class StaffSchedulingService {
 
     if (dto.note !== undefined) {
       let noteEntity = await this.weekNoteRepository.findOne({
-        where: { companyId, weekStartDate: parseCalendarDate(weekStart) as unknown as Date },
+        where: {
+          companyId,
+          weekStartDate: parseCalendarDate(weekStart) as unknown as Date,
+          ...(branchId ? { branchId } : {}),
+        },
       });
       if (!noteEntity) {
         noteEntity = this.weekNoteRepository.create({
           companyId,
+          branchId: branchId ?? null,
           weekStartDate: parseCalendarDate(weekStart) as unknown as Date,
         });
       }
@@ -487,7 +515,7 @@ export class StaffSchedulingService {
       await this.weekNoteRepository.save(noteEntity);
     }
 
-    return this.getWeekAssignments(companyId, user, weekStart);
+    return this.getWeekAssignments(companyId, user, weekStart, branchId);
   }
 
   async copyPreviousWeek(
@@ -495,6 +523,7 @@ export class StaffSchedulingService {
     user: User,
     targetWeekStart: string,
     sourceWeekStart: string,
+    branchId?: string,
   ) {
     const target = getWeekStartMonday(targetWeekStart);
     const source = getWeekStartMonday(sourceWeekStart);
@@ -508,16 +537,22 @@ export class StaffSchedulingService {
         where: {
           companyId,
           date: Between(parseCalendarDate(source), parseCalendarDate(sourceEnd)),
+          ...(branchId ? { branchId } : {}),
         },
       }),
       this.closureRepository.find({
         where: {
           companyId,
           date: Between(parseCalendarDate(source), parseCalendarDate(sourceEnd)),
+          ...(branchId ? { branchId } : {}),
         },
       }),
       this.weekNoteRepository.findOne({
-        where: { companyId, weekStartDate: parseCalendarDate(source) as unknown as Date },
+        where: {
+          companyId,
+          weekStartDate: parseCalendarDate(source) as unknown as Date,
+          ...(branchId ? { branchId } : {}),
+        },
       }),
     ]);
 
@@ -582,7 +617,47 @@ export class StaffSchedulingService {
     return this.upsertWeekAssignments(companyId, user, target, {
       note: sourceNote?.note,
       cells,
+    }, branchId);
+  }
+
+  private rangesOverlap(aStart: string, aEnd: string, bStart: string, bEnd: string): boolean {
+    return aStart < bEnd && bStart < aEnd;
+  }
+
+  private async assertNoCrossBranchOverlap(
+    companyId: string,
+    branchId: string,
+    weekStart: string,
+    weekEnd: string,
+    dto: UpsertWeekAssignmentsDto,
+  ) {
+    const userIds = [...new Set(dto.cells.flatMap((cell) => cell.isClosed ? [] : cell.userIds))];
+    if (userIds.length === 0) return;
+    const others = await this.assignmentRepository.find({
+      where: {
+        companyId,
+        userId: In(userIds),
+        date: Between(parseCalendarDate(weekStart), parseCalendarDate(weekEnd)),
+      },
     });
+    for (const cell of dto.cells) {
+      if (cell.isClosed) continue;
+      for (const userId of cell.userIds) {
+        const clash = others.find(
+          (other) =>
+            other.branchId &&
+            other.branchId !== branchId &&
+            other.userId === userId &&
+            toCalendarDateString(other.date) === cell.date &&
+            this.rangesOverlap(cell.startTime, cell.endTime, other.startTime, other.endTime),
+        );
+        if (clash) {
+          throw new BadRequestException(
+            'Esa persona ya tiene un turno que se superpone en otra sede',
+          );
+        }
+      }
+    }
   }
 
   private async getAssignmentsForYear(companyId: string, year: number) {
@@ -638,6 +713,12 @@ export class StaffSchedulingService {
         months.forEach((h, i) => {
           monthTotals[i] += h;
         });
+        const branchHours = new Map<string, number>();
+        for (const a of assignments) {
+          if (a.userId !== s.id) continue;
+          const key = a.branchId ?? 'none';
+          branchHours.set(key, (branchHours.get(key) ?? 0) + (a.durationMinutes || 60) / 60);
+        }
         return {
           userId: s.id,
           name: formatStaffDisplayNameFromParts(s.name, s.lastName),
@@ -645,6 +726,10 @@ export class StaffSchedulingService {
           membershipStatus: statusByUser.get(s.id) ?? StaffMembershipStatus.ACTIVE,
           months: Object.fromEntries(months.map((h, i) => [i + 1, h > 0 ? h : null])),
           total: total > 0 ? total : null,
+          byBranch: [...branchHours.entries()].map(([id, hours]) => ({
+            branchId: id === 'none' ? null : id,
+            hours,
+          })),
         };
       });
 
@@ -954,6 +1039,7 @@ export class StaffSchedulingService {
           parseCalendarDate(grid.weekEnd),
         ),
       },
+      relations: ['branch'],
     });
 
     const profile = await this.compensationRepository.findOne({
@@ -965,6 +1051,8 @@ export class StaffSchedulingService {
       startTime: a.startTime,
       endTime: a.endTime,
       durationMinutes: a.durationMinutes || 60,
+      branchId: a.branchId ?? null,
+      branchName: a.branch?.name ?? null,
     }));
 
     return {

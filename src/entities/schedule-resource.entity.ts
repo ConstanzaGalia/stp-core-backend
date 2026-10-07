@@ -10,6 +10,7 @@ import {
 import { Company } from './company.entity';
 import { Division } from './division.entity';
 import { ScheduleResourceType } from '../common/enums/schedule-resource-type.enum';
+import { Branch } from './branch.entity';
 
 @Entity('schedule_resource')
 export class ScheduleResource {
@@ -41,6 +42,13 @@ export class ScheduleResource {
 
   @Column({ name: 'company_id' })
   companyId: string;
+
+  @ManyToOne(() => Branch, { nullable: true, onDelete: 'SET NULL' })
+  @JoinColumn({ name: 'branch_id' })
+  branch: Branch | null;
+
+  @Column({ name: 'branch_id', type: 'uuid', nullable: true })
+  branchId: string | null;
 
   @ManyToOne(() => Division, { nullable: true, onDelete: 'SET NULL' })
   @JoinColumn({ name: 'division_id' })
