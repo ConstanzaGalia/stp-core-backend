@@ -29,6 +29,88 @@ import {
 } from './exercise.constants';
 import { ExerciseWithAccess } from './exercise.types';
 
+const ACCENT_FROM = 'áàäâãéèëêíìïîóòöôõúùüûñç';
+const ACCENT_TO = 'aaaaaeeeeiiiiooooouuuunc';
+
+const SEARCH_STOPWORDS = new Set([
+  'a',
+  'con',
+  'de',
+  'del',
+  'el',
+  'en',
+  'la',
+  'las',
+  'los',
+  'y',
+]);
+
+const PHASES_EXCLUDE_EXPLOSIVE = new Set([
+  'adaptacion',
+  'hipertrofia_1',
+  'hipertrofia_2',
+  'fuerza',
+]);
+
+const EXPLOSIVE_CATEGORY_TOKENS = [
+  'pliometric',
+  'balistic',
+  'olimpic',
+  'levantamiento olimp',
+];
+
+const EXPLOSIVE_PATTERN_TOKENS = [
+  'derivado olimp',
+  'olimpic',
+  'derivado levantamiento',
+  'dlp',
+  'halterofil',
+  'balist',
+  'salto',
+  'rebot',
+  'pliometric',
+];
+
+export type ExerciseListFilters = {
+  search?: string;
+  categoryId?: number;
+  patternId?: number;
+  maxScore?: number;
+  phase?: string;
+  sort?: 'name' | 'category' | 'score' | 'pattern';
+  dir?: 'asc' | 'desc';
+};
+
+export type ExerciseListStats = {
+  total: number;
+  averageScore: number;
+  withVideo: number;
+  withSafetyTags: number;
+};
+
+function foldSql(expression: string): string {
+  return `translate(lower(coalesce(${expression}, '')), '${ACCENT_FROM}', '${ACCENT_TO}')`;
+}
+
+function escapeLike(value: string): string {
+  return value.replace(/[\\%_]/g, (char) => `\\${char}`);
+}
+
+function searchTokens(search: string): string[] {
+  const folded = search
+    .normalize('NFD')
+    .replace(/[\u0300-\u036f]/g, '')
+    .toLowerCase()
+    .trim();
+  const tokens = folded
+    .split(/[\s:,;/|]+/)
+    .map((token) => token.trim())
+    .filter(Boolean);
+  if (tokens.length <= 1) return tokens;
+  const withoutStopwords = tokens.filter((token) => !SEARCH_STOPWORDS.has(token));
+  return withoutStopwords.length > 0 ? withoutStopwords : tokens;
+}
+
 @Injectable()
 export class ExerciseService {
   private readonly logger = new Logger(ExerciseService.name);
@@ -227,43 +309,186 @@ export class ExerciseService {
     }
   }
 
+  private applyListFilters(
+    qb: SelectQueryBuilder<Exercise>,
+    filters: ExerciseListFilters,
+  ): void {
+    const tokens = searchTokens(filters.search ?? '');
+    tokens.forEach((token, index) => {
+      const param = `searchToken${index}`;
+      const haystack = [
+        foldSql('exercise.name'),
+        foldSql('exercise.description'),
+        foldSql('category.name'),
+        foldSql('movementPattern.name'),
+      ].join(" || ' ' || ");
+      qb.andWhere(`${haystack} LIKE :${param} ESCAPE '\\'`, {
+        [param]: `%${escapeLike(token)}%`,
+      });
+    });
+
+    if (filters.categoryId) {
+      qb.andWhere('category.id = :categoryId', {
+        categoryId: filters.categoryId,
+      });
+    }
+
+    if (filters.patternId) {
+      qb.andWhere('movementPattern.id = :patternId', {
+        patternId: filters.patternId,
+      });
+    }
+
+    if (filters.maxScore !== undefined && !Number.isNaN(filters.maxScore)) {
+      qb.andWhere('COALESCE(exercise.score_total, 0) <= :maxScore', {
+        maxScore: filters.maxScore,
+      });
+    }
+
+    if (filters.phase) {
+      this.applyPhaseFilter(qb, filters.phase);
+    }
+  }
+
+  private applyPhaseFilter(
+    qb: SelectQueryBuilder<Exercise>,
+    phase: string,
+  ): void {
+    const tokenExpr = foldSql('btrim(phase_token.token)');
+    qb.andWhere(
+      `(
+        exercise.fase_recomendada IS NULL
+        OR btrim(exercise.fase_recomendada) = ''
+        OR NOT EXISTS (
+          SELECT 1
+          FROM unnest(string_to_array(exercise.fase_recomendada, ',')) AS phase_token(token)
+          WHERE btrim(phase_token.token) <> ''
+        )
+        OR EXISTS (
+          SELECT 1
+          FROM unnest(string_to_array(exercise.fase_recomendada, ',')) AS phase_token(token)
+          WHERE btrim(phase_token.token) <> ''
+            AND (
+              ${tokenExpr} = :phaseKey
+              OR (:matchHipertrofia = true AND ${tokenExpr} = 'hipertrofia')
+              OR (:matchFuerza = true AND ${tokenExpr} = 'fuerza')
+              OR (:matchResistencia = true AND ${tokenExpr} LIKE '%resistencia%')
+            )
+        )
+      )`,
+      {
+        phaseKey: phase,
+        matchHipertrofia: phase.startsWith('hipertrofia'),
+        matchFuerza: phase.startsWith('fuerza'),
+        matchResistencia: phase === 'resistencia',
+      },
+    );
+
+    if (!PHASES_EXCLUDE_EXPLOSIVE.has(phase)) return;
+
+    const explosive = [
+      ...EXPLOSIVE_CATEGORY_TOKENS.map(
+        (token) => `${foldSql('category.name')} LIKE '%${token}%'`,
+      ),
+      ...EXPLOSIVE_PATTERN_TOKENS.map(
+        (token) => `${foldSql('movementPattern.name')} LIKE '%${token}%'`,
+      ),
+    ].join(' OR ');
+    qb.andWhere(`NOT (${explosive})`);
+  }
+
+  private applyListOrder(
+    qb: SelectQueryBuilder<Exercise>,
+    filters: ExerciseListFilters,
+  ): void {
+    const direction = filters.dir === 'desc' ? 'DESC' : 'ASC';
+    if (filters.sort === 'category') {
+      qb.addSelect('category.name', 'category_name');
+      qb.orderBy('category_name', direction, 'NULLS LAST');
+    } else if (filters.sort === 'pattern') {
+      qb.addSelect('movementPattern.name', 'pattern_name');
+      qb.orderBy('pattern_name', direction, 'NULLS LAST');
+    } else if (filters.sort === 'score') {
+      qb.orderBy('exercise.scoreTotal', direction);
+    } else {
+      qb.orderBy('exercise.name', direction);
+    }
+    qb.addOrderBy('exercise.id', 'ASC');
+  }
+
+  private async loadListStats(
+    qb: SelectQueryBuilder<Exercise>,
+  ): Promise<ExerciseListStats> {
+    const raw = await qb
+      .clone()
+      .select('COUNT(DISTINCT exercise.id)', 'total')
+      .addSelect('AVG(COALESCE(exercise.score_total, 0))', 'averageScore')
+      .addSelect(
+        `COUNT(DISTINCT CASE WHEN NULLIF(btrim(COALESCE(exercise.video, '')), '') IS NOT NULL THEN exercise.id END)`,
+        'withVideo',
+      )
+      .addSelect(
+        `COUNT(DISTINCT CASE WHEN EXISTS (
+          SELECT 1 FROM exercise_safety_tags est WHERE est."exerciseId" = exercise.id
+        ) THEN exercise.id END)`,
+        'withSafetyTags',
+      )
+      .getRawOne<Record<string, string | null>>();
+
+    const read = (key: string) => {
+      const value = Number(raw?.[key] ?? raw?.[key.toLowerCase()] ?? 0);
+      return Number.isFinite(value) ? value : 0;
+    };
+
+    return {
+      total: read('total'),
+      averageScore: read('averageScore'),
+      withVideo: read('withVideo'),
+      withSafetyTags: read('withSafetyTags'),
+    };
+  }
+
   public async findAll(
     user: User,
     companyId: string,
     offset: number,
     limit: number,
     path: string,
-    search?: string,
+    filters: ExerciseListFilters = {},
   ): Promise<PaginatedListDto<ExerciseWithAccess>> {
     await this.assertCompanyAccess(user, companyId);
 
     const qb = this.exerciseRepository
       .createQueryBuilder('exercise')
-      .leftJoinAndSelect('exercise.primaryCategory', 'category')
-      .leftJoinAndSelect('exercise.movementPattern', 'movementPattern')
-      .leftJoinAndSelect('exercise.safetyTags', 'safetyTag')
-      .leftJoinAndSelect('exercise.tags', 'tag');
+      .leftJoin('exercise.primaryCategory', 'category')
+      .leftJoin('exercise.movementPattern', 'movementPattern');
 
     this.applyCompanyScope(qb, companyId);
+    this.applyListFilters(qb, filters);
+    const stats = await this.loadListStats(qb);
+    this.applyListOrder(qb, filters);
 
-    const searchTerm = search?.trim();
-    if (searchTerm) {
-      qb.andWhere(
-        '(LOWER(exercise.name) LIKE LOWER(:search) OR LOWER(COALESCE(exercise.description, \'\')) LIKE LOWER(:search))',
-        { search: `%${searchTerm}%` },
-      );
-    }
+    const count = stats.total;
+    const page = await qb.clone().skip(offset).take(limit).getMany();
+    const ids = page.map((exercise) => exercise.id);
 
-    qb.orderBy('exercise.name', 'ASC');
+    const exercises = ids.length
+      ? await this.exerciseRepository.find({
+          where: { id: In(ids) },
+          relations: ['primaryCategory', 'movementPattern', 'safetyTags', 'tags'],
+        })
+      : [];
+    const byId = new Map(exercises.map((exercise) => [exercise.id, exercise]));
+    const ordered = ids
+      .map((id) => byId.get(id))
+      .filter((exercise): exercise is Exercise => Boolean(exercise));
 
-    const [exercises, count] = await qb
-      .skip(offset)
-      .take(limit)
-      .getManyAndCount();
-
-    return new PaginatedListDto(
-      exercises.map((e) => this.enrichExercise(e, companyId)),
-      this.pagination.buildPaginationDto(limit, offset, count, path),
+    return Object.assign(
+      new PaginatedListDto(
+        ordered.map((exercise) => this.enrichExercise(exercise, companyId)),
+        this.pagination.buildPaginationDto(limit, offset, count, path),
+      ),
+      { stats },
     );
   }
 

@@ -89,7 +89,15 @@ export class ExerciseController {
       query.offset || 0,
       query.limit || 15,
       request.url,
-      query.search,
+      {
+        search: query.search,
+        categoryId: query.categoryId,
+        patternId: query.patternId,
+        maxScore: query.maxScore,
+        phase: query.phase,
+        sort: query.sort,
+        dir: query.dir,
+      },
     );
   }
 

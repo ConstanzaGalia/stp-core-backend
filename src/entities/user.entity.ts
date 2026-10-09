@@ -163,6 +163,14 @@ export class User {
   @Column({ name: 'club_name', nullable: true, length: 200 })
   clubName?: string;
 
+  /** Nombre y teléfono de quien contactar ante una emergencia. */
+  @Column({ name: 'emergency_contact', nullable: true, length: 200 })
+  emergencyContact?: string | null;
+
+  /** Obra social o prepaga del atleta. */
+  @Column({ name: 'obra_social', nullable: true, length: 200 })
+  obraSocial?: string | null;
+
   /** Participante cargado solo para evaluaciones (feria/externo); no aparece en roster de alumnos hasta promoción. */
   @Column({ name: 'evaluation_portal_only', type: 'boolean', default: false })
   evaluationPortalOnly?: boolean;

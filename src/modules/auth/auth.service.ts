@@ -498,6 +498,8 @@ export class AuthService {
       sexo: user.sexo ?? null,
       primarySport: user.primarySport ?? null,
       clubName: user.clubName ?? null,
+      emergencyContact: user.emergencyContact ?? null,
+      obraSocial: user.obraSocial ?? null,
       evaluationPortalOnly: user.evaluationPortalOnly === true,
       createdAt: user.created_at,
       updatedAt: user.updated_at,
@@ -699,6 +701,14 @@ export class AuthService {
       const trimmed = updateUserProfileDto.dni.trim();
       user.dni = trimmed || null;
     }
+    if (updateUserProfileDto.emergencyContact !== undefined) {
+      const trimmed = updateUserProfileDto.emergencyContact.trim();
+      user.emergencyContact = trimmed || null;
+    }
+    if (updateUserProfileDto.obraSocial !== undefined) {
+      const trimmed = updateUserProfileDto.obraSocial.trim();
+      user.obraSocial = trimmed || null;
+    }
 
     // Guardar los cambios
     const updatedUser = await this.userRepository.save(user);
@@ -717,6 +727,8 @@ export class AuthService {
       imageProfile: updatedUser.imageProfile,
       dateOfBirth: updatedUser.dateOfBirth,
       dni: updatedUser.dni ?? null,
+      emergencyContact: updatedUser.emergencyContact ?? null,
+      obraSocial: updatedUser.obraSocial ?? null,
       createdAt: updatedUser.created_at,
       updatedAt: updatedUser.updated_at,
     };

@@ -1,4 +1,4 @@
-import { IsString, IsOptional, IsDateString, IsEmail } from 'class-validator';
+import { IsString, IsOptional, IsDateString, IsEmail, MaxLength } from 'class-validator';
 
 export class UpdateUserProfileDto {
   @IsString()
@@ -36,4 +36,14 @@ export class UpdateUserProfileDto {
   @IsString()
   @IsOptional()
   dni?: string;
+
+  @IsString()
+  @IsOptional()
+  @MaxLength(200)
+  emergencyContact?: string;
+
+  @IsString()
+  @IsOptional()
+  @MaxLength(200)
+  obraSocial?: string;
 }
