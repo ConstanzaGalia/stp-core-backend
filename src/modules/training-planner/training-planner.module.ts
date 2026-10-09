@@ -19,6 +19,7 @@ import { TrainingPlannerController } from './training-planner.controller';
 import { CompanyModule } from '../company/company.module';
 import { AthletesModule } from '../athletes/athletes.module';
 import { InjuriesModule } from '../injuries/injuries.module';
+import { PaymentsModule } from '../payments/payments.module';
 
 @Module({
   imports: [
@@ -41,6 +42,7 @@ import { InjuriesModule } from '../injuries/injuries.module';
     CompanyModule,
     AthletesModule,
     forwardRef(() => InjuriesModule),
+    forwardRef(() => PaymentsModule),
   ],
   providers: [TrainingPlannerService],
   controllers: [TrainingPlannerController],

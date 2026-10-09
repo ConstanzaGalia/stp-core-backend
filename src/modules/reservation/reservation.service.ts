@@ -12,6 +12,8 @@ import { UserPaymentSubscription } from 'src/entities/user-payment-subscription.
 import { AthleteInvitation, InvitationStatus } from 'src/entities/athlete-invitation.entity';
 import { Repository, Between, In, IsNull } from 'typeorm';
 import { UserRole } from 'src/common/enums/enums';
+import { User } from 'src/entities/user.entity';
+import { STPSessionInstance } from 'src/entities/stp-session-instance.entity';
 import { CreateRecurringReservationDto, RecurringFrequency, RecurringEndType } from './dto/create-recurring-reservation.dto';
 import { CreateScheduleResourceDto, UpdateScheduleResourceDto } from './dto/schedule-resource.dto';
 import { ScheduleResourceType } from 'src/common/enums/schedule-resource-type.enum';
@@ -73,6 +75,8 @@ export class ReservationsService {
     private readonly availableClassRepository: Repository<AvailableClass>,
     @InjectRepository(AthleteInvitation)
     private readonly athleteInvitationRepository: Repository<AthleteInvitation>,
+    @InjectRepository(STPSessionInstance)
+    private readonly sessionRepository: Repository<STPSessionInstance>,
     private readonly paymentsService: PaymentsService,
   ) {}
 
@@ -494,6 +498,18 @@ export class ReservationsService {
 
       const savedReservation = await this.reservationRepository.save(reservation);
       this.logger.log(`createReservation -> reservation created id=${savedReservation.id}`);
+
+      // Si ese día ya tiene un presente sin reserva, el crédito ya está pago.
+      const dayCoveredByWalkIn = await this.paymentsService.hasWalkInUsageOnDate(
+        userId,
+        timeSlot.date,
+      );
+      if (dayCoveredByWalkIn) {
+        this.logger.log(
+          `createReservation -> walk-in already covers ${toDateOnlyKey(timeSlot.date)}, skipping class usage`,
+        );
+        return this.toReservationCreateResponse(savedReservation);
+      }
 
       // 5. Intentar consumir una clase disponible antes de registrar uso del período
       const slotDate = new Date(timeSlot.date);
@@ -1369,7 +1385,11 @@ export class ReservationsService {
    * @param attendanceStatus Estado de asistencia (true = presente, false = ausente, null = sin marcar)
    * @returns Reserva actualizada
    */
-  async updateAttendance(reservationId: string, attendanceStatus: boolean | null): Promise<Reservation> {
+  async updateAttendance(
+    reservationId: string,
+    attendanceStatus: boolean | null,
+    actor?: Pick<User, 'id' | 'name' | 'lastName'>,
+  ): Promise<Reservation> {
     const reservation = await this.reservationRepository.findOne({
       where: { id: reservationId },
       relations: ['user', 'timeSlot'],
@@ -1413,7 +1433,64 @@ export class ReservationsService {
 
     this.logger.log(`[updateAttendance] Reservation ${reservationId} updated: attendanceStatus=${attendanceStatus}`);
 
+    await this.syncPlannerSessionsFromReservation(
+      reservation.user.id,
+      timeSlot.date,
+      attendanceStatus,
+      actor,
+    );
+
     return updatedReservation;
+  }
+
+  /**
+   * Refleja la asistencia del turno en las sesiones de planificación del mismo día.
+   * No vuelve a escribir reservas: el calendario de turnos ya guardó el estado.
+   */
+  private async syncPlannerSessionsFromReservation(
+    athleteId: string,
+    slotDate: Date | string,
+    attendanceStatus: boolean | null,
+    actor?: Pick<User, 'id' | 'name' | 'lastName'>,
+  ): Promise<void> {
+    const dateKey = toDateOnlyKey(slotDate);
+    if (!dateKey) return;
+
+    const completion =
+      attendanceStatus === true ? 'completed' : attendanceStatus === false ? 'skipped' : 'pending';
+
+    try {
+      const sessions = await this.sessionRepository
+        .createQueryBuilder('session')
+        .where('session.athleteId = :athleteId', { athleteId })
+        .andWhere(
+          '(session.scheduledDate = :dateKey OR session.scheduledDate LIKE :prefix)',
+          { dateKey, prefix: `${dateKey}%` },
+        )
+        .getMany();
+
+      if (sessions.length === 0) return;
+
+      const markedAt = new Date();
+      const markerName = actor ? `${actor.name ?? ''} ${actor.lastName ?? ''}`.trim() : '';
+      for (const session of sessions) {
+        session.athleteCompletionStatus = completion;
+        session.attendanceMarkedAt = markedAt;
+        session.attendanceSource = 'coach';
+        if (actor?.id) session.attendanceMarkedByUserId = actor.id;
+        if (markerName) session.attendanceMarkedByName = markerName;
+      }
+      await this.sessionRepository.save(sessions);
+      this.logger.log(
+        `[updateAttendance] Synced ${sessions.length} planner sessions for athlete ${athleteId} on ${dateKey} -> ${completion}`,
+      );
+    } catch (error) {
+      this.logger.warn(
+        `[updateAttendance] Failed to sync planner sessions for athlete ${athleteId} on ${dateKey}: ${
+          error instanceof Error ? error.message : String(error)
+        }`,
+      );
+    }
   }
 
   /**

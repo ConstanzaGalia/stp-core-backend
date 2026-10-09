@@ -24,6 +24,7 @@ import {
 } from '../../entities/fixed-expense-month-status.entity';
 import { FixedExpenseTemplate } from '../../entities/fixed-expense-template.entity';
 import { Reservation } from '../../entities/reservation.entity';
+import { STPSessionInstance } from '../../entities/stp-session-instance.entity';
 import { TimeSlot } from '../../entities/timeSlot.entity';
 import { AthleteSchedule, ScheduleStatus } from '../../entities/athlete-schedule.entity';
 import { ScheduleConfig } from '../../entities/schedule-config.entity';
@@ -920,6 +921,96 @@ export class PaymentsService {
     await this.renewWeeklyCounters(updatedSubscription);
 
     return savedClassUsage;
+  }
+
+  /**
+   * Presente sin reserva: un solo walk-in por atleta y fecha.
+   * Si ya existe, no vuelve a descontar.
+   */
+  async ensureWalkInUsage(
+    userId: string,
+    usageDate: Date | string,
+  ): Promise<'consumed' | 'unchanged' | 'unavailable'> {
+    const dateKey = toCalendarDateString(usageDate);
+    const existing = await this.findWalkInUsages(userId, dateKey);
+    if (existing.length > 0) return 'unchanged';
+
+    const subscription = await this.getAccessibleSubscriptionForUser(
+      userId,
+      undefined,
+      new Date(`${dateKey}T12:00:00.000Z`),
+    );
+    if (!subscription) return 'unavailable';
+
+    await this.registerClassUsage(subscription.id, {
+      type: ClassUsageType.WALK_IN,
+      usageDate: new Date(`${dateKey}T12:00:00.000Z`),
+      notes: 'Asistencia sin reserva',
+    });
+    return 'consumed';
+  }
+
+  /**
+   * Devuelve el crédito del walk-in de ese día, si existe.
+   */
+  async revertWalkInUsage(
+    userId: string,
+    usageDate: Date | string,
+  ): Promise<'restored' | 'unchanged'> {
+    const dateKey = toCalendarDateString(usageDate);
+    const existing = await this.findWalkInUsages(userId, dateKey);
+    if (existing.length === 0) return 'unchanged';
+
+    const countBySubscription = new Map<string, number>();
+    for (const usage of existing) {
+      const subscriptionId = usage.subscription?.id;
+      if (!subscriptionId) continue;
+      countBySubscription.set(subscriptionId, (countBySubscription.get(subscriptionId) ?? 0) + 1);
+    }
+
+    await this.classUsageRepository.remove(existing);
+
+    for (const [subscriptionId, count] of countBySubscription) {
+      await this.restorePeriodClassCredits(subscriptionId, count);
+    }
+
+    return 'restored';
+  }
+
+  async hasWalkInUsageOnDate(userId: string, usageDate: Date | string): Promise<boolean> {
+    const dateKey = toCalendarDateString(usageDate);
+    const existing = await this.findWalkInUsages(userId, dateKey);
+    return existing.length > 0;
+  }
+
+  private async findWalkInUsages(userId: string, dateKey: string): Promise<ClassUsage[]> {
+    return this.classUsageRepository
+      .createQueryBuilder('usage')
+      .innerJoinAndSelect('usage.user', 'user')
+      .leftJoinAndSelect('usage.subscription', 'subscription')
+      .where('user.id = :userId', { userId })
+      .andWhere('usage.type = :type', { type: ClassUsageType.WALK_IN })
+      .andWhere('usage.usageDate = :dateKey', { dateKey })
+      .getMany();
+  }
+
+  private async restorePeriodClassCredits(subscriptionId: string, count: number): Promise<void> {
+    if (count <= 0) return;
+    const subscription = await this.subscriptionRepository.findOne({
+      where: { id: subscriptionId },
+      relations: ['paymentPlan'],
+    });
+    if (!subscription) return;
+
+    const maxClasses = subscription.paymentPlan?.maxClassesPerPeriod ?? 0;
+    const previousUsed = subscription.classesUsedThisPeriod ?? 0;
+    const previousRemaining = subscription.classesRemainingThisPeriod ?? 0;
+    subscription.classesUsedThisPeriod = Math.max(0, previousUsed - count);
+    subscription.classesRemainingThisPeriod = maxClasses > 0
+      ? Math.min(maxClasses, previousRemaining + count)
+      : previousRemaining + count;
+    await this.subscriptionRepository.save(subscription);
+    await this.refreshWeeklyClassCounters(subscriptionId);
   }
 
   async getClassStatus(subscriptionId: string): Promise<any> {
@@ -2838,6 +2929,7 @@ export class PaymentsService {
       // Obtener AthleteInvitation y su repositorio
       const { AthleteInvitation } = await import('../../entities/athlete-invitation.entity');
       const athleteInvitationRepository = this.subscriptionRepository.manager.getRepository(AthleteInvitation);
+      const sessionRepository = this.subscriptionRepository.manager.getRepository(STPSessionInstance);
       
       // Obtener ReservationsService usando import dinámico
       const { ReservationsService } = await import('../reservation/reservation.service');
@@ -2858,6 +2950,7 @@ export class PaymentsService {
         waitlistRepository,
         availableClassRepository,
         athleteInvitationRepository,
+        sessionRepository,
         this // paymentsService - pasar this como referencia
       );
       
@@ -3019,12 +3112,14 @@ export class PaymentsService {
       const availableClassRepository = this.subscriptionRepository.manager.getRepository(AvailableClass);
       const { AthleteInvitation } = await import('../../entities/athlete-invitation.entity');
       const athleteInvitationRepository = this.subscriptionRepository.manager.getRepository(AthleteInvitation);
+      const sessionRepository = this.subscriptionRepository.manager.getRepository(STPSessionInstance);
       const { ReservationsService } = await import('../reservation/reservation.service');
       const reservationsService = new ReservationsService(
         reservationRepository, timeSlotRepository, this.companyRepository,
         scheduleConfigRepository, scheduleResourceRepository, scheduleExceptionRepository, timeSlotGenerationRepository,
         athleteScheduleRepository, this.subscriptionRepository, classUsageRepository,
-        this.paymentRepository, waitlistRepository, availableClassRepository, athleteInvitationRepository, this
+        this.paymentRepository, waitlistRepository, availableClassRepository, athleteInvitationRepository,
+        sessionRepository, this
       );
       const periodStartDate = new Date(subscription.periodStartDate);
       periodStartDate.setHours(0, 0, 0, 0);

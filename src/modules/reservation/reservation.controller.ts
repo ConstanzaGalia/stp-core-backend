@@ -212,7 +212,11 @@ export class ReservationsController {
       throw new BadRequestException('attendanceStatus debe ser true, false o null');
     }
 
-    return this.reservationsService.updateAttendance(reservationId, body.attendanceStatus);
+    return this.reservationsService.updateAttendance(
+      reservationId,
+      body.attendanceStatus,
+      user,
+    );
   }
 
   @Get('schedule-config-status/:companyId')

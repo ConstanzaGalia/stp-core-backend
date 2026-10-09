@@ -28,6 +28,7 @@ import { TimeSlot } from 'src/entities/timeSlot.entity';
 import { calendarDateInArgentina, toDateOnlyKey } from 'src/common/utils/date-only.util';
 import { resolveCoachDivisionScope } from 'src/common/helpers/division-scope.helper';
 import { Company } from 'src/entities/company.entity';
+import { PaymentsService } from '../payments/payments.service';
 import { Division } from 'src/entities/division.entity';
 import { SubscriptionSuspension } from 'src/entities/subscription-suspension.entity';
 import {
@@ -91,6 +92,14 @@ function isStaffUser(user: User): boolean {
 function formatStaffDisplayName(user: User): string {
   return `${user.name} ${user.lastName}`.trim();
 }
+
+type WalkInCreditResult = 'consumed' | 'restored' | 'unchanged' | 'unavailable';
+
+type AttendanceSyncResult = {
+  status: 'synced' | 'no_reservation' | 'sync_failed';
+  reservationsUpdated: number;
+  walkInCredit?: WalkInCreditResult;
+};
 
 /** Quita athleteCompletionStatus de bloques para comparar contenido de rutina. */
 function stripCompletionFromBlocks(blocks: unknown): unknown {
@@ -298,6 +307,8 @@ export class TrainingPlannerService {
     private readonly athletesService: AthletesService,
     @Inject(forwardRef(() => InjuriesService))
     private readonly injuriesService: InjuriesService,
+    @Inject(forwardRef(() => PaymentsService))
+    private readonly paymentsService: PaymentsService,
   ) {}
 
   private isStaffRole(role: UserRole): boolean {
@@ -801,9 +812,7 @@ export class TrainingPlannerService {
     const saved = await this.sessionRepo.save(entity);
     const serialized = this.serializeSession(saved, { includePrivate: isStaff });
 
-    let attendanceSync:
-      | { status: 'synced' | 'no_reservation' | 'sync_failed'; reservationsUpdated: number }
-      | undefined;
+    let attendanceSync: AttendanceSyncResult | undefined;
 
     if (isStaff && completionChanged) {
       attendanceSync = await this.syncAttendanceFromSessionCompletion(
@@ -857,10 +866,7 @@ export class TrainingPlannerService {
     athleteId: string,
     scheduledDate: string,
     completionStatus: string,
-  ): Promise<{
-    status: 'synced' | 'no_reservation' | 'sync_failed';
-    reservationsUpdated: number;
-  }> {
+  ): Promise<AttendanceSyncResult> {
     const mappedAttendance: boolean | null =
       completionStatus === 'completed'
         ? true
@@ -887,7 +893,12 @@ export class TrainingPlannerService {
         .getMany();
 
       if (reservations.length === 0) {
-        return { status: 'no_reservation', reservationsUpdated: 0 };
+        const walkInCredit = await this.applyWalkInForUnreservedDay(
+          athleteId,
+          dateKey,
+          mappedAttendance === true,
+        );
+        return { status: 'no_reservation', reservationsUpdated: 0, walkInCredit };
       }
 
       // Delta de attendedCount por timeslot (solo cuando cambia a/de true).
@@ -931,6 +942,44 @@ export class TrainingPlannerService {
         }`,
       );
       return { status: 'sync_failed', reservationsUpdated: 0 };
+    }
+  }
+
+  /**
+   * Sin reserva, el presente descuenta un walk-in del día.
+   * Se devuelve solo si ninguna sesión de esa fecha queda en completed.
+   */
+  private async applyWalkInForUnreservedDay(
+    athleteId: string,
+    dateKey: string,
+    markedPresent: boolean,
+  ): Promise<WalkInCreditResult> {
+    try {
+      if (markedPresent) {
+        const result = await this.paymentsService.ensureWalkInUsage(athleteId, dateKey);
+        return result === 'consumed' ? 'consumed' : result === 'unavailable' ? 'unavailable' : 'unchanged';
+      }
+
+      const stillCompleted = await this.sessionRepo
+        .createQueryBuilder('session')
+        .where('session.athleteId = :athleteId', { athleteId })
+        .andWhere('session.athleteCompletionStatus = :status', { status: 'completed' })
+        .andWhere(
+          '(session.scheduledDate = :dateKey OR session.scheduledDate LIKE :prefix)',
+          { dateKey, prefix: `${dateKey}%` },
+        )
+        .getCount();
+      if (stillCompleted > 0) return 'unchanged';
+
+      const result = await this.paymentsService.revertWalkInUsage(athleteId, dateKey);
+      return result === 'restored' ? 'restored' : 'unchanged';
+    } catch (error) {
+      this.logger.warn(
+        `[walkIn] Failed for athlete ${athleteId} on ${dateKey}: ${
+          error instanceof Error ? error.message : String(error)
+        }`,
+      );
+      return 'unavailable';
     }
   }
 
@@ -1051,10 +1100,7 @@ export class TrainingPlannerService {
   /** Respuesta mínima del PATCH de asistencia (el FE ya tiene blocks en cache). */
   private serializeSessionCompletionPatch(
     e: STPSessionInstance,
-    attendanceSync?: {
-      status: 'synced' | 'no_reservation' | 'sync_failed';
-      reservationsUpdated: number;
-    },
+    attendanceSync?: AttendanceSyncResult,
   ) {
     return {
       id: e.id,
@@ -2112,9 +2158,7 @@ export class TrainingPlannerService {
     // no de asistencia / progreso del atleta.
     const saved = await this.sessionRepo.save(entity);
 
-    let attendanceSync:
-      | { status: 'synced' | 'no_reservation' | 'sync_failed'; reservationsUpdated: number }
-      | undefined;
+    let attendanceSync: AttendanceSyncResult | undefined;
 
     if (
       data.athleteCompletionStatus != null &&
@@ -2152,9 +2196,7 @@ export class TrainingPlannerService {
     // No actualizar lastSavedBy*: solo refleja ediciones de rutina, no asistencia.
 
     const saved = await this.sessionRepo.save(entity);
-    let attendanceSync:
-      | { status: 'synced' | 'no_reservation' | 'sync_failed'; reservationsUpdated: number }
-      | undefined;
+    let attendanceSync: AttendanceSyncResult | undefined;
 
     if (previous !== athleteCompletionStatus) {
       attendanceSync = await this.syncAttendanceFromSessionCompletion(
