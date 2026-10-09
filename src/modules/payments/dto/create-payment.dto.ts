@@ -14,7 +14,7 @@ export class CreatePaymentDto {
 
   @IsEnum(PaymentConcept)
   @IsOptional()
-  concept?: PaymentConcept; // Por defecto SUBSCRIPTION; usar MATRICULA para matrícula (no genera clases)
+  concept?: PaymentConcept; // Por defecto SUBSCRIPTION. Cualquier otro concepto no mueve el plan ni los créditos.
 
   @IsString()
   @IsOptional()

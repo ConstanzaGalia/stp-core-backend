@@ -22,7 +22,7 @@ export enum PaymentMethod {
   OTHER = 'other'
 }
 
-/** Concepto del pago: cuota de suscripción (genera clases) o matrícula (solo registro, no genera clases). */
+/** Concepto del pago: cuota (genera clases) o matrícula/nutricionista (solo registro). */
 export enum PaymentConcept {
   SUBSCRIPTION = 'subscription',
   MATRICULA = 'matricula',

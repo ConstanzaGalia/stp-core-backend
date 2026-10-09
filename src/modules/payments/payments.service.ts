@@ -1294,19 +1294,16 @@ export class PaymentsService {
     for (const p of payments) {
       const amount = Number(p.amount || 0);
       const currency = normalizeMoneyCurrency(p.currency);
-      if (p.concept === PaymentConcept.MATRICULA) {
-        bump(`matricula:${currency}`, 'matricula', 'Matrícula', currency, amount);
-      } else if (p.concept === PaymentConcept.NUTRICIONISTA) {
-        bump(
-          `nutricionista:${currency}`,
-          'nutricionista',
-          'Nutricionista',
-          currency,
-          amount,
-        );
-      } else {
+      if (!p.concept || p.concept === PaymentConcept.SUBSCRIPTION) {
         const planName = (p.planName || 'Sin plan').trim() || 'Sin plan';
         bump(`plan:${planName}:${currency}`, 'plan', planName, currency, amount);
+      } else {
+        const key = String(p.concept);
+        const labels: Record<string, string> = {
+          matricula: 'Matrícula',
+          nutricionista: 'Nutricionista',
+        };
+        bump(`${key}:${currency}`, key, labels[key] ?? key, currency, amount);
       }
     }
 
@@ -2228,7 +2225,6 @@ export class PaymentsService {
       this.paymentRepository.find({
         where: {
           companyId,
-          concept: Not(PaymentConcept.MATRICULA),
         },
         relations: ['user', 'paymentPlan', 'subscription'],
       }),
@@ -2246,6 +2242,7 @@ export class PaymentsService {
 
     for (const payment of allPayments) {
       if (!payment.user || !payment.dueDate) continue;
+      if (!this.isMonthlySubscriptionConcept(payment.concept)) continue;
       const userId = payment.user.id;
 
       if (hasOutstandingBalance(payment)) {
@@ -2878,8 +2875,8 @@ export class PaymentsService {
 
     const payment = await this.paymentRepository.save(pendingPayment);
 
-    // Matrícula solo se registra como pago; no activa suscripción ni genera clases
-    if (payment.concept === PaymentConcept.MATRICULA) {
+    // Solo la mensualidad activa la suscripción y genera clases.
+    if (!this.isMonthlySubscriptionConcept(payment.concept)) {
       return { subscription, payment };
     }
 
@@ -3056,8 +3053,8 @@ export class PaymentsService {
     payment.pendingBalance = pbById > 0 ? pbById : null;
     const savedPayment = await this.paymentRepository.save(payment);
 
-    // Matrícula o pago sin suscripción: solo registrar, no activar ni generar clases
-    if (savedPayment.concept === PaymentConcept.MATRICULA || !payment.subscription) {
+    // Solo la mensualidad cambia el plan, reinicia créditos y regenera turnos.
+    if (!this.isMonthlySubscriptionConcept(savedPayment.concept) || !payment.subscription) {
       return { subscription: payment.subscription ?? null, payment: savedPayment, reservationsGenerated: false };
     }
 
@@ -3145,8 +3142,8 @@ export class PaymentsService {
 
   // ===== GESTIÓN DE PAGOS INDIVIDUALES =====
   /**
-   * Crea un pago manual (ej. Matrícula). Si concept es MATRICULA, al marcarlo como pagado no generará clases.
-   * Para matrícula de alumno nuevo puede no haber subscriptionId (es lo primero que paga).
+   * Crea un pago manual. Solo el concepto mensualidad cambia el plan y genera clases.
+   * Para un alumno nuevo puede no haber subscriptionId.
    */
   async createPayment(companyId: string, createPaymentDto: CreatePaymentDto): Promise<Payment> {
     const [user, company] = await Promise.all([
@@ -3159,9 +3156,11 @@ export class PaymentsService {
     const dueDate = createPaymentDto.dueDate ? this.parseDateOnlyAsNoonUTC(createPaymentDto.dueDate) : new Date();
     const amount = Number(createPaymentDto.amount);
     const concept = createPaymentDto.concept ?? PaymentConcept.SUBSCRIPTION;
+    const ledgerOnly = !this.isMonthlySubscriptionConcept(concept);
 
     let paymentPlanId: string;
     let subscriptionId: string | null = null;
+    let subscriptionPlanId: string | null = null;
 
     if (createPaymentDto.subscriptionId) {
       const subscription = await this.subscriptionRepository.findOne({
@@ -3172,21 +3171,30 @@ export class PaymentsService {
       if (subscription.user.id !== createPaymentDto.userId || subscription.company.id !== companyId) {
         throw new BadRequestException('Subscription does not belong to this user and company');
       }
-      paymentPlanId = subscription.paymentPlan.id;
       subscriptionId = subscription.id;
-    } else {
-      // Matrícula sin suscripción (alumno nuevo): requiere paymentPlanId
-      if (!createPaymentDto.paymentPlanId) {
-        throw new BadRequestException('paymentPlanId is required when there is no subscription (e.g. enrollment fee for new student)');
-      }
+      subscriptionPlanId = subscription.paymentPlan?.id ?? null;
+    }
+
+    // Cualquier concepto que no sea mensualidad guarda el plan elegido en el pago, sin reemplazar el de la suscripción.
+    const requestedPlanId = ledgerOnly
+      ? (createPaymentDto.paymentPlanId ?? subscriptionPlanId)
+      : (subscriptionId ? subscriptionPlanId : createPaymentDto.paymentPlanId);
+
+    if (!requestedPlanId) {
+      throw new BadRequestException('paymentPlanId is required when there is no subscription (e.g. enrollment fee for new student)');
+    }
+
+    if (ledgerOnly || !subscriptionId) {
       const plan = await this.paymentPlanRepository.findOne({
-        where: { id: createPaymentDto.paymentPlanId },
+        where: { id: requestedPlanId },
         relations: ['company']
       });
       if (!plan || plan.company.id !== companyId) {
         throw new BadRequestException('Payment plan not found or does not belong to this company');
       }
       paymentPlanId = plan.id;
+    } else {
+      paymentPlanId = requestedPlanId;
     }
 
     const branchId = await this.resolveHomeBranchId(companyId, createPaymentDto.userId);
@@ -3461,7 +3469,7 @@ export class PaymentsService {
     };
   }
 
-  /** Cuota mensual: no matrícula ni otros conceptos. Pagos viejos sin concept cuentan como cuota. */
+  /** Solo la cuota mensual reinicia plan, créditos y turnos. Pagos viejos sin concept cuentan como cuota. */
   private isMonthlySubscriptionConcept(concept?: PaymentConcept | string | null): boolean {
     return concept == null || concept === PaymentConcept.SUBSCRIPTION;
   }
