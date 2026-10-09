@@ -3,6 +3,7 @@ import { TypeOrmModule } from '@nestjs/typeorm';
 import { PaymentsController } from './payments.controller';
 import { PaymentsPublicController } from './payments-public.controller';
 import { PaymentsService } from './payments.service';
+import { PeriodCreditsService } from './period-credits.service';
 import { Payment } from '../../entities/payment.entity';
 import { PaymentPlan } from '../../entities/payment-plan.entity';
 import { UserPaymentSubscription } from '../../entities/user-payment-subscription.entity';
@@ -50,12 +51,13 @@ import { CompanyModule } from '../company/company.module';
   controllers: [PaymentsController, PaymentsPublicController],
   providers: [
     PaymentsService,
+    PeriodCreditsService,
     {
       provide: 'PAYMENTS_SERVICE',
       useExisting: PaymentsService
     }
   ],
-  exports: [PaymentsService]
+  exports: [PaymentsService, PeriodCreditsService]
 })
 export class PaymentsModule {}
 

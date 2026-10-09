@@ -499,6 +499,12 @@ export class ReservationsService {
       const savedReservation = await this.reservationRepository.save(reservation);
       this.logger.log(`createReservation -> reservation created id=${savedReservation.id}`);
 
+      const syncCredits = () =>
+        this.paymentsService.syncActiveSubscriptionCredits(
+          userId,
+          timeSlot.company?.id ?? null,
+        );
+
       // Si ese día ya tiene un presente sin reserva, el crédito ya está pago.
       const dayCoveredByWalkIn = await this.paymentsService.hasWalkInUsageOnDate(
         userId,
@@ -508,6 +514,7 @@ export class ReservationsService {
         this.logger.log(
           `createReservation -> walk-in already covers ${toDateOnlyKey(timeSlot.date)}, skipping class usage`,
         );
+        await syncCredits();
         return this.toReservationCreateResponse(savedReservation);
       }
 
@@ -538,7 +545,7 @@ export class ReservationsService {
           await this.reservationRepository.save(savedReservation);
           
           this.logger.log(`createReservation -> used available class id=${validAvailableClass.id} instead of period class`);
-          // NO registrar uso de clase del período, ya que se usó una clase disponible
+          await syncCredits();
           return this.toReservationCreateResponse(savedReservation);
         } catch (error) {
           this.logger.error(`createReservation -> error consuming available class: ${error?.message}`, error?.stack);
@@ -546,23 +553,9 @@ export class ReservationsService {
         }
       }
 
-      // 6. Si no hay clase disponible, registrar el uso de clase del período automáticamente al reservar
-      try {
-        await this.paymentsService.registerClassUsage(activeSubscription.id, {
-          type: ClassUsageType.RESERVATION,
-          usageDate: timeSlot.date,
-          notes: `Reserva de turno - ${timeSlot.startTime} a ${timeSlot.endTime}`
-        });
-        this.logger.log(`createReservation -> class usage registered subscription=${activeSubscription.id}`);
-      } catch (error) {
-        // Si falla el registro de uso de clase, revertir la reserva
-        await this.reservationRepository.delete({ id: savedReservation.id });
-        timeSlot.reservedCount = Math.max(0, timeSlot.reservedCount - 1);
-        await this.timeSlotRepository.save(timeSlot);
-        this.logger.error(`createReservation -> error registering class usage: ${error?.message}`, error?.stack);
-        throw error;
-      }
-
+      // El crédito se consume al marcar asistencia, no al reservar.
+      // La reserva pendiente baja los libres vía sync.
+      await syncCredits();
       return this.toReservationCreateResponse(savedReservation);
     } else {
       this.logger.warn(`createReservation -> timeSlot full id=${timeSlot.id}`);
@@ -608,6 +601,7 @@ export class ReservationsService {
     );
     if (activeSubscription) {
       await this.paymentsService.refreshWeeklyClassCounters(activeSubscription.id);
+      await this.paymentsService.syncActiveSubscriptionCredits(userId, companyId);
     }
 
     // Procesar lista de espera después de cancelar la reserva
@@ -1401,6 +1395,7 @@ export class ReservationsService {
 
     const timeSlot = await this.timeSlotRepository.findOne({
       where: { id: reservation.timeSlotId },
+      relations: ['company'],
     });
 
     if (!timeSlot) {
@@ -1439,6 +1434,9 @@ export class ReservationsService {
       attendanceStatus,
       actor,
     );
+
+    const companyId = timeSlot.company?.id;
+    await this.paymentsService.syncActiveSubscriptionCredits(reservation.user.id, companyId ?? null);
 
     return updatedReservation;
   }
@@ -2601,10 +2599,7 @@ export class ReservationsService {
     const availableClassesToCreate: AvailableClass[] = [];
     // Usar Map para contar correctamente las reservas por timeSlot (evitar problemas con múltiples reservas al mismo slot)
     const timeSlotsReservationCount = new Map<string, number>();
-    
-    // OPTIMIZACIÓN: Agrupar ClassUsage para batch save y actualizar contadores al final
-    const classUsagesToCreate: any[] = [];
-    let totalClassesToRegister = 0;
+
 
     const nowGlobal = new Date();
     nowGlobal.setSeconds(0, 0);
@@ -2819,33 +2814,7 @@ export class ReservationsService {
         const savedReservation = await this.reservationRepository.save(reservation);
         this.logger.log(`generateRecurringReservations -> created reservation id=${savedReservation.id} date=${slotDate.toISOString()}`);
 
-        // OPTIMIZACIÓN: Agrupar ClassUsage para batch save al final (no llamar registerClassUsage en el loop)
-        if (isGeneratingFromPayment) {
-          // Cuando generamos desde pago, crear ClassUsage directamente sin validaciones costosas
-          classUsagesToCreate.push({
-            type: ClassUsageType.RESERVATION,
-            usageDate: slotDate,
-            notes: `Reserva recurrente - ${recurringStartTime} a ${recurringEndTime}`,
-            user: { id: athleteSchedule.user.id },
-            company: { id: athleteSchedule.company.id },
-            subscription: { id: activeSubscription.id }
-          });
-          totalClassesToRegister++;
-        } else {
-          // Solo si NO es desde pago, usar el método completo
-        try {
-          await this.paymentsService.registerClassUsage(activeSubscription.id, {
-            type: ClassUsageType.RESERVATION,
-            usageDate: slotDate,
-            notes: `Reserva recurrente - ${recurringStartTime} a ${recurringEndTime}`
-          });
-          } catch (error) {
-            await this.reservationRepository.delete({ id: savedReservation.id });
-            this.logger.error(`generateRecurringReservations -> error registering class usage date=${slotDate.toISOString()}: ${error?.message}`, error?.stack);
-            currentDate.setDate(currentDate.getDate() + 1);
-            continue;
-          }
-        }
+        // El crédito se consume al marcar asistencia. No incrementamos el período acá.
 
         // OPTIMIZACIÓN: Contar reservas por timeSlot para batch update al final
         // Usar Map para manejar correctamente múltiples reservas al mismo timeSlot
@@ -2867,30 +2836,11 @@ export class ReservationsService {
         currentDate.setDate(currentDate.getDate() + 1);
     }
 
-    // OPTIMIZACIÓN: Batch save de ClassUsage al final (solo cuando generamos desde pago)
-    if (isGeneratingFromPayment && classUsagesToCreate.length > 0) {
-      try {
-        await this.classUsageRepository.save(classUsagesToCreate);
-        this.logger.log(`generateRecurringReservations -> batch saved ${classUsagesToCreate.length} class usages`);
-        
-        // Actualizar contadores de la suscripción en batch (una sola vez)
-        if (totalClassesToRegister > 0) {
-          await this.subscriptionRepository.increment(
-            { id: activeSubscription.id },
-            'classesUsedThisPeriod',
-            totalClassesToRegister
-          );
-          await this.subscriptionRepository.decrement(
-            { id: activeSubscription.id },
-            'classesRemainingThisPeriod',
-            totalClassesToRegister
-          );
-          await this.paymentsService.refreshWeeklyClassCounters(activeSubscription.id);
-          this.logger.log(`generateRecurringReservations -> batch updated period counters: +${totalClassesToRegister} classes`);
-        }
-        } catch (error) {
-        this.logger.error(`generateRecurringReservations -> error batch saving class usages: ${error?.message}`);
-      }
+    if (activeSubscription) {
+      await this.paymentsService.syncActiveSubscriptionCredits(
+        athleteSchedule.user.id,
+        athleteSchedule.company?.id ?? null,
+      );
     }
 
     // OPTIMIZACIÓN: Batch save de clases disponibles al final
@@ -3394,29 +3344,11 @@ export class ReservationsService {
           this.logger.verbose(`cancelRecurringReservation -> removed classUsage id=${classUsage.id}, date=${classUsage.usageDate}`);
         }
 
-        // Restaurar contadores de clases en la suscripción
-        if (restoredClassesCount > 0) {
-          // Recargar la suscripción para obtener valores actualizados
-          const updatedSubscription = await this.subscriptionRepository.findOne({
-            where: { id: activeSubscription.id },
-            relations: ['paymentPlan']
-          });
-
-          if (updatedSubscription) {
-            const maxClassesPerPeriod = updatedSubscription.paymentPlan?.maxClassesPerPeriod ?? 0;
-            const previousUsedThisPeriod = updatedSubscription.classesUsedThisPeriod ?? 0;
-            const previousRemainingThisPeriod = updatedSubscription.classesRemainingThisPeriod ?? 0;
-
-            updatedSubscription.classesUsedThisPeriod = Math.max(0, previousUsedThisPeriod - restoredClassesCount);
-            updatedSubscription.classesRemainingThisPeriod = Math.min(
-              maxClassesPerPeriod,
-              previousRemainingThisPeriod + restoredClassesCount
-            );
-
-            await this.subscriptionRepository.save(updatedSubscription);
-            this.logger.log(`cancelRecurringReservation -> restored ${restoredClassesCount} period classes. Period: ${previousUsedThisPeriod}->${updatedSubscription.classesUsedThisPeriod} used, ${previousRemainingThisPeriod}->${updatedSubscription.classesRemainingThisPeriod} remaining`);
-          }
-        }
+        // Restaurar créditos según asistencia real y reservas que quedan.
+        await this.paymentsService.syncActiveSubscriptionCredits(
+          athleteId,
+          activeSubscription.companyId ?? activeSubscription.company?.id ?? null,
+        );
       } else {
         this.logger.log(`cancelRecurringReservation -> skipping class restoration (no active subscription)`);
       }

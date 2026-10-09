@@ -820,6 +820,7 @@ export class TrainingPlannerService {
         saved.scheduledDate,
         nextCompletion,
       );
+      await this.paymentsService.syncActiveSubscriptionCredits(saved.athleteId);
     }
 
     return attendanceSync ? { ...serialized, attendanceSync } : serialized;
@@ -2169,6 +2170,7 @@ export class TrainingPlannerService {
         saved.scheduledDate,
         data.athleteCompletionStatus,
       );
+      await this.paymentsService.syncActiveSubscriptionCredits(data.athleteId);
     }
 
     const serialized = this.serializeSession(saved, { includePrivate: false });
@@ -2204,6 +2206,7 @@ export class TrainingPlannerService {
         saved.scheduledDate,
         athleteCompletionStatus,
       );
+      await this.paymentsService.syncActiveSubscriptionCredits(athleteId);
     }
 
     const serialized = this.serializeSessionCompletionPatch(saved, attendanceSync);

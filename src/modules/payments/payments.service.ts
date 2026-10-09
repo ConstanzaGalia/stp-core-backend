@@ -32,6 +32,7 @@ import { ScheduleException } from '../../entities/schedule-exception.entity';
 import { TimeSlotGeneration } from '../../entities/time-slot-generation.entity';
 import { WaitlistReservation } from '../../entities/waitlist-reservation.entity';
 import { getStpOperatingCompanyId } from '../../common/constants/stp-operating-company';
+import { PeriodCreditsService } from './period-credits.service';
 
 export type PublicOperatingPlan = {
   id: string;
@@ -60,7 +61,7 @@ export const CAN_BOOK_CLASS_MESSAGES: Record<CanBookClassReason, string> = {
   WEEKLY_LIMIT:
     'Ya usaste tus clases de esta semana. Para reservar otro día, cancelá o modificá el turno al que no vas a asistir.',
   PERIOD_LIMIT:
-    'Ya usaste todas las clases de tu plan en este período.',
+    'No quedan clases libres en este período. El cupo incluye asistencias y turnos reservados que todavía no tienen asistencia.',
   PENDING_PAYMENT:
     'Tenés un pago pendiente. Contactá a tu centro para regularizar tu situación y poder reservar.',
 };
@@ -164,7 +165,12 @@ export class PaymentsService {
     private readonly timeSlotRepository: Repository<TimeSlot>,
     private readonly mailingService: MailingService,
     private readonly companyService: CompanyService,
+    private readonly periodCreditsService: PeriodCreditsService,
   ) {}
+
+  syncActiveSubscriptionCredits(userId: string, companyId?: string | null): Promise<void> {
+    return this.periodCreditsService.syncActiveSubscriptionCredits(userId, companyId);
+  }
 
   private async resolveHomeBranchId(companyId: string, userId: string): Promise<string | null> {
     const company = await this.companyRepository.findOne({ where: { id: companyId } });
@@ -818,14 +824,15 @@ export class PaymentsService {
     const maxClassesPerPeriod = plan?.maxClassesPerPeriod ?? 0;
     const periodStart = paidPeriodAccess.periodStartDate;
     const periodEnd = paidPeriodAccess.periodEndDate;
-    if (userId && maxClassesPerPeriod > 0 && periodStart && periodEnd) {
-      const usedInPeriod = await this.countUserReservationsInPeriod(
+    if (userId && companyId && maxClassesPerPeriod > 0 && periodStart && periodEnd) {
+      const credits = await this.periodCreditsService.compute({
         userId,
         companyId,
-        periodStart,
-        periodEnd,
-      );
-      if (usedInPeriod >= maxClassesPerPeriod) {
+        periodStart: this.formatLocalYmd(periodStart),
+        periodEnd: this.formatLocalYmd(periodEnd),
+        cupo: maxClassesPerPeriod,
+      });
+      if (credits.libres <= 0) {
         return {
           canBook: false,
           reason: 'PERIOD_LIMIT',

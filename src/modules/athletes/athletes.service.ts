@@ -17,9 +17,6 @@ import {
   UserPaymentSubscription,
 } from '../../entities/user-payment-subscription.entity';
 import { PaymentPlan } from '../../entities/payment-plan.entity';
-import { Reservation } from '../../entities/reservation.entity';
-import { TimeSlot } from '../../entities/timeSlot.entity';
-import { ClassUsage, ClassUsageType } from '../../entities/class-usage.entity';
 import { CompanyAccountType, UserRole } from '../../common/enums/enums';
 import {
   isCoachScopedRole,
@@ -630,83 +627,42 @@ export class AthletesService {
   }
 
   /**
-   * Créditos del listado: asistencias ya marcadas en el período del plan.
-   * Cuenta presente y ausente de un turno, y el presente sin reserva.
-   * Un turno todavía sin marcar no suma.
+   * Consumidas del listado: turno con asistencia (presente o ausente) más presente
+   * en planilla de un día sin turno marcado. Tope = cupo del plan.
    */
-  private attendanceCreditsUsedSql(quote: (name: string) => string): string {
-    const db = this.subscriptionRepository.manager;
-    const reservationMeta = db.getRepository(Reservation).metadata;
-    const slotMeta = db.getRepository(TimeSlot).metadata;
-    const usageMeta = db.getRepository(ClassUsage).metadata;
-    const subscriptionMeta = this.subscriptionRepository.metadata;
-
-    const column = (meta: typeof reservationMeta, property: string) => {
-      const found = meta.findColumnWithPropertyName(property);
-      if (!found) throw new Error(`Columna no encontrada: ${meta.tableName}.${property}`);
-      return found.databaseName;
-    };
-    const relationColumn = (meta: typeof reservationMeta, property: string) => {
-      const found = meta.findRelationWithPropertyPath(property)?.joinColumns[0]?.databaseName;
-      if (!found) throw new Error(`Relación no encontrada: ${meta.tableName}.${property}`);
-      return found;
-    };
-
-    const reservationUser = relationColumn(reservationMeta, 'user');
-    const reservationSlot = column(reservationMeta, 'timeSlotId');
-    const attendance = column(reservationMeta, 'attendanceStatus');
-    const slotId = slotMeta.primaryColumns[0]?.databaseName;
-    const slotDate = column(slotMeta, 'date');
-    const slotCompany = relationColumn(slotMeta, 'company');
-    const usageUser = relationColumn(usageMeta, 'user');
-    const usageCompany = relationColumn(usageMeta, 'company');
-    const usageDate = column(usageMeta, 'usageDate');
-    const usageType = column(usageMeta, 'type');
-    const periodStart = column(subscriptionMeta, 'periodStartDate');
-    const periodEnd = column(subscriptionMeta, 'periodEndDate');
-    const subscriptionUser = relationColumn(subscriptionMeta, 'user');
-    const subscriptionCompany = column(subscriptionMeta, 'companyId');
-
-    if (!slotId) throw new Error('Clave de turno no encontrada');
-
-    const reservationTable = quote(reservationMeta.tableName);
-    const slotTable = quote(slotMeta.tableName);
-    const usageTable = quote(usageMeta.tableName);
-
-    const markedReservations = `
-      SELECT COUNT(*)::int
-      FROM ${reservationTable} r
-      INNER JOIN ${slotTable} ts ON ts.${quote(slotId)} = r.${quote(reservationSlot)}
-      WHERE r.${quote(reservationUser)} = s.${quote(subscriptionUser)}
-        AND ts.${quote(slotCompany)} = s.${quote(subscriptionCompany)}
-        AND r.${quote(attendance)} IS NOT NULL
-        AND ts.${quote(slotDate)}::date >= s.${quote(periodStart)}::date
-        AND ts.${quote(slotDate)}::date <= s.${quote(periodEnd)}::date
-    `;
-
-    const walkInsWithoutReservation = `
-      SELECT COUNT(*)::int
-      FROM ${usageTable} cu
-      WHERE cu.${quote(usageUser)} = s.${quote(subscriptionUser)}
-        AND cu.${quote(usageCompany)} = s.${quote(subscriptionCompany)}
-        AND cu.${quote(usageType)} = '${ClassUsageType.WALK_IN}'
-        AND cu.${quote(usageDate)}::date >= s.${quote(periodStart)}::date
-        AND cu.${quote(usageDate)}::date <= s.${quote(periodEnd)}::date
-        AND NOT EXISTS (
-          SELECT 1
-          FROM ${reservationTable} r2
-          INNER JOIN ${slotTable} ts2 ON ts2.${quote(slotId)} = r2.${quote(reservationSlot)}
-          WHERE r2.${quote(reservationUser)} = s.${quote(subscriptionUser)}
-            AND ts2.${quote(slotCompany)} = s.${quote(subscriptionCompany)}
-            AND r2.${quote(attendance)} IS NOT NULL
-            AND ts2.${quote(slotDate)}::date = cu.${quote(usageDate)}::date
-        )
-    `;
-
-    return `((${markedReservations}) + (${walkInsWithoutReservation}))`;
+  private consumedCreditsSql(maxCol: string): string {
+    return `LEAST(
+      COALESCE(p."${maxCol}", 0),
+      (
+        SELECT COUNT(*)::int
+        FROM reservation r
+        INNER JOIN time_slot ts ON ts.id = r."timeSlotId"
+        WHERE r."userId" = s."userId"
+          AND ts."companyId" = s."companyId"
+          AND r.attendance_status IS NOT NULL
+          AND ts.date::date >= s."periodStartDate"::date
+          AND ts.date::date <= s."periodEndDate"::date
+      ) + (
+        SELECT COUNT(DISTINCT left(sess.scheduled_date, 10))::int
+        FROM stp_session_instances sess
+        WHERE sess.athlete_id = s."userId"::text
+          AND sess.athlete_completion_status = 'completed'
+          AND left(sess.scheduled_date, 10)::date >= s."periodStartDate"::date
+          AND left(sess.scheduled_date, 10)::date <= s."periodEndDate"::date
+          AND NOT EXISTS (
+            SELECT 1
+            FROM reservation r2
+            INNER JOIN time_slot ts2 ON ts2.id = r2."timeSlotId"
+            WHERE r2."userId" = s."userId"
+              AND ts2."companyId" = s."companyId"
+              AND r2.attendance_status IS NOT NULL
+              AND ts2.date::date = left(sess.scheduled_date, 10)::date
+          )
+      )
+    )`;
   }
 
-  /** Vencimiento del plan activo y créditos usados por asistencia marcada en el período. */
+  /** Vencimiento del plan activo y créditos consumidos por asistencia en el período. */
   private async attachActivePlanSummaries(
     companyId: string,
     invitations: AthleteInvitation[],
@@ -729,7 +685,7 @@ export class AthletesService {
     const maxCol = planMeta.findColumnWithPropertyName('maxClassesPerPeriod')?.databaseName;
     if (!planPk || !maxCol) throw new Error('Cupo del plan no encontrado');
 
-    const attendanceUsedSql = this.attendanceCreditsUsedSql(quote);
+    const consumedSql = this.consumedCreditsSql(maxCol);
 
     const summaries: Array<{
       userId: string;
@@ -740,7 +696,7 @@ export class AthletesService {
       `SELECT DISTINCT ON (s.${quote(userFk)})
          s.${quote(userFk)} AS "userId",
          to_char(s.${quote(column('periodEndDate'))}, 'YYYY-MM-DD') AS "planExpiresAt",
-         ${attendanceUsedSql} AS "classesUsed",
+         ${consumedSql} AS "classesUsed",
          p.${quote(maxCol)} AS "classesMax"
        FROM ${quote(meta.tableName)} s
        LEFT JOIN ${quote(planMeta.tableName)} p ON p.${quote(planPk)} = s.${quote(column('paymentPlanId'))}
