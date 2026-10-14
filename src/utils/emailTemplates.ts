@@ -375,3 +375,54 @@ export const clubAnalyticsAccessEmail = (input: {
     }),
   };
 };
+
+export const platformSubscriptionRenewalEmail = (input: {
+  email: string;
+  name: string;
+  companyName: string;
+  planLabel: string;
+  periodEndLabel: string;
+  pendingAmountLabel: string | null;
+  daysUntil: number;
+  url: string;
+  from: string;
+}) => {
+  if (!input.email?.trim()) {
+    throw new Error('Email is required for platform subscription renewal notice');
+  }
+
+  const when =
+    input.daysUntil <= 0
+      ? 'hoy'
+      : input.daysUntil === 1
+        ? 'mañana'
+        : `en ${input.daysUntil} días`;
+  const amountLine = input.pendingAmountLabel
+    ? `<p style="margin: 0; color: ${STP_EMAIL_COLORS.text}; font-size: 14px; text-align: left;"><strong>Pago pendiente:</strong> ${escapeHtml(input.pendingAmountLabel)}</p>`
+    : '';
+
+  return {
+    to: input.email.trim(),
+    subject: `Tu suscripción STP vence ${when}`,
+    from: input.from,
+    html: renderStpEmailLayout({
+      title: 'Vencimiento de suscripción',
+      preheader: `La suscripción de ${input.companyName} vence ${when}`,
+      bodyHtml: `
+        ${stpHeading(`¡Hola ${input.name}!`)}
+        ${stpParagraph(
+          `La suscripción de <strong>${escapeHtml(input.companyName)}</strong> a la plataforma STP vence <strong>${when}</strong>.`,
+        )}
+        ${stpWarningBox(`
+          <p style="margin: 0 0 8px; color: ${STP_EMAIL_COLORS.warningText}; font-size: 15px; font-weight: 700; text-align: left;">Revisá el vencimiento</p>
+          <p style="margin: 0 0 6px; color: ${STP_EMAIL_COLORS.warningText}; font-size: 14px; text-align: left;"><strong>Plan:</strong> ${escapeHtml(input.planLabel)}</p>
+          <p style="margin: 0 0 6px; color: ${STP_EMAIL_COLORS.warningText}; font-size: 14px; text-align: left;"><strong>Vence:</strong> ${escapeHtml(input.periodEndLabel)}</p>
+          ${amountLine}
+        `)}
+        ${stpParagraph('El pago lo registra STP. Desde la plataforma podés ver el detalle y los cargos pendientes.')}
+        ${stpButton(input.url, 'Ver mi suscripción')}
+        ${stpParagraph('Si ya coordinaste el pago, podés ignorar este aviso.', { muted: true, marginBottom: '0' })}
+      `,
+    }),
+  };
+};

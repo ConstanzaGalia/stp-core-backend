@@ -77,6 +77,18 @@ export class StpPlatformCharge {
   @Column({ type: 'text', nullable: true })
   notes: string | null;
 
+  @Column({ type: 'varchar', length: 500, nullable: true, name: 'receipt_storage_key' })
+  receiptStorageKey: string | null;
+
+  @Column({ type: 'varchar', length: 200, nullable: true, name: 'receipt_filename' })
+  receiptFilename: string | null;
+
+  @Column({ type: 'varchar', length: 100, nullable: true, name: 'receipt_mime_type' })
+  receiptMimeType: string | null;
+
+  @Column({ type: 'timestamptz', nullable: true, name: 'receipt_uploaded_at' })
+  receiptUploadedAt: Date | null;
+
   @Column({ type: 'uuid', nullable: true, name: 'recorded_by_user_id' })
   recordedByUserId: string | null;
 

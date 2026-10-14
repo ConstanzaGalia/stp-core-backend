@@ -1,10 +1,14 @@
 import {
   BadRequestException,
+  ForbiddenException,
   Injectable,
+  Logger,
   NotFoundException,
+  UnauthorizedException,
 } from '@nestjs/common';
+import { Cron } from '@nestjs/schedule';
 import { InjectRepository } from '@nestjs/typeorm';
-import { In, Repository } from 'typeorm';
+import { In, IsNull, Repository } from 'typeorm';
 import { assertStpPlatformOperator } from 'src/common/helpers/company-access.helper';
 import {
   StpPlatformBillingKind,
@@ -12,13 +16,17 @@ import {
   StpPlatformChargeStatus,
   StpPlatformPlan,
   StpPlatformSubscriptionStatus,
+  UserRole,
 } from 'src/common/enums/enums';
 import { Company } from 'src/entities/company.entity';
 import { StpPlatformCharge } from 'src/entities/stp-platform-charge.entity';
 import { StpPlatformSubscription } from 'src/entities/stp-platform-subscription.entity';
 import { User } from 'src/entities/user.entity';
+import { MailingService } from '../mailer/mailing.service';
+import { platformSubscriptionRenewalEmail } from 'src/utils/emailTemplates';
 import {
   AssignPlatformSubscriptionDto,
+  AttachPlatformReceiptDto,
   CreatePlatformChargeDto,
   UpdatePlatformChargeDto,
   UpdatePlatformSubscriptionDto,
@@ -40,8 +48,51 @@ function addDays(dateKey: string, days: number): string {
   return d.toISOString().slice(0, 10);
 }
 
+function dateKey(value: string | Date | null | undefined): string | null {
+  if (value == null || value === '') return null;
+  if (value instanceof Date) return value.toISOString().slice(0, 10);
+  return String(value).slice(0, 10);
+}
+
+function daysBetween(fromKey: string, toKey: string): number {
+  const from = new Date(`${fromKey}T12:00:00.000Z`);
+  const to = new Date(`${toKey}T12:00:00.000Z`);
+  return Math.round((to.getTime() - from.getTime()) / 86_400_000);
+}
+
+/** Suma meses calendario y recorta al último día si el mes destino no tiene esa fecha. */
+function addCalendarMonths(dateKeyValue: string, months: number): string {
+  const [year, month, day] = dateKeyValue.split('-').map(Number);
+  const targetIndex = month - 1 + months;
+  const targetYear = year + Math.floor(targetIndex / 12);
+  const targetMonth = ((targetIndex % 12) + 12) % 12;
+  const lastDay = new Date(Date.UTC(targetYear, targetMonth + 1, 0)).getUTCDate();
+  const targetDay = Math.min(day, lastDay);
+  const pad = (n: number) => String(n).padStart(2, '0');
+  return `${targetYear}-${pad(targetMonth + 1)}-${pad(targetDay)}`;
+}
+
+function formatMoneyEs(amount: number, currency: string): string {
+  const formatted = amount.toLocaleString('es-AR', {
+    minimumFractionDigits: 2,
+    maximumFractionDigits: 2,
+  });
+  return `${currency} ${formatted}`;
+}
+
+const RENEWAL_NOTICE_DAYS = 3;
+const NEXT_CHARGE_LEAD_DAYS = 7;
+
+const PLAN_LABELS: Record<StpPlatformPlan, string> = {
+  [StpPlatformPlan.STP_PERSONAL]: 'STP Personal',
+  [StpPlatformPlan.STP_CENTER]: 'STP Center',
+  [StpPlatformPlan.STP_CLUB]: 'STP Club',
+};
+
 @Injectable()
 export class StpPlatformBillingService {
+  private readonly logger = new Logger(StpPlatformBillingService.name);
+
   constructor(
     @InjectRepository(StpPlatformSubscription)
     private readonly subscriptionRepo: Repository<StpPlatformSubscription>,
@@ -49,6 +100,7 @@ export class StpPlatformBillingService {
     private readonly chargeRepo: Repository<StpPlatformCharge>,
     @InjectRepository(Company)
     private readonly companyRepo: Repository<Company>,
+    private readonly mailingService: MailingService,
   ) {}
 
   private async assertCompany(companyId: string): Promise<Company> {
@@ -91,6 +143,10 @@ export class StpPlatformBillingService {
       reference: charge.reference,
       notes: charge.notes,
       recordedByUserId: charge.recordedByUserId,
+      receiptStorageKey: charge.receiptStorageKey,
+      receiptFilename: charge.receiptFilename,
+      receiptMimeType: charge.receiptMimeType,
+      receiptUploadedAt: charge.receiptUploadedAt,
       createdAt: charge.createdAt,
       updatedAt: charge.updatedAt,
     };
@@ -122,6 +178,7 @@ export class StpPlatformBillingService {
         pendingOnboarding: boolean;
         onboardingPaid: boolean;
         overdue: boolean;
+        receiptSubmitted: boolean;
         lastPaidAt: string | null;
         lastPaidAmount: number | null;
         lastPaidCurrency: string | null;
@@ -135,6 +192,7 @@ export class StpPlatformBillingService {
         pendingOnboarding: boolean;
         onboardingPaid: boolean;
         overdue: boolean;
+        receiptSubmitted: boolean;
         lastPaidAt: string | null;
         lastPaidAmount: number | null;
         lastPaidCurrency: string | null;
@@ -146,6 +204,7 @@ export class StpPlatformBillingService {
         pendingOnboarding: false,
         onboardingPaid: false,
         overdue: false,
+        receiptSubmitted: false,
         lastPaidAt: null,
         lastPaidAmount: null,
         lastPaidCurrency: null,
@@ -171,6 +230,9 @@ export class StpPlatformBillingService {
         }
         if (charge.dueDate && charge.dueDate < today) {
           summary.overdue = true;
+        }
+        if (charge.receiptStorageKey) {
+          summary.receiptSubmitted = true;
         }
       }
       if (
@@ -279,7 +341,9 @@ export class StpPlatformBillingService {
 
     if (dto.status != null) sub.status = dto.status;
     if (dto.periodStart != null) sub.periodStart = dto.periodStart;
-    if (dto.periodEnd !== undefined) sub.periodEnd = dto.periodEnd;
+    if (dto.periodEnd !== undefined) {
+      this.assignPeriodEnd(sub, dto.periodEnd);
+    }
     if (dto.subscriptionAmount !== undefined) {
       sub.subscriptionAmount = dto.subscriptionAmount;
     }
@@ -371,7 +435,7 @@ export class StpPlatformBillingService {
         where: { id: subscriptionId },
       });
       if (sub && sub.status === StpPlatformSubscriptionStatus.ACTIVE) {
-        if (dto.dueDate) sub.periodEnd = dto.dueDate;
+        if (dto.dueDate) this.assignPeriodEnd(sub, dto.dueDate);
         if (dto.amount != null) sub.subscriptionAmount = dto.amount;
         if (dto.currency) sub.currency = dto.currency.toUpperCase();
         await this.subscriptionRepo.save(sub);
@@ -440,7 +504,9 @@ export class StpPlatformBillingService {
         where: { id: saved.subscriptionId },
       });
       if (sub && sub.status === StpPlatformSubscriptionStatus.ACTIVE) {
-        if (saved.dueDate) sub.periodEnd = saved.dueDate;
+        const rolledEnd = await this.periodEndAfterPayment(saved);
+        if (rolledEnd) this.assignPeriodEnd(sub, rolledEnd);
+        else if (saved.dueDate) this.assignPeriodEnd(sub, saved.dueDate);
         if (saved.amount != null) sub.subscriptionAmount = toNumber(saved.amount);
         if (saved.currency) sub.currency = saved.currency;
         await this.subscriptionRepo.save(sub);
@@ -603,5 +669,363 @@ export class StpPlatformBillingService {
       select: ['companyId'],
     });
     return rows.map((r) => r.companyId);
+  }
+
+  /** Vista de solo lectura para director/secretaría del centro. */
+  async getCompanySubscriptionView(companyId: string, user: User) {
+    await this.assertCanViewCompanySubscription(user, companyId);
+    const today = todayDateOnly();
+
+    const subscription = await this.subscriptionRepo.findOne({
+      where: {
+        companyId,
+        status: StpPlatformSubscriptionStatus.ACTIVE,
+      },
+      order: { createdAt: 'DESC' },
+    });
+
+    const charges = await this.chargeRepo.find({
+      where: { companyId },
+      order: { createdAt: 'DESC' },
+    });
+
+    const pendingCharges = charges
+      .filter((charge) => charge.status === StpPlatformChargeStatus.PENDING)
+      .sort((a, b) => {
+        const aKey = dateKey(a.dueDate) ?? '9999-12-31';
+        const bKey = dateKey(b.dueDate) ?? '9999-12-31';
+        return aKey.localeCompare(bKey);
+      });
+    const paidCharges = charges
+      .filter((charge) => charge.status === StpPlatformChargeStatus.PAID)
+      .slice(0, 12);
+
+    const periodEnd =
+      subscription?.billingKind === StpPlatformBillingKind.PAID
+        ? dateKey(subscription.periodEnd)
+        : null;
+    const daysUntilExpiry =
+      periodEnd == null ? null : daysBetween(today, periodEnd);
+    const chargeOverdue = pendingCharges.some((charge) => {
+      const due = dateKey(charge.dueDate);
+      return due != null && due < today;
+    });
+    const periodOverdue = daysUntilExpiry != null && daysUntilExpiry < 0;
+
+    return {
+      subscription: subscription ? this.serializeSubscription(subscription) : null,
+      pendingCharges: pendingCharges.map((charge) => this.serializeCharge(charge)),
+      paidCharges: paidCharges.map((charge) => this.serializeCharge(charge)),
+      daysUntilExpiry,
+      expiresWithinDays:
+        daysUntilExpiry != null &&
+        daysUntilExpiry >= 0 &&
+        daysUntilExpiry <= RENEWAL_NOTICE_DAYS,
+      overdue: chargeOverdue || periodOverdue,
+      hasPendingPayments: pendingCharges.length > 0,
+    };
+  }
+
+  /** Adjunta el comprobante de un cargo pendiente. No cambia el estado de pago. */
+  async attachReceipt(
+    companyId: string,
+    chargeId: string,
+    dto: AttachPlatformReceiptDto,
+    user: User,
+  ) {
+    await this.assertCanViewCompanySubscription(user, companyId);
+    const charge = await this.chargeRepo.findOne({
+      where: { id: chargeId, companyId },
+    });
+    if (!charge) throw new NotFoundException('Cargo no encontrado');
+    if (charge.status !== StpPlatformChargeStatus.PENDING) {
+      throw new BadRequestException(
+        'Solo se puede adjuntar un comprobante a un pago pendiente',
+      );
+    }
+
+    const prefix = `platform-receipts/${companyId}/${chargeId}/`;
+    if (!dto.storageKey.startsWith(prefix) || dto.storageKey.includes('..')) {
+      throw new BadRequestException('El comprobante no corresponde a este cargo');
+    }
+
+    charge.receiptStorageKey = dto.storageKey;
+    charge.receiptFilename = dto.filename.trim();
+    charge.receiptMimeType = dto.mimeType?.trim() || null;
+    charge.receiptUploadedAt = new Date();
+    const saved = await this.chargeRepo.save(charge);
+    return this.serializeCharge(saved);
+  }
+
+  /** Crea el cobro del mes siguiente y después avisa si el período vence en 0–3 días. */
+  @Cron('0 9 * * *', { timeZone: 'America/Argentina/Buenos_Aires' })
+  async runDailyPlatformBilling(): Promise<void> {
+    try {
+      await this.createUpcomingSubscriptionCharges();
+    } catch (error) {
+      this.logger.error(
+        'No se pudieron generar los cobros del mes siguiente',
+        error instanceof Error ? error.stack : undefined,
+      );
+    }
+    await this.sendUpcomingRenewalNotices();
+  }
+
+  /** Aviso diario a directores cuando el período vence en 0–3 días. */
+  async sendUpcomingRenewalNotices(): Promise<void> {
+    const today = todayDateOnly();
+    const limit = addDays(today, RENEWAL_NOTICE_DAYS);
+    const candidates = await this.subscriptionRepo.find({
+      where: {
+        status: StpPlatformSubscriptionStatus.ACTIVE,
+        billingKind: StpPlatformBillingKind.PAID,
+        renewalNoticeSentAt: IsNull(),
+      },
+    });
+    const due = candidates.filter((sub) => {
+      const end = dateKey(sub.periodEnd);
+      return end != null && end >= today && end <= limit;
+    });
+
+    for (const sub of due) {
+      try {
+        await this.notifyRenewal(sub, today);
+      } catch (error) {
+        this.logger.error(
+          `No se pudo avisar el vencimiento de la suscripción ${sub.id}`,
+          error instanceof Error ? error.stack : undefined,
+        );
+      }
+    }
+  }
+
+  private async createUpcomingSubscriptionCharges(): Promise<void> {
+    const today = todayDateOnly();
+    const subscriptions = await this.subscriptionRepo.find({
+      where: {
+        status: StpPlatformSubscriptionStatus.ACTIVE,
+        billingKind: StpPlatformBillingKind.PAID,
+      },
+    });
+
+    for (const sub of subscriptions) {
+      try {
+        await this.ensureNextSubscriptionCharge(sub, today);
+      } catch (error) {
+        this.logger.error(
+          `No se pudo crear el cobro siguiente de la suscripción ${sub.id}`,
+          error instanceof Error ? error.stack : undefined,
+        );
+      }
+    }
+  }
+
+  private async ensureNextSubscriptionCharge(
+    sub: StpPlatformSubscription,
+    today: string,
+  ): Promise<void> {
+    const periodEnd = dateKey(sub.periodEnd);
+    if (!periodEnd) return;
+    if (toNumber(sub.subscriptionAmount) <= 0) return;
+    if (daysBetween(today, periodEnd) > NEXT_CHARGE_LEAD_DAYS) return;
+
+    const nextDue = addCalendarMonths(periodEnd, 1);
+    const existing = await this.findSubscriptionChargeByDueDate(
+      sub.companyId,
+      nextDue,
+    );
+    if (existing) return;
+
+    const charge = this.chargeRepo.create({
+      companyId: sub.companyId,
+      subscriptionId: sub.id,
+      concept: StpPlatformChargeConcept.SUBSCRIPTION,
+      amount: toNumber(sub.subscriptionAmount),
+      currency: (sub.currency || 'ARS').toUpperCase(),
+      status: StpPlatformChargeStatus.PENDING,
+      dueDate: nextDue,
+      paidAt: null,
+      method: null,
+      reference: null,
+      notes: null,
+      recordedByUserId: null,
+    });
+    await this.chargeRepo.save(charge);
+
+    const currentPaid = await this.findSubscriptionChargeByDueDate(
+      sub.companyId,
+      periodEnd,
+    );
+    if (currentPaid?.status === StpPlatformChargeStatus.PAID) {
+      this.assignPeriodEnd(sub, nextDue);
+      await this.subscriptionRepo.save(sub);
+    }
+  }
+
+  private async findSubscriptionChargeByDueDate(
+    companyId: string,
+    dueDate: string,
+  ): Promise<StpPlatformCharge | null> {
+    return this.chargeRepo
+      .createQueryBuilder('c')
+      .where('c.company_id = :companyId', { companyId })
+      .andWhere('c.concept = :concept', {
+        concept: StpPlatformChargeConcept.SUBSCRIPTION,
+      })
+      .andWhere('c.due_date = :dueDate', { dueDate })
+      .getOne();
+  }
+
+  /** Si el cargo cobrado ya tiene el del mes siguiente, el período pasa a esa fecha. */
+  private async periodEndAfterPayment(
+    charge: StpPlatformCharge,
+  ): Promise<string | null> {
+    if (
+      charge.status !== StpPlatformChargeStatus.PAID ||
+      charge.concept !== StpPlatformChargeConcept.SUBSCRIPTION
+    ) {
+      return null;
+    }
+    const base = dateKey(charge.dueDate);
+    if (!base) return null;
+    const following = await this.findSubscriptionChargeByDueDate(
+      charge.companyId,
+      addCalendarMonths(base, 1),
+    );
+    return dateKey(following?.dueDate);
+  }
+
+  private assignPeriodEnd(
+    sub: StpPlatformSubscription,
+    next: string | Date | null,
+  ): void {
+    const nextKey = dateKey(next);
+    const currentKey = dateKey(sub.periodEnd);
+    if (nextKey !== currentKey) {
+      sub.renewalNoticeSentAt = null;
+    }
+    sub.periodEnd = nextKey;
+  }
+
+  private async assertCanViewCompanySubscription(
+    user: User | undefined,
+    companyId: string,
+  ): Promise<Company> {
+    if (!user) throw new UnauthorizedException();
+    const company = await this.companyRepo.findOne({
+      where: { id: companyId },
+      relations: ['users'],
+    });
+    if (!company) throw new NotFoundException('Centro no encontrado');
+    if (user.role === UserRole.STP_ADMIN) return company;
+    if (
+      user.role !== UserRole.DIRECTOR &&
+      user.role !== UserRole.SECRETARIA
+    ) {
+      throw new ForbiddenException(
+        'No tenés permiso para ver la suscripción de este centro',
+      );
+    }
+    const isMember = (company.users ?? []).some((member) => member.id === user.id);
+    if (!isMember) {
+      throw new ForbiddenException(
+        'No tenés permiso para ver la suscripción de este centro',
+      );
+    }
+    return company;
+  }
+
+  private async notifyRenewal(
+    sub: StpPlatformSubscription,
+    today: string,
+  ): Promise<void> {
+    const periodEnd = dateKey(sub.periodEnd);
+    if (!periodEnd) return;
+
+    const company = await this.companyRepo.findOne({
+      where: { id: sub.companyId },
+      relations: ['users'],
+    });
+    if (!company) return;
+
+    const directors = (company.users ?? []).filter(
+      (member) =>
+        member.role === UserRole.DIRECTOR &&
+        !!member.email?.trim() &&
+        member.isDelete !== true,
+    );
+
+    if (directors.length === 0) {
+      this.logger.warn(
+        `Suscripción ${sub.id} sin directores con email; se marca el aviso para no reintentar`,
+      );
+      sub.renewalNoticeSentAt = new Date();
+      await this.subscriptionRepo.save(sub);
+      return;
+    }
+
+    const pending = await this.chargeRepo.find({
+      where: {
+        companyId: sub.companyId,
+        status: StpPlatformChargeStatus.PENDING,
+      },
+    });
+    const pendingLabel = this.formatPendingLabel(pending);
+    const amountLabel =
+      pendingLabel ??
+      (sub.subscriptionAmount != null
+        ? formatMoneyEs(toNumber(sub.subscriptionAmount), sub.currency || 'ARS')
+        : null);
+    const daysUntil = daysBetween(today, periodEnd);
+    const periodEndLabel = new Date(`${periodEnd}T12:00:00.000Z`).toLocaleDateString(
+      'es-AR',
+      { day: '2-digit', month: '2-digit', year: 'numeric', timeZone: 'UTC' },
+    );
+    const frontendUrl = (process.env.FRONTEND_URL || 'http://localhost:3000').replace(
+      /\/$/,
+      '',
+    );
+    const from = process.env.RESEND_FROM_EMAIL || 'noreply@stp.com';
+
+    let sent = 0;
+    for (const director of directors) {
+      try {
+        const mail = platformSubscriptionRenewalEmail({
+          email: director.email,
+          name: director.name || 'Director',
+          companyName: company.name,
+          planLabel: PLAN_LABELS[sub.plan] ?? sub.plan,
+          periodEndLabel,
+          pendingAmountLabel: amountLabel,
+          daysUntil,
+          url: `${frontendUrl}/mi-suscripcion`,
+          from,
+        });
+        await this.mailingService.sendMail(mail);
+        sent += 1;
+      } catch (error) {
+        this.logger.error(
+          `No se pudo enviar el aviso de suscripción a ${director.email}`,
+          error instanceof Error ? error.stack : undefined,
+        );
+      }
+    }
+
+    if (sent > 0) {
+      sub.renewalNoticeSentAt = new Date();
+      await this.subscriptionRepo.save(sub);
+    }
+  }
+
+  private formatPendingLabel(charges: StpPlatformCharge[]): string | null {
+    const totals = new Map<string, number>();
+    for (const charge of charges) {
+      const currency = charge.currency || 'ARS';
+      totals.set(currency, (totals.get(currency) ?? 0) + toNumber(charge.amount));
+    }
+    if (totals.size === 0) return null;
+    return Array.from(totals.entries())
+      .map(([currency, amount]) => formatMoneyEs(amount, currency))
+      .join(' · ');
   }
 }

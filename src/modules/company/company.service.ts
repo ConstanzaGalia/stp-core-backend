@@ -425,6 +425,7 @@ export class CompanyService {
               pendingOnboarding: chargeSummary.pendingOnboarding,
               onboardingPaid: chargeSummary.onboardingPaid,
               overdue: chargeSummary.overdue,
+              receiptSubmitted: chargeSummary.receiptSubmitted,
               lastPaidAt: chargeSummary.lastPaidAt,
               lastPaidAmount: chargeSummary.lastPaidAmount,
               lastPaidCurrency: chargeSummary.lastPaidCurrency,

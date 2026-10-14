@@ -2,6 +2,7 @@ import 'dotenv/config'
 import { Module } from '@nestjs/common';
 import { TypeOrmModule } from '@nestjs/typeorm';
 import { ConfigModule, ConfigService } from '@nestjs/config';
+import { ScheduleModule } from '@nestjs/schedule';
 import { AuthModule } from './modules/auth/auth.module';
 import { MailingModule } from './modules/mailer/mailing.module';
 
@@ -103,6 +104,7 @@ function resolvePostgresPoolMax(config: ConfigService): number {
       },
     }),
 
+    ScheduleModule.forRoot(),
     HealthModule,
     AuthModule,
     MailingModule,

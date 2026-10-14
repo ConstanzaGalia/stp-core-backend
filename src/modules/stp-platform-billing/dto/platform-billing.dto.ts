@@ -136,6 +136,21 @@ export class CreatePlatformChargeDto {
   paidAt?: string | null;
 }
 
+export class AttachPlatformReceiptDto {
+  @IsString()
+  @MaxLength(500)
+  storageKey: string;
+
+  @IsString()
+  @MaxLength(200)
+  filename: string;
+
+  @IsOptional()
+  @IsString()
+  @MaxLength(100)
+  mimeType?: string | null;
+}
+
 export class UpdatePlatformChargeDto {
   @IsOptional()
   @IsEnum(StpPlatformChargeConcept)

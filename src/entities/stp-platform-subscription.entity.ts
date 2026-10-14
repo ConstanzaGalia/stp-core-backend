@@ -75,6 +75,10 @@ export class StpPlatformSubscription {
   @Column({ type: 'uuid', nullable: true, name: 'assigned_by_user_id' })
   assignedByUserId: string | null;
 
+  /** Aviso de renovación ya enviado para este período (ventana de 3 días). */
+  @Column({ type: 'timestamptz', nullable: true, name: 'renewal_notice_sent_at' })
+  renewalNoticeSentAt: Date | null;
+
   @ManyToOne(() => User, { onDelete: 'SET NULL', nullable: true })
   @JoinColumn({ name: 'assigned_by_user_id' })
   assignedBy: User | null;

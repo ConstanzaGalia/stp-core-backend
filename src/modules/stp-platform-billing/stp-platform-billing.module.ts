@@ -3,7 +3,9 @@ import { TypeOrmModule } from '@nestjs/typeorm';
 import { Company } from 'src/entities/company.entity';
 import { StpPlatformCharge } from 'src/entities/stp-platform-charge.entity';
 import { StpPlatformSubscription } from 'src/entities/stp-platform-subscription.entity';
+import { MailingModule } from '../mailer/mailing.module';
 import { StpPlatformBillingController } from './stp-platform-billing.controller';
+import { StpPlatformSubscriptionReadController } from './stp-platform-subscription-read.controller';
 import { StpPlatformBillingService } from './stp-platform-billing.service';
 
 @Module({
@@ -13,8 +15,12 @@ import { StpPlatformBillingService } from './stp-platform-billing.service';
       StpPlatformCharge,
       Company,
     ]),
+    MailingModule,
   ],
-  controllers: [StpPlatformBillingController],
+  controllers: [
+    StpPlatformBillingController,
+    StpPlatformSubscriptionReadController,
+  ],
   providers: [StpPlatformBillingService],
   exports: [StpPlatformBillingService],
 })
