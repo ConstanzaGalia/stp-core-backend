@@ -1,5 +1,6 @@
 import {
   BadRequestException,
+  ForbiddenException,
   Injectable,
   NotFoundException,
 } from '@nestjs/common';
@@ -15,7 +16,10 @@ import {
   AthleteInvitation,
   InvitationStatus,
 } from 'src/entities/athlete-invitation.entity';
-import { UserRole } from 'src/common/enums/enums';
+import { Division } from 'src/entities/division.entity';
+import { SportPosition } from 'src/entities/sport-position.entity';
+import { Branch } from 'src/entities/branch.entity';
+import { CompanyAccountType, UserRole } from 'src/common/enums/enums';
 import { parseDateOnlyLocal } from 'src/common/utils/date-only.util';
 import { CompanyService } from '../company/company.service';
 import { AthletesService } from '../athletes/athletes.service';
@@ -40,6 +44,14 @@ export type AthleteMigrationAction =
 
 export type ScheduleMigrationAction = 'create' | 'skip' | 'error';
 
+const IMPORT_STAFF_ROLES: UserRole[] = [
+  UserRole.STP_ADMIN,
+  UserRole.DIRECTOR,
+  UserRole.TRAINER,
+  UserRole.SUB_TRAINER,
+  UserRole.SECRETARIA,
+];
+
 export type AthleteMigrationPreviewRow = {
   rowNumber: number | null;
   email: string;
@@ -49,6 +61,13 @@ export type AthleteMigrationPreviewRow = {
   included: boolean;
   message: string | null;
   existingUserId: string | null;
+  divisionName: string | null;
+  positionName: string | null;
+  homeBranchName: string | null;
+  clubName: string | null;
+  divisionId: string | null;
+  positionId: string | null;
+  homeBranchId: string | null;
 };
 
 export type ScheduleMigrationPreviewRow = {
@@ -78,10 +97,113 @@ export class DataMigrationService {
     private readonly invitationRepository: Repository<AthleteInvitation>,
     @InjectRepository(AthleteSchedule)
     private readonly scheduleRepository: Repository<AthleteSchedule>,
+    @InjectRepository(Division)
+    private readonly divisionRepository: Repository<Division>,
+    @InjectRepository(SportPosition)
+    private readonly positionRepository: Repository<SportPosition>,
+    @InjectRepository(Branch)
+    private readonly branchRepository: Repository<Branch>,
   ) {}
 
   async assertOperator(user: User): Promise<void> {
     await this.companyService.assertCanManagePlatformCompanies(user);
+  }
+
+  private async assertCanImportAthletes(actor: User, companyId: string): Promise<Company> {
+    const company = await this.assertCompanyExists(companyId);
+
+    try {
+      await this.companyService.assertCanManagePlatformCompanies(actor);
+      return company;
+    } catch {
+      // Staff del club: mismo criterio que crear un atleta, limitado a sports_club.
+    }
+
+    if (!IMPORT_STAFF_ROLES.includes(actor.role)) {
+      throw new ForbiddenException('Solo el staff del centro puede importar jugadores');
+    }
+
+    if (actor.role !== UserRole.STP_ADMIN) {
+      const companies = await this.companyService.findCompaniesByUser(actor.id);
+      const belongs = companies.some((c) => c.id === companyId);
+      if (!belongs) {
+        throw new ForbiddenException('No perteneces a este centro');
+      }
+    }
+
+    if (company.accountType !== CompanyAccountType.SPORTS_CLUB) {
+      throw new ForbiddenException(
+        'La importación de jugadores está disponible para clubes deportivos',
+      );
+    }
+
+    return company;
+  }
+
+  private normalizeLookupKey(value: string): string {
+    return value
+      .trim()
+      .toLowerCase()
+      .normalize('NFD')
+      .replace(/[\u0300-\u036f]/g, '')
+      .replace(/\s+/g, ' ');
+  }
+
+  private optionalName(value?: string | null): string | undefined {
+    const trimmed = String(value ?? '').trim();
+    return trimmed || undefined;
+  }
+
+  private lookupByName<T extends { id: string; name: string }>(
+    map: Map<string, T>,
+    raw?: string,
+  ): { provided: boolean; match: T | null; input: string | null } {
+    const input = this.optionalName(raw) ?? null;
+    if (!input) return { provided: false, match: null, input: null };
+    return {
+      provided: true,
+      match: map.get(this.normalizeLookupKey(input)) ?? null,
+      input,
+    };
+  }
+
+  private async loadClubLookupMaps(companyId: string): Promise<{
+    divisions: Map<string, Division>;
+    positions: Map<string, SportPosition>;
+    branches: Map<string, Branch>;
+  }> {
+    const [divisions, positions, branches] = await Promise.all([
+      this.divisionRepository.find({ where: { companyId } }),
+      this.positionRepository.find({ where: { companyId } }),
+      this.branchRepository.find({ where: { companyId } }),
+    ]);
+
+    const toMap = <T extends { name: string }>(items: T[]) => {
+      const map = new Map<string, T>();
+      for (const item of items) {
+        const key = this.normalizeLookupKey(item.name);
+        if (!map.has(key)) map.set(key, item);
+      }
+      return map;
+    };
+
+    return {
+      divisions: toMap(divisions),
+      positions: toMap(positions),
+      branches: toMap(branches),
+    };
+  }
+
+  private emptyClubFields() {
+    return {
+      divisionName: null as string | null,
+      positionName: null as string | null,
+      homeBranchName: null as string | null,
+      clubName: null as string | null,
+      divisionId: null as string | null,
+      positionId: null as string | null,
+      homeBranchId: null as string | null,
+    };
   }
 
   private async assertCompanyExists(companyId: string): Promise<Company> {
@@ -118,6 +240,10 @@ export class DataMigrationService {
       sexo?: 'femenino' | 'masculino';
       peso?: number;
       altura?: number;
+      divisionName?: string;
+      positionName?: string;
+      homeBranchName?: string;
+      clubName?: string;
       rowNumber?: number;
     };
   } | { ok: false; message: string } {
@@ -167,6 +293,10 @@ export class DataMigrationService {
         sexo,
         peso: peso ?? undefined,
         altura: altura ?? undefined,
+        divisionName: this.optionalName(row.divisionName),
+        positionName: this.optionalName(row.positionName),
+        homeBranchName: this.optionalName(row.homeBranchName),
+        clubName: this.optionalName(row.clubName),
         rowNumber: row.rowNumber,
       },
     };
@@ -201,8 +331,8 @@ export class DataMigrationService {
     summary: Record<string, number>;
     rows: AthleteMigrationPreviewRow[];
   }> {
-    await this.assertOperator(actor);
-    const company = await this.assertCompanyExists(companyId);
+    const company = await this.assertCanImportAthletes(actor, companyId);
+    const clubMaps = await this.loadClubLookupMaps(companyId);
 
     const emails = dto.rows.map((r) => this.normalizeEmail(r.email));
     const existingUsers = emails.length
@@ -239,17 +369,57 @@ export class DataMigrationService {
           action: 'error' as const,
           included: false,
           message: sanitized.message,
+          ...this.emptyClubFields(),
         };
       }
 
       const { email, name, lastName } = sanitized.data;
+      const divisionLookup = this.lookupByName(clubMaps.divisions, sanitized.data.divisionName);
+      const positionLookup = this.lookupByName(clubMaps.positions, sanitized.data.positionName);
+      const branchLookup = this.lookupByName(clubMaps.branches, sanitized.data.homeBranchName);
+      const clubFields = {
+        divisionName: divisionLookup.input,
+        positionName: positionLookup.input,
+        homeBranchName: branchLookup.input,
+        clubName: sanitized.data.clubName ?? null,
+        divisionId: divisionLookup.match?.id ?? null,
+        positionId: positionLookup.match?.id ?? null,
+        homeBranchId: branchLookup.match?.id ?? null,
+      };
+
       const base = {
         rowNumber,
         email,
         name,
         lastName,
         existingUserId: null as string | null,
+        ...clubFields,
       };
+
+      if (divisionLookup.provided && !divisionLookup.match) {
+        return {
+          ...base,
+          action: 'error' as const,
+          included: false,
+          message: `División '${divisionLookup.input}' no existe`,
+        };
+      }
+      if (positionLookup.provided && !positionLookup.match) {
+        return {
+          ...base,
+          action: 'error' as const,
+          included: false,
+          message: `Posición '${positionLookup.input}' no existe`,
+        };
+      }
+      if (branchLookup.provided && !branchLookup.match) {
+        return {
+          ...base,
+          action: 'error' as const,
+          included: false,
+          message: `Sede '${branchLookup.input}' no existe`,
+        };
+      }
 
       if (seenEmails.has(email)) {
         return {
@@ -336,8 +506,7 @@ export class DataMigrationService {
     errors: Array<{ email: string; message: string }>;
     temporaryPasswords: Array<{ email: string; temporaryPassword: string }>;
   }> {
-    await this.assertOperator(actor);
-    await this.assertCompanyExists(companyId);
+    const company = await this.assertCanImportAthletes(actor, companyId);
 
     const preview = await this.previewAthletes(actor, companyId, { rows: dto.rows });
     const previewByEmail = new Map(preview.rows.map((r) => [r.email, r]));
@@ -372,7 +541,8 @@ export class DataMigrationService {
             await this.patchAthleteProfile(previewRow.existingUserId, {
               ...row,
               ...data,
-            });
+            }, company.name);
+            await this.applyClubMembership(companyId, previewRow.existingUserId, previewRow);
             updated += 1;
           } catch (e: unknown) {
             errors.push({
@@ -406,11 +576,14 @@ export class DataMigrationService {
           peso: data.peso,
           altura: data.altura,
           isOnline: false,
+          homeBranchId: previewRow.homeBranchId ?? undefined,
         });
-        if (data.dateOfBirth && result.user?.id) {
+        if (result.user?.id) {
           await this.patchAthleteProfile(result.user.id, {
-            dateOfBirth: data.dateOfBirth,
-          });
+            ...(data.dateOfBirth ? { dateOfBirth: data.dateOfBirth } : {}),
+            clubName: data.clubName,
+          }, company.name);
+          await this.applyClubMembership(companyId, result.user.id, previewRow);
         }
         if (result.temporaryPassword) {
           temporaryPasswords.push({
@@ -442,9 +615,53 @@ export class DataMigrationService {
     };
   }
 
+  private async applyClubMembership(
+    companyId: string,
+    userId: string,
+    previewRow: AthleteMigrationPreviewRow,
+  ): Promise<void> {
+    const invitation = await this.invitationRepository.findOne({
+      where: {
+        user: { id: userId },
+        company: { id: companyId },
+        status: InvitationStatus.APPROVED,
+      },
+    });
+    if (!invitation) return;
+
+    let touched = false;
+    if (previewRow.divisionId) {
+      invitation.divisionId = previewRow.divisionId;
+      touched = true;
+    }
+    if (previewRow.positionId) {
+      invitation.positionId = previewRow.positionId;
+      touched = true;
+    }
+    if (previewRow.homeBranchId) {
+      invitation.homeBranchId = previewRow.homeBranchId;
+      touched = true;
+    }
+    if (touched) {
+      await this.invitationRepository.save(invitation);
+    }
+  }
+
+  private normalizeClubNameForSave(
+    value: string | null | undefined,
+    centerName: string | null | undefined,
+  ): string | null {
+    const trimmed = String(value ?? '').trim();
+    if (!trimmed) return null;
+    const center = centerName?.trim() ?? '';
+    if (center && trimmed.toLowerCase() === center.toLowerCase()) return null;
+    return trimmed;
+  }
+
   private async patchAthleteProfile(
     userId: string,
     row: Partial<MigrateAthleteRowDto>,
+    companyName?: string,
   ): Promise<void> {
     const user = await this.userRepository.findOne({ where: { id: userId } });
     if (!user) return;
@@ -488,6 +705,13 @@ export class DataMigrationService {
     if (row.altura != null && Number.isFinite(Number(row.altura))) {
       user.altura = Number(row.altura);
       touched = true;
+    }
+    if (row.clubName !== undefined) {
+      const nextClub = this.normalizeClubNameForSave(row.clubName, companyName);
+      if (nextClub) {
+        user.clubName = nextClub;
+        touched = true;
+      }
     }
     if (touched) {
       await this.userRepository.save(user);

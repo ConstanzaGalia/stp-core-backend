@@ -43,6 +43,22 @@ export class MigrateAthleteRowDto {
   altura?: number | string | null;
 
   @IsOptional()
+  @IsString()
+  divisionName?: string;
+
+  @IsOptional()
+  @IsString()
+  positionName?: string;
+
+  @IsOptional()
+  @IsString()
+  homeBranchName?: string;
+
+  @IsOptional()
+  @IsString()
+  clubName?: string;
+
+  @IsOptional()
   @Type(() => Number)
   rowNumber?: number;
 }
