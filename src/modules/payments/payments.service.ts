@@ -2161,8 +2161,8 @@ export class PaymentsService {
   /**
    * Obtiene las cuotas vencidas del centro.
    * 1) Pagos con deuda (pending/overdue, o paid con pendingBalance > 0) cuya dueDate ya pasó.
-   * 2) Suscriptores activos sin cuota pendiente: si el próximo vencimiento (inferido del
-   *    último pago completado o del período de la suscripción) ya pasó, también figuran.
+   * 2) Suscriptores activos sin cuota pendiente: si el fin del período (o el dueDate
+   *    posterior del último pago de mensualidad) ya pasó, también figuran.
    */
   async getOverduePayments(companyId: string): Promise<any[]> {
     const toDateOnlyUTC = (date: Date | string): Date => {
@@ -2204,10 +2204,8 @@ export class PaymentsService {
     };
 
     /**
-     * Próximo vencimiento tras un pago completado.
-     * Siempre desde la fecha de pago (+1 mes), no desde el dueDate de esa cuota:
-     * si pagó antes del vencimiento (ej. pagó el 10 con vencimiento 11), el dueDate
-     * de ese registro NO es el próximo ciclo.
+     * Fallback si no hay fin de período: un mes después de la fecha de pago.
+     * No usa dueDate de esa cuota (puede ser el día de la cuota, no el del plan).
      */
     const inferNextDueFromPaid = (payment: Payment): Date => {
       if (payment.paidDate) {
@@ -2328,7 +2326,8 @@ export class PaymentsService {
       });
     }
 
-    // 2) Activos sin cuota pending: inferir vencimiento desde último pago o período
+    // 2) Activos sin cuota pending: vencimiento = fin de período (misma fecha que Atletas).
+    // Si el último pago de mensualidad tiene un dueDate posterior (extensión no sincronizada), usar ese.
     for (const subscription of activeSubscriptions) {
       const user = subscription.user;
       if (!user?.id) continue;
@@ -2339,10 +2338,16 @@ export class PaymentsService {
 
       let nextDue: Date | null = null;
       const lastPaid = latestPaidByUser.get(userId);
-      if (lastPaid) {
-        nextDue = inferNextDueFromPaid(lastPaid);
-      } else if (subscription.periodEndDate) {
+      if (subscription.periodEndDate) {
         nextDue = toDateOnlyUTC(subscription.periodEndDate);
+        if (lastPaid?.dueDate) {
+          const paidDue = toDateOnlyUTC(lastPaid.dueDate);
+          if (paidDue > nextDue) {
+            nextDue = paidDue;
+          }
+        }
+      } else if (lastPaid) {
+        nextDue = inferNextDueFromPaid(lastPaid);
       } else if (subscription.periodStartDate) {
         nextDue = addOneMonthUTC(toDateOnlyUTC(subscription.periodStartDate));
       }
