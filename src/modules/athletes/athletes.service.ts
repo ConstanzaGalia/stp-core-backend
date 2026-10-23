@@ -320,7 +320,7 @@ export class AthletesService {
     temporaryPassword?: string;
     linked?: boolean;
   }> {
-    const { name, lastName, email, isOnline = false, dateOfBirth, dni, phoneNumber, evaluationPortalOnly, sexo, peso, altura, homeBranchId } = createAthleteDto;
+    const { name, lastName, email, isOnline = false, dateOfBirth, dni, phoneNumber, evaluationPortalOnly, sexo, peso, altura, homeBranchId, emergencyContact, obraSocial, clubName } = createAthleteDto;
 
     // Verificar que el centro existe
     const company = await this.companyRepository.findOne({
@@ -365,6 +365,11 @@ export class AthletesService {
         if (altura != null && Number.isFinite(Number(altura))) {
           existingUser.altura = Number(altura);
         }
+        if (dni?.trim()) existingUser.dni = dni.trim();
+        if (dateOfBirth) existingUser.dateOfBirth = new Date(dateOfBirth);
+        if (emergencyContact?.trim()) existingUser.emergencyContact = emergencyContact.trim();
+        if (obraSocial?.trim()) existingUser.obraSocial = obraSocial.trim();
+        if (clubName?.trim()) existingUser.clubName = clubName.trim();
         await this.userRepository.save(existingUser);
 
         let savedInvitation: AthleteInvitation;
@@ -428,6 +433,9 @@ export class AthletesService {
       ...(sexo === 'femenino' || sexo === 'masculino' ? { sexo } : {}),
       ...(peso != null && Number.isFinite(Number(peso)) ? { peso: Number(peso) } : {}),
       ...(altura != null && Number.isFinite(Number(altura)) ? { altura: Number(altura) } : {}),
+      ...(emergencyContact?.trim() ? { emergencyContact: emergencyContact.trim() } : {}),
+      ...(obraSocial?.trim() ? { obraSocial: obraSocial.trim() } : {}),
+      ...(clubName?.trim() ? { clubName: clubName.trim() } : {}),
     });
     const savedUser = await this.userRepository.save(newUser);
 

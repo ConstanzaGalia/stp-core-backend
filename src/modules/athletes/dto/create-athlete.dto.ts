@@ -1,4 +1,4 @@
-import { IsBoolean, IsEmail, IsIn, IsNotEmpty, IsNumber, IsOptional, IsString, IsUUID, Matches, Max, Min, ValidateIf } from 'class-validator';
+import { IsBoolean, IsEmail, IsIn, IsNotEmpty, IsNumber, IsOptional, IsString, IsUUID, Matches, Max, MaxLength, Min, ValidateIf } from 'class-validator';
 import { Type } from 'class-transformer';
 
 export class CreateAthleteDto {
@@ -61,4 +61,19 @@ export class CreateAthleteDto {
   @Min(100)
   @Max(250)
   altura?: number | null;
+
+  @IsOptional()
+  @IsString()
+  @MaxLength(200)
+  emergencyContact?: string;
+
+  @IsOptional()
+  @IsString()
+  @MaxLength(200)
+  obraSocial?: string;
+
+  @IsOptional()
+  @IsString()
+  @MaxLength(200)
+  clubName?: string;
 }
