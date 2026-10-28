@@ -45,6 +45,7 @@ import {
   mergeSessionWarnings,
   type SafetyConflict,
 } from './session-safety.util';
+import { buildExerciseHistory } from './exercise-history.util';
 import {
   CreateWorkoutTemplateDto,
   InstantiateWorkoutTemplateDto,
@@ -655,6 +656,34 @@ export class TrainingPlannerService {
       sessions,
       activeTags,
     };
+  }
+
+  /**
+   * Último y máximo de carga por ejercicio, a partir de las sesiones del atleta.
+   * No hidrata el catálogo: solo lo que está guardado en los bloques.
+   */
+  async getExerciseHistory(athleteId: string, includePrivate = false) {
+    const where: Record<string, string> = { athleteId };
+    if (!includePrivate) {
+      where.coachStatus = 'published';
+    }
+    const entities = await this.sessionRepo.find({
+      where,
+      select: ['id', 'scheduledDate', 'athleteCompletionStatus', 'coachStatus', 'blocks'],
+      order: { scheduledDate: 'DESC' },
+    });
+    const filtered = entities.filter(
+      (e) => includePrivate || (e.coachStatus ?? 'published') === 'published',
+    );
+    const exercises = buildExerciseHistory(
+      filtered.map((e) => ({
+        id: e.id,
+        scheduledDate: e.scheduledDate,
+        athleteCompletionStatus: e.athleteCompletionStatus,
+        blocks: e.blocks,
+      })),
+    );
+    return { exercises };
   }
 
   async getSession(

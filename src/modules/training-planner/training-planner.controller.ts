@@ -311,6 +311,17 @@ export class TrainingPlannerController {
     return this.service.getPlannerBootstrap(athleteId, includePrivate);
   }
 
+  /** Último / máximo de carga por ejercicio del atleta. */
+  @Get('athletes/:athleteId/exercise-history')
+  async getExerciseHistory(
+    @Param('athleteId') athleteId: string,
+    @GetUser() user: User,
+  ) {
+    await this.service.assertCanAccessTrainingAthlete(user, athleteId, false);
+    const includePrivate = user.role !== UserRole.ATHLETE;
+    return this.service.getExerciseHistory(athleteId, includePrivate);
+  }
+
   @Get('sessions/:id')
   async getSession(
     @Param('id') id: string,
