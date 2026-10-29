@@ -168,7 +168,7 @@ export class PaymentsService {
     private readonly periodCreditsService: PeriodCreditsService,
   ) {}
 
-  syncActiveSubscriptionCredits(userId: string, companyId?: string | null): Promise<void> {
+  syncActiveSubscriptionCredits(userId: string, companyId?: string | null) {
     return this.periodCreditsService.syncActiveSubscriptionCredits(userId, companyId);
   }
 
@@ -3849,6 +3849,11 @@ export class PaymentsService {
         subscription,
         paidPeriodAccess.plan,
       );
+      const credits = await this.syncActiveSubscriptionCredits(userId, companyId);
+      if (credits) {
+        updatedSubscription.classesUsedThisPeriod = credits.consumidas;
+        updatedSubscription.classesRemainingThisPeriod = credits.libres;
+      }
       updatedSubscription = await this.renewWeeklyCounters(updatedSubscription);
       expiredClasses = await this.getExpiredClasses(updatedSubscription);
     }

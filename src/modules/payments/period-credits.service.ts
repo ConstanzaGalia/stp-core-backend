@@ -93,7 +93,7 @@ export class PeriodCreditsService {
   async syncActiveSubscriptionCredits(
     userId: string,
     companyId?: string | null,
-  ): Promise<void> {
+  ): Promise<PeriodCredits | null> {
     try {
       const rows: Array<{
         id: string;
@@ -120,7 +120,7 @@ export class PeriodCreditsService {
         [userId, SubscriptionStatus.ACTIVE, companyId ?? null],
       );
       const sub = rows[0];
-      if (!sub?.companyId || !sub.period_start || !sub.period_end) return;
+      if (!sub?.companyId || !sub.period_start || !sub.period_end) return null;
 
       const credits = await this.compute({
         userId,
@@ -134,12 +134,14 @@ export class PeriodCreditsService {
         classesUsedThisPeriod: credits.consumidas,
         classesRemainingThisPeriod: credits.libres,
       });
+      return credits;
     } catch (error) {
       this.logger.warn(
         `No se pudieron sincronizar créditos de ${userId}: ${
           error instanceof Error ? error.message : String(error)
         }`,
       );
+      return null;
     }
   }
 }
