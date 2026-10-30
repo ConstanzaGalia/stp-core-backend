@@ -427,11 +427,7 @@ export class ReservationsController {
     @Param('timeSlotId') timeSlotId: string,
     @GetUser() user: User,
   ) {
-    // Validar que el usuario autenticado sea el mismo que está reservando
-    if (user.id !== userId) {
-      throw new ForbiddenException('Solo puedes reservar para tu propia cuenta');
-    }
-
+    await this.reservationsService.assertCallerCanCreateReservation(user.id, userId, timeSlotId);
     return this.reservationsService.createReservation(userId, timeSlotId);
   }
 

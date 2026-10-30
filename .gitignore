@@ -38,5 +38,8 @@ lerna-debug.log*
 .env
 .dev.remote.env
 
+# Candidatos generados por scripts/suggest-exercise-videos.ts
+scripts/data/
+
 # Evaluaciones: archivos subidos (configurable con EVALUATIONS_UPLOAD_DIR)
 uploads/evaluations

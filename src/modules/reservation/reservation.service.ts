@@ -177,29 +177,69 @@ export class ReservationsService {
     if (athleteSchedule.user?.id === callerId) {
       return athleteSchedule;
     }
-    const STAFF_ROLES = [UserRole.STP_ADMIN, UserRole.DIRECTOR, UserRole.TRAINER, UserRole.SUB_TRAINER, UserRole.SECRETARIA];
-    const company = await this.companyRepository.findOne({
-      where: { id: athleteSchedule.company?.id },
-      relations: ['users'],
-    });
-    if (!company?.users?.some((u) => u.id === callerId && STAFF_ROLES.includes(u.role))) {
+    const isStaff = await this.isTurnosStaffOfCompany(callerId, athleteSchedule.company?.id);
+    if (!isStaff) {
       throw new ForbiddenException('No tienes permiso para modificar este horario fijo');
     }
     return athleteSchedule;
   }
 
+  private static readonly TURNOS_STAFF_ROLES: UserRole[] = [
+    UserRole.STP_ADMIN,
+    UserRole.DIRECTOR,
+    UserRole.TRAINER,
+    UserRole.SUB_TRAINER,
+    UserRole.SECRETARIA,
+  ];
+
   async callerCanLoadAthleteSlots(callerId: string, companyId?: string | null): Promise<boolean> {
-    return this.isDirectorOrSecretaryOfCompany(callerId, companyId);
+    return this.isTurnosStaffOfCompany(callerId, companyId);
   }
 
-  private async isDirectorOrSecretaryOfCompany(callerId: string, companyId?: string | null): Promise<boolean> {
+  private async isTurnosStaffOfCompany(callerId: string, companyId?: string | null): Promise<boolean> {
     if (!companyId) return false;
     const company = await this.companyRepository.findOne({
       where: { id: companyId },
       relations: ['users'],
     });
-    const roles = [UserRole.STP_ADMIN, UserRole.DIRECTOR, UserRole.SECRETARIA];
-    return !!company?.users?.some((user) => user.id === callerId && roles.includes(user.role));
+    return !!company?.users?.some(
+      (user) => user.id === callerId && ReservationsService.TURNOS_STAFF_ROLES.includes(user.role),
+    );
+  }
+
+  private async isApprovedAthleteOfCompany(athleteUserId: string, companyId: string): Promise<boolean> {
+    const invitation = await this.athleteInvitationRepository.findOne({
+      where: {
+        user: { id: athleteUserId },
+        company: { id: companyId },
+        status: InvitationStatus.APPROVED,
+      },
+    });
+    return !!invitation;
+  }
+
+  async assertCallerCanCreateReservation(
+    callerId: string,
+    athleteUserId: string,
+    timeSlotId: string,
+  ): Promise<void> {
+    if (callerId === athleteUserId) return;
+
+    const timeSlot = await this.timeSlotRepository.findOne({
+      where: { id: timeSlotId },
+      relations: ['company'],
+    });
+    if (!timeSlot) {
+      throw new BadRequestException('El turno no existe o ya no está disponible');
+    }
+    const companyId = timeSlot.company?.id;
+    const isStaff = await this.isTurnosStaffOfCompany(callerId, companyId);
+    if (!isStaff) {
+      throw new ForbiddenException('Solo puedes reservar para tu propia cuenta');
+    }
+    if (!companyId || !(await this.isApprovedAthleteOfCompany(athleteUserId, companyId))) {
+      throw new ForbiddenException('El atleta no pertenece a este centro');
+    }
   }
 
   private async hasOtherReservationAtSameTime(
@@ -230,7 +270,7 @@ export class ReservationsService {
   }
 
   /**
-   * Reasignación de un turno por director o secretaria del centro.
+   * Reasignación de un turno por staff del centro.
    * No cambia créditos del período. El tope semanal aplica solo si el plan lo tiene activo.
    */
   private async canStaffReassignReservation(
@@ -563,7 +603,7 @@ export class ReservationsService {
     }
   }
 
-  async cancelReservation(reservationId: string, userId: string): Promise<void> {
+  async cancelReservation(reservationId: string, callerId: string): Promise<void> {
     const reservation = await this.reservationRepository.findOne({
       where: { id: reservationId },
       relations: ['timeSlot', 'timeSlot.company', 'user'],
@@ -573,13 +613,21 @@ export class ReservationsService {
       throw new BadRequestException('Reserva no encontrada');
     }
 
-    // Verificar que el usuario sea el propietario de la reserva
-    if (reservation.user.id !== userId) {
+    const athleteUserId = reservation.user.id;
+    const isOwner = athleteUserId === callerId;
+    const companyId = reservation.timeSlot.company?.id;
+    const isStaff = !isOwner && (await this.isTurnosStaffOfCompany(callerId, companyId));
+
+    if (!isOwner && !isStaff) {
       throw new ForbiddenException('Solo puedes cancelar tus propias reservas');
     }
 
-    if (!isAtLeastHoursBeforeSlot(reservation.timeSlot.date, reservation.timeSlot.startTime, 2)) {
-      throw new BadRequestException('Solo puedes cancelar tu reserva con al menos 2 horas de anticipación');
+    if (isOwner) {
+      if (!isAtLeastHoursBeforeSlot(reservation.timeSlot.date, reservation.timeSlot.startTime, 2)) {
+        throw new BadRequestException('Solo puedes cancelar tu reserva con al menos 2 horas de anticipación');
+      }
+    } else if (reservation.attendanceStatus != null) {
+      throw new BadRequestException('Este turno ya tiene asistencia marcada');
     }
 
     const timeSlot = reservation.timeSlot;
@@ -593,15 +641,14 @@ export class ReservationsService {
     await this.timeSlotRepository.save(timeSlot);
     await this.reservationRepository.remove(reservation);
 
-    const companyId = timeSlot.company?.id;
     const activeSubscription = await this.getActiveSubscriptionForUser(
-      userId,
+      athleteUserId,
       companyId,
       timeSlot.date,
     );
     if (activeSubscription) {
       await this.paymentsService.refreshWeeklyClassCounters(activeSubscription.id);
-      await this.paymentsService.syncActiveSubscriptionCredits(userId, companyId);
+      await this.paymentsService.syncActiveSubscriptionCredits(athleteUserId, companyId);
     }
 
     // Procesar lista de espera después de cancelar la reserva
@@ -642,7 +689,7 @@ export class ReservationsService {
 
     if (reservation.user.id !== userId) {
       const companyId = reservation.timeSlot?.company?.id;
-      const canReassign = await this.isDirectorOrSecretaryOfCompany(userId, companyId);
+      const canReassign = await this.isTurnosStaffOfCompany(userId, companyId);
       if (!canReassign) {
         throw new ForbiddenException('Solo puedes modificar tus propias reservas');
       }
