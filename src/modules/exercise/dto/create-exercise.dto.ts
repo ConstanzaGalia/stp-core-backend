@@ -1,5 +1,6 @@
 import { IsNotEmpty, IsOptional, IsString, IsArray, IsBoolean, IsNumber } from 'class-validator';
-import { Type } from 'class-transformer';
+import { Transform, Type } from 'class-transformer';
+import { IsYouTubeVideoUrl } from '../youtube-url';
 
 export class CreateExerciseDto {
   @IsNotEmpty()
@@ -10,9 +11,11 @@ export class CreateExerciseDto {
   @IsString()
   description?: string;
 
-  @IsOptional()
+  @Transform(({ value }) => (typeof value === 'string' ? value.trim() : value))
+  @IsNotEmpty({ message: 'El video es obligatorio' })
   @IsString()
-  video?: string;
+  @IsYouTubeVideoUrl()
+  video: string;
 
   @IsOptional()
   @IsString()

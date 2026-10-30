@@ -266,7 +266,7 @@ export class ExerciseService {
         companyId,
         name: dto.name,
         description: dto.description,
-        video: dto.video,
+        video: dto.video.trim(),
         material: dto.material,
         unilateral: dto.unilateral ?? false,
         esIsometrico: dto.esIsometrico ?? false,
