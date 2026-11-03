@@ -1,5 +1,6 @@
 import { Entity, PrimaryGeneratedColumn, Column, ManyToOne, JoinColumn } from 'typeorm';
 import { PhysicalEvaluation } from './physical-evaluation.entity';
+import type { RepDecisionEntry, TestRepEvaluation } from 'src/modules/physical-evaluation/rep-rules/rep-metric-specs';
 
 export interface PhysicalEvaluationAggregateStats {
   best: number | null;
@@ -36,4 +37,14 @@ export class PhysicalEvaluationTest {
 
   @Column({ type: 'jsonb', default: () => "'[]'" })
   warnings: string[];
+
+  /** Registro append-only de decisiones del entrenador sobre repeticiones (ver sql/add-physical-evaluation-test-rep-decisions.sql). */
+  @Column({ type: 'jsonb', name: 'repetition_decisions', default: () => "'[]'" })
+  repetitionDecisions: RepDecisionEntry[];
+
+  /** Calculado al leer con las reglas vigentes; no se persiste. */
+  repSummary?: TestRepEvaluation | null;
+
+  /** Métricas con el valor que dejan las reglas de repeticiones; calculadas al leer, no se persisten. */
+  effectiveMetrics?: Record<string, unknown>;
 }

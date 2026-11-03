@@ -56,6 +56,15 @@ export function normalizeClockTime(time?: string | null): string {
   return `${hours}:${minutes}`;
 }
 
+/** Hours before start that an athlete can still modify or cancel a reservation. */
+export const ATHLETE_RESERVATION_CHANGE_HOURS = 1;
+
+export function subtractHoursFromClock(time: string | null | undefined, hours: number): string {
+  const [hourPart, minutePart] = normalizeClockTime(time).split(':');
+  const totalMinutes = (Number(hourPart) * 60 + Number(minutePart) - hours * 60 + 24 * 60) % (24 * 60);
+  return `${pad2(Math.floor(totalMinutes / 60))}:${pad2(totalMinutes % 60)}`;
+}
+
 /**
  * Instant of a gym slot: calendar date + startTime in America/Argentina/Buenos_Aires.
  * `startTime` is wall-clock in Argentina, not the server timezone.

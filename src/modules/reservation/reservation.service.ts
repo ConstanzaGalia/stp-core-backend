@@ -23,11 +23,13 @@ import { Payment, PaymentStatus } from '../../entities/payment.entity';
 import { WaitlistReservation, WaitlistStatus } from '../../entities/waitlist-reservation.entity';
 import { AvailableClass, AvailableClassReason, AvailableClassStatus } from '../../entities/available-class.entity';
 import {
+  ATHLETE_RESERVATION_CHANGE_HOURS,
   endOfDateOnlyLocal,
   isAtLeastHoursBeforeSlot,
   isSlotInThePast,
   slotInstantInArgentina,
   startOfDateOnlyLocal,
+  subtractHoursFromClock,
   toDateOnlyKey,
 } from 'src/common/utils/date-only.util';
 
@@ -623,8 +625,14 @@ export class ReservationsService {
     }
 
     if (isOwner) {
-      if (!isAtLeastHoursBeforeSlot(reservation.timeSlot.date, reservation.timeSlot.startTime, 2)) {
-        throw new BadRequestException('Solo puedes cancelar tu reserva con al menos 2 horas de anticipación');
+      if (!isAtLeastHoursBeforeSlot(
+        reservation.timeSlot.date,
+        reservation.timeSlot.startTime,
+        ATHLETE_RESERVATION_CHANGE_HOURS,
+      )) {
+        throw new BadRequestException(
+          `Solo puedes cancelar tu reserva con al menos ${ATHLETE_RESERVATION_CHANGE_HOURS} hora de anticipación`,
+        );
       }
     } else if (reservation.attendanceStatus != null) {
       throw new BadRequestException('Este turno ya tiene asistencia marcada');
@@ -669,7 +677,7 @@ export class ReservationsService {
   /**
    * Validar si se puede modificar una reserva
    * Reglas:
-   * - 1 hora de anticipación antes del horario (hora de Argentina)
+   * - 1 hora de anticipación antes del horario (hora de Argentina), igual que cancelar
    * - Si newTimeSlotId está presente, validar que esté en la misma semana
    * - Si tiene plan de 3x semana, no puede tener más de 3 reservas en la semana
    */
@@ -702,10 +710,10 @@ export class ReservationsService {
       ? new Date(`${dateKey}T12:00:00.000Z`)
       : new Date(timeSlot.date);
 
-    if (!isAtLeastHoursBeforeSlot(timeSlot.date, timeSlot.startTime, 1)) {
+    if (!isAtLeastHoursBeforeSlot(timeSlot.date, timeSlot.startTime, ATHLETE_RESERVATION_CHANGE_HOURS)) {
       return {
         canModify: false,
-        reason: 'Solo puedes modificar tu reserva con al menos 1 hora de anticipación',
+        reason: `Solo puedes modificar tu reserva con al menos ${ATHLETE_RESERVATION_CHANGE_HOURS} hora de anticipación`,
       };
     }
 
@@ -1910,11 +1918,11 @@ export class ReservationsService {
         if (companyId && reservation.timeSlot.company?.id !== companyId) {
           return false;
         }
-        const startDateTime = slotInstantInArgentina(
+        const endDateTime = slotInstantInArgentina(
           reservation.timeSlot.date,
-          reservation.timeSlot.startTime,
+          reservation.timeSlot.endTime || reservation.timeSlot.startTime,
         );
-        return startDateTime ? startDateTime >= now : false;
+        return endDateTime ? endDateTime >= now : false;
       })
       .sort((a, b) => {
         const dateA = slotInstantInArgentina(a.timeSlot.date, a.timeSlot.startTime);
@@ -1927,8 +1935,16 @@ export class ReservationsService {
         reservation.timeSlot.date,
         reservation.timeSlot.startTime,
       ) ?? new Date(reservation.timeSlot.date);
-
-      const twoHoursBefore = new Date(timeSlotDate.getTime() - 2 * 60 * 60 * 1000);
+      const canChange = isAtLeastHoursBeforeSlot(
+        reservation.timeSlot.date,
+        reservation.timeSlot.startTime,
+        ATHLETE_RESERVATION_CHANGE_HOURS,
+        now,
+      );
+      const hasStarted = timeSlotDate.getTime() <= now.getTime();
+      const changeDeadline = new Date(
+        timeSlotDate.getTime() - ATHLETE_RESERVATION_CHANGE_HOURS * 60 * 60 * 1000,
+      );
 
       const capacity = reservation.timeSlot.capacity ?? 0;
       const reservedCount = reservation.timeSlot.reservedCount ?? 0;
@@ -1944,8 +1960,14 @@ export class ReservationsService {
         company: reservation.timeSlot.company ? { name: reservation.timeSlot.company.name } : null,
         capacity,
         currentReservations: reservedCount,
-        canCancel: new Date() < twoHoursBefore,
-        cancelDeadline: twoHoursBefore,
+        canCancel: canChange,
+        canModify: canChange,
+        hasStarted,
+        changeDeadlineTime: subtractHoursFromClock(
+          reservation.timeSlot.startTime,
+          ATHLETE_RESERVATION_CHANGE_HOURS,
+        ),
+        cancelDeadline: changeDeadline,
         createdAt: reservation.createdAt,
         timeSlot: {
           capacity,

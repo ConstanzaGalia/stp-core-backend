@@ -1,10 +1,11 @@
-import { Body, Controller, Delete, Get, Param, Patch, Post, Query, UseGuards } from '@nestjs/common';
+import { Body, Controller, Delete, Get, Param, ParseIntPipe, Patch, Post, Query, UseGuards } from '@nestjs/common';
 import { AuthGuard } from '@nestjs/passport';
 import { GetUser } from '../auth/get-user.decorator';
 import { User } from 'src/entities/user.entity';
 import { PhysicalEvaluationService } from './physical-evaluation.service';
 import { CreatePhysicalEvaluationDto } from './dto/create-physical-evaluation.dto';
 import { UpdateEvaluationCriteriaDto } from './dto/update-evaluation-criteria.dto';
+import { SetRepetitionDecisionDto } from './dto/set-repetition-decision.dto';
 
 /**
  * API legacy: alta manual de tests con métricas JSON.
@@ -50,6 +51,19 @@ export class PhysicalEvaluationController {
     @Body() dto: UpdateEvaluationCriteriaDto,
   ) {
     return this.service.updateCriteriaSetId(actor, userId, evaluationId, dto.criteriaSetId ?? null);
+  }
+
+  /** El entrenador incluye, excluye o devuelve a la regla automática una repetición; responde el test recalculado. */
+  @Patch(':userId/:evaluationId/tests/:testId/repetitions/:index')
+  setRepetitionDecision(
+    @GetUser() actor: User,
+    @Param('userId') userId: string,
+    @Param('evaluationId') evaluationId: string,
+    @Param('testId') testId: string,
+    @Param('index', ParseIntPipe) index: number,
+    @Body() dto: SetRepetitionDecisionDto,
+  ) {
+    return this.service.setRepetitionDecision(actor, userId, evaluationId, testId, index, dto);
   }
 
   @Delete(':userId/:evaluationId')

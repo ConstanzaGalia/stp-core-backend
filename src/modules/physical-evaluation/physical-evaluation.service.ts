@@ -28,6 +28,8 @@ import type {
   PhotocellPreviewResponse,
 } from './photocell-import.service';
 import { EvaluationCriteriaSetService } from './evaluation-criteria-set.service';
+import { buildEffectiveMetrics, evaluateTestRepetitions } from './rep-rules/rep-metric-specs';
+import { SetRepetitionDecisionDto } from './dto/set-repetition-decision.dto';
 import {
   PerformanceClassificationService,
   type PerformanceClassificationSnapshot,
@@ -425,10 +427,16 @@ export class PhysicalEvaluationService {
       return;
     }
 
+    // El análisis lee el valor que dejan las reglas de repeticiones (válidas, decisiones del entrenador).
     const inputs: PhysicalTestInput[] = ev.tests.map((t) => ({
       testName: t.testName,
       testType: t.testType,
-      metrics: t.metrics ?? {},
+      metrics: buildEffectiveMetrics(
+        t.testType,
+        t.metrics ?? {},
+        t.repetitions,
+        t.repetitionDecisions ?? [],
+      ),
     }));
     const computed = this.analysisService.analyze(inputs, ev.user?.sexo ?? null);
     ev.summaryScore = computed.summaryScore;
@@ -759,10 +767,58 @@ export class PhysicalEvaluationService {
       relations: ['tests', 'measurements'],
       order: { evaluationDate: 'DESC', createdAt: 'DESC' },
     });
-    if (options?.excludeStpLegacyOnly) {
-      return list.filter((ev) => !isStpLegacyOnlyPhysicalEvaluation(ev));
+    const visible = options?.excludeStpLegacyOnly
+      ? list.filter((ev) => !isStpLegacyOnlyPhysicalEvaluation(ev))
+      : list;
+    visible.forEach((ev) => this.attachRepSummaries(ev));
+    return visible;
+  }
+
+  /** Resultado de las reglas de repeticiones, calculado al leer con la versión vigente. */
+  private attachRepSummaries(ev: PhysicalEvaluation): void {
+    for (const t of ev.tests ?? []) {
+      const decisions = t.repetitionDecisions ?? [];
+      t.repSummary = evaluateTestRepetitions(t.testType, t.repetitions, decisions);
+      t.effectiveMetrics = buildEffectiveMetrics(t.testType, t.metrics ?? {}, t.repetitions, decisions);
     }
-    return list;
+  }
+
+  /** Registra la decisión del entrenador sobre una repetición y devuelve el test recalculado. */
+  async setRepetitionDecision(
+    actor: User,
+    athleteUserId: string,
+    evaluationId: string,
+    testId: string,
+    index: number,
+    dto: SetRepetitionDecisionDto,
+  ): Promise<PhysicalEvaluationTest> {
+    await this.assertCanAccessAthlete(actor, athleteUserId, true);
+    if (!this.isStaff(actor)) {
+      throw new ForbiddenException('Solo el staff puede excluir o incluir repeticiones');
+    }
+    const test = await this.testRepo.findOne({
+      where: { id: testId, evaluation: { id: evaluationId, user: { id: athleteUserId } } },
+    });
+    if (!test) throw new NotFoundException('Test no encontrado');
+    if (!Number.isInteger(index) || index < 0 || index >= (test.repetitions?.length ?? 0)) {
+      throw new BadRequestException('Repetición inexistente');
+    }
+    test.repetitionDecisions = [
+      ...(test.repetitionDecisions ?? []),
+      {
+        index,
+        override: dto.override,
+        by: actor.id,
+        at: new Date().toISOString(),
+        reason: dto.reason?.trim() || null,
+      },
+    ];
+    await this.testRepo.save(test);
+    await this.recomputeEvaluationSummary(evaluationId);
+    const decisions = test.repetitionDecisions;
+    test.repSummary = evaluateTestRepetitions(test.testType, test.repetitions, decisions);
+    test.effectiveMetrics = buildEffectiveMetrics(test.testType, test.metrics ?? {}, test.repetitions, decisions);
+    return test;
   }
 
   async findOneById(actor: User, athleteUserId: string, evaluationId: string): Promise<PhysicalEvaluation> {
@@ -775,6 +831,7 @@ export class PhysicalEvaluationService {
     if (ev.measurements?.length) {
       ev.measurements.sort((a, b) => (a.sortOrder ?? 0) - (b.sortOrder ?? 0));
     }
+    this.attachRepSummaries(ev);
     return ev;
   }
 

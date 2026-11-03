@@ -9,6 +9,9 @@ export class ReservationResponseDto {
   endTime: string;
   companyName: string;
   canCancel: boolean;
+  canModify: boolean;
+  hasStarted: boolean;
+  changeDeadlineTime: string;
   cancelDeadline: Date;
   createdAt: Date;
 } 

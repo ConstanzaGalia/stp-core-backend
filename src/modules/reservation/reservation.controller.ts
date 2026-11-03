@@ -296,7 +296,7 @@ export class ReservationsController {
     @GetUser() user: User,
   ) {
     await this.reservationsService.cancelReservation(reservationId, user.id);
-    return { message: 'Reservation cancelled successfully' };
+    return { message: 'Reserva cancelada correctamente' };
   }
 
   /**
