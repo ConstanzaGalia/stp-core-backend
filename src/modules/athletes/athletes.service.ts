@@ -26,6 +26,7 @@ import { MailingService } from '../mailer/mailing.service';
 import { EncryptService } from '../../services/bcrypt.service';
 import { inviteStudentEmail, approvalStudentEmail } from '../../utils/emailTemplates';
 import { CreateAthleteDto } from './dto/create-athlete.dto';
+import { LinkAthleteByEmailDto } from './dto/link-athlete-by-email.dto';
 import {
   monthDayFromDateOnly,
   monthDayInArgentina,
@@ -452,6 +453,128 @@ export class AthletesService {
     await this.addUserToCompany(savedUser.id, companyId);
 
     return { user: savedUser, invitation: savedInvitation, temporaryPassword, linked: false };
+  }
+
+  async previewAthleteLinkByEmail(
+    companyId: string,
+    email: string,
+  ): Promise<{
+    found: boolean;
+    alreadyLinked?: boolean;
+    hasPendingRequest?: boolean;
+    user?: { id: string; name: string; lastName: string; email: string };
+    otherCenters?: string[];
+  }> {
+    const company = await this.companyRepository.findOne({ where: { id: companyId } });
+    if (!company) {
+      throw new NotFoundException('Company not found');
+    }
+
+    const existingUser = await this.findAthleteUserByEmail(email);
+    if (!existingUser) {
+      return { found: false };
+    }
+
+    const existingInvitation = await this.invitationRepository.findOne({
+      where: {
+        user: { id: existingUser.id },
+        company: { id: companyId },
+      },
+    });
+
+    const otherCenters = await this.invitationRepository.find({
+      where: {
+        user: { id: existingUser.id },
+        status: InvitationStatus.APPROVED,
+      },
+      relations: ['company'],
+    });
+
+    return {
+      found: true,
+      alreadyLinked: existingInvitation?.status === InvitationStatus.APPROVED,
+      hasPendingRequest: existingInvitation?.status === InvitationStatus.PENDING,
+      user: {
+        id: existingUser.id,
+        name: existingUser.name,
+        lastName: existingUser.lastName,
+        email: existingUser.email,
+      },
+      otherCenters: otherCenters
+        .filter((invitation) => invitation.company?.id && invitation.company.id !== companyId)
+        .map((invitation) => invitation.company.name)
+        .filter(Boolean),
+    };
+  }
+
+  async linkAthleteByEmail(
+    companyId: string,
+    dto: LinkAthleteByEmailDto,
+  ): Promise<{
+    user: User;
+    invitation: AthleteInvitation;
+    temporaryPassword: string;
+  }> {
+    const company = await this.companyRepository.findOne({ where: { id: companyId } });
+    if (!company) {
+      throw new NotFoundException('Company not found');
+    }
+
+    const existingUser = await this.findAthleteUserByEmail(dto.email);
+    if (!existingUser) {
+      throw new NotFoundException('No hay un atleta con ese email. Crealo con Nuevo atleta.');
+    }
+
+    const existingInvitation = await this.invitationRepository.findOne({
+      where: {
+        user: { id: existingUser.id },
+        company: { id: companyId },
+      },
+    });
+    if (existingInvitation?.status === InvitationStatus.APPROVED) {
+      throw new ConflictException('Este atleta ya está vinculado al centro');
+    }
+
+    const temporaryPassword = resolveCenterTemporaryPassword(company);
+    existingUser.password = await this.encryptService.encryptedData(temporaryPassword);
+    existingUser.isActive = true;
+    existingUser.activeToken = null;
+    await this.userRepository.save(existingUser);
+
+    let savedInvitation: AthleteInvitation;
+    if (existingInvitation) {
+      existingInvitation.status = InvitationStatus.APPROVED;
+      existingInvitation.approvedAt = new Date();
+      existingInvitation.leftAt = null as any;
+      existingInvitation.rejectedAt = null as any;
+      if (dto.homeBranchId) existingInvitation.homeBranchId = dto.homeBranchId;
+      savedInvitation = await this.invitationRepository.save(existingInvitation);
+    } else {
+      savedInvitation = await this.invitationRepository.save(
+        this.invitationRepository.create({
+          user: existingUser,
+          company: { id: companyId },
+          status: InvitationStatus.APPROVED,
+          approvedAt: new Date(),
+          isOnline: false,
+          homeBranchId: dto.homeBranchId ?? null,
+        }),
+      );
+    }
+
+    await this.addUserToCompany(existingUser.id, companyId);
+    return { user: existingUser, invitation: savedInvitation, temporaryPassword };
+  }
+
+  private async findAthleteUserByEmail(email: string): Promise<User | null> {
+    const normalized = String(email || '').trim().toLowerCase();
+    if (!normalized) return null;
+    const user = await this.userRepository
+      .createQueryBuilder('user')
+      .where('LOWER(user.email) = :email', { email: normalized })
+      .getOne();
+    if (!user || user.role !== UserRole.ATHLETE) return null;
+    return user;
   }
 
   /**

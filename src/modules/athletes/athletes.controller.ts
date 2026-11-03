@@ -10,6 +10,8 @@ import {
   Query,
   UseGuards,
   DefaultValuePipe,
+  ForbiddenException,
+  BadRequestException,
 } from '@nestjs/common';
 import { ParseSanitizedUUIDPipe } from 'src/common/pipes/parse-sanitized-uuid.pipe';
 import { AuthGuard } from '@nestjs/passport';
@@ -21,7 +23,7 @@ import { UserRole } from '../../common/enums/enums';
 import { RequestJoinDto } from './dto/request-join-dto';
 import { ResponseInvitationDto } from './dto/response-invitation-dto';
 import { CreateAthleteDto } from './dto/create-athlete.dto';
-import { ForbiddenException } from '@nestjs/common';
+import { LinkAthleteByEmailDto } from './dto/link-athlete-by-email.dto';
 import { SkipCompanySubscriptionCheck } from 'src/common/decorators/skip-company-subscription-check.decorator';
 
 const STAFF_ROLES = [UserRole.STP_ADMIN, UserRole.DIRECTOR, UserRole.TRAINER, UserRole.SUB_TRAINER, UserRole.SECRETARIA];
@@ -181,6 +183,48 @@ export class AthletesController {
       },
       ...(result.temporaryPassword ? { temporaryPassword: result.temporaryPassword } : {}),
       ...(result.linked != null ? { linked: result.linked } : {}),
+    };
+  }
+
+  @Get('company/:companyId/link-athlete/preview')
+  @UseGuards(AuthGuard('jwt'))
+  async previewAthleteLink(
+    @Param('companyId') companyId: string,
+    @Query('email') email: string,
+    @GetUser() user: User,
+  ) {
+    if (!STAFF_ROLES.includes(user.role)) {
+      throw new ForbiddenException('Solo el staff puede vincular atletas');
+    }
+    await this.ensureUserBelongsToCompany(user, companyId);
+    if (!email?.trim()) {
+      throw new BadRequestException('Ingresá un email');
+    }
+    return await this.athletesService.previewAthleteLinkByEmail(companyId, email);
+  }
+
+  @Post('company/:companyId/link-athlete')
+  @UseGuards(AuthGuard('jwt'))
+  async linkAthlete(
+    @Param('companyId') companyId: string,
+    @Body() dto: LinkAthleteByEmailDto,
+    @GetUser() user: User,
+  ) {
+    if (!STAFF_ROLES.includes(user.role)) {
+      throw new ForbiddenException('Solo el staff puede vincular atletas');
+    }
+    await this.ensureUserBelongsToCompany(user, companyId);
+    const result = await this.athletesService.linkAthleteByEmail(companyId, dto);
+    return {
+      message: `Atleta vinculado al centro. Contraseña temporal: ${result.temporaryPassword}`,
+      user: {
+        id: result.user.id,
+        name: result.user.name,
+        lastName: result.user.lastName,
+        email: result.user.email,
+      },
+      temporaryPassword: result.temporaryPassword,
+      linked: true,
     };
   }
 
