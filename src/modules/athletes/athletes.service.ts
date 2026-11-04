@@ -1219,4 +1219,131 @@ export class AthletesService {
 
     return result;
   }
+
+  /**
+   * Buscar atleta por email (para diagnóstico administrativo)
+   */
+  async findAthleteInvitationsByEmail(email: string) {
+    const normalized = String(email || '').trim().toLowerCase();
+    if (!normalized) {
+      throw new BadRequestException('Email es requerido');
+    }
+
+    const user = await this.userRepository
+      .createQueryBuilder('user')
+      .where('LOWER(user.email) = :email', { email: normalized })
+      .getOne();
+
+    if (!user) {
+      return {
+        found: false,
+        message: 'No se encontró un usuario con ese email',
+      };
+    }
+
+    const invitations = await this.invitationRepository.find({
+      where: { user: { id: user.id } },
+      relations: ['company'],
+      order: { updatedAt: 'DESC', createdAt: 'DESC' },
+    });
+
+    const approvedInvitations = invitations.filter(
+      (inv) => inv.status === InvitationStatus.APPROVED,
+    );
+
+    return {
+      found: true,
+      user: {
+        id: user.id,
+        name: user.name,
+        lastName: user.lastName,
+        email: user.email,
+        role: user.role,
+      },
+      invitations: invitations.map((inv) => ({
+        id: inv.id,
+        status: inv.status,
+        companyId: inv.company?.id,
+        companyName: inv.company?.name,
+        isOnline: inv.isOnline,
+        approvedAt: inv.approvedAt,
+        rejectedAt: inv.rejectedAt,
+        leftAt: inv.leftAt,
+        createdAt: inv.createdAt,
+        updatedAt: inv.updatedAt,
+      })),
+      approvedCount: approvedInvitations.length,
+      hasMultipleApproved: approvedInvitations.length > 1,
+    };
+  }
+
+  /**
+   * Corregir invitaciones duplicadas: mantener solo la más reciente como APPROVED,
+   * marcar las anteriores como LEFT
+   */
+  async fixDuplicateApprovedInvitations(
+    athleteId: string,
+    keepCompanyId: string,
+  ): Promise<{
+    fixed: boolean;
+    message: string;
+    updatedInvitations: string[];
+  }> {
+    const user = await this.userRepository.findOne({
+      where: { id: athleteId },
+    });
+    if (!user) {
+      throw new NotFoundException('Usuario no encontrado');
+    }
+
+    const invitations = await this.invitationRepository.find({
+      where: {
+        user: { id: athleteId },
+        status: InvitationStatus.APPROVED,
+      },
+      relations: ['company'],
+      order: { updatedAt: 'DESC', approvedAt: 'DESC' },
+    });
+
+    if (invitations.length <= 1) {
+      return {
+        fixed: false,
+        message: 'El atleta no tiene invitaciones duplicadas',
+        updatedInvitations: [],
+      };
+    }
+
+    const keepInvitation = invitations.find(
+      (inv) => inv.company?.id === keepCompanyId,
+    );
+    if (!keepInvitation) {
+      throw new NotFoundException(
+        'No se encontró una invitación aprobada en el centro especificado',
+      );
+    }
+
+    const toUpdate = invitations.filter((inv) => inv.id !== keepInvitation.id);
+    const updatedIds: string[] = [];
+
+    for (const invitation of toUpdate) {
+      invitation.status = InvitationStatus.LEFT;
+      invitation.leftAt = new Date();
+      await this.invitationRepository.save(invitation);
+      
+      if (invitation.company?.id) {
+        await this.removeUserFromCompany(athleteId, invitation.company.id);
+      }
+      
+      updatedIds.push(invitation.id);
+      this.logger.log(
+        `Corregida invitación duplicada: atleta ${user.email} removido de ${invitation.company?.name}`,
+      );
+    }
+
+    return {
+      fixed: true,
+      message: `Se marcaron ${updatedIds.length} invitación(es) como LEFT. El atleta ahora solo está en ${keepInvitation.company?.name}`,
+      updatedInvitations: updatedIds,
+    };
+  }
 }
