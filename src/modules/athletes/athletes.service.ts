@@ -309,8 +309,54 @@ export class AthletesService {
   // === MÉTODOS PARA EMPRESAS ===
 
   /**
+   * Marca automáticamente como LEFT todas las invitaciones APPROVED del atleta
+   * en centros diferentes al especificado. Usado al vincular a un nuevo centro.
+   */
+  private async autoLeaveOtherCenters(
+    athleteId: string,
+    newCompanyId: string,
+  ): Promise<number> {
+    // Buscar todas las invitaciones APPROVED del atleta
+    const approvedInvitations = await this.invitationRepository.find({
+      where: {
+        user: { id: athleteId },
+        status: InvitationStatus.APPROVED,
+      },
+      relations: ['company'],
+    });
+
+    // Filtrar solo las de otros centros (no el nuevo)
+    const toLeave = approvedInvitations.filter(
+      (inv) => inv.company?.id && inv.company.id !== newCompanyId,
+    );
+
+    if (toLeave.length === 0) {
+      return 0;
+    }
+
+    // Marcar como LEFT y remover de company_users
+    for (const invitation of toLeave) {
+      invitation.status = InvitationStatus.LEFT;
+      invitation.leftAt = new Date();
+      await this.invitationRepository.save(invitation);
+
+      // Remover de la relación many-to-many
+      if (invitation.company?.id) {
+        await this.removeUserFromCompany(athleteId, invitation.company.id);
+      }
+
+      this.logger.log(
+        `Auto-leave: atleta ${athleteId} salió automáticamente de ${invitation.company?.name} al vincularse a otro centro`,
+      );
+    }
+
+    return toLeave.length;
+  }
+
+  /**
    * El entrenador/director crea un atleta directamente vinculado al centro.
    * La cuenta queda verificada y con contraseña temporal.
+   * Si el atleta ya existe y está en otros centros, se marca como LEFT automáticamente.
    */
   async createAthleteForCompany(
     companyId: string,
@@ -372,6 +418,14 @@ export class AthletesService {
         if (obraSocial?.trim()) existingUser.obraSocial = obraSocial.trim();
         if (clubName?.trim()) existingUser.clubName = clubName.trim();
         await this.userRepository.save(existingUser);
+
+        // Marcar como LEFT las invitaciones en otros centros
+        const leftCount = await this.autoLeaveOtherCenters(existingUser.id, companyId);
+        if (leftCount > 0) {
+          this.logger.log(
+            `Atleta ${existingUser.email} salió automáticamente de ${leftCount} centro(s) al vincularse a ${company.name}`,
+          );
+        }
 
         let savedInvitation: AthleteInvitation;
         if (
@@ -540,6 +594,14 @@ export class AthletesService {
     existingUser.isActive = true;
     existingUser.activeToken = null;
     await this.userRepository.save(existingUser);
+
+    // Marcar como LEFT las invitaciones en otros centros
+    const leftCount = await this.autoLeaveOtherCenters(existingUser.id, companyId);
+    if (leftCount > 0) {
+      this.logger.log(
+        `Atleta ${existingUser.email} salió automáticamente de ${leftCount} centro(s) al vincularse a ${company.name}`,
+      );
+    }
 
     let savedInvitation: AthleteInvitation;
     if (existingInvitation) {
