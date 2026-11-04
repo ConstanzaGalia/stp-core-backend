@@ -661,8 +661,14 @@ export class TrainingPlannerService {
   /**
    * Último y máximo de carga por ejercicio, a partir de las sesiones del atleta.
    * No hidrata el catálogo: solo lo que está guardado en los bloques.
+   * `excludeDate` / `excludeSessionId` sacan el día abierto del planner para que
+   * el autoguardado no pise la referencia de última / máxima.
    */
-  async getExerciseHistory(athleteId: string, includePrivate = false) {
+  async getExerciseHistory(
+    athleteId: string,
+    includePrivate = false,
+    options?: { excludeDate?: string; excludeSessionId?: string },
+  ) {
     const where: Record<string, string> = { athleteId };
     if (!includePrivate) {
       where.coachStatus = 'published';
@@ -675,6 +681,8 @@ export class TrainingPlannerService {
     const filtered = entities.filter(
       (e) => includePrivate || (e.coachStatus ?? 'published') === 'published',
     );
+    const excludeDate = options?.excludeDate?.slice(0, 10);
+    const excludeSessionId = options?.excludeSessionId?.trim();
     const exercises = buildExerciseHistory(
       filtered.map((e) => ({
         id: e.id,
@@ -682,6 +690,10 @@ export class TrainingPlannerService {
         athleteCompletionStatus: e.athleteCompletionStatus,
         blocks: e.blocks,
       })),
+      {
+        excludeDates: excludeDate ? [excludeDate] : undefined,
+        excludeSessionIds: excludeSessionId ? [excludeSessionId] : undefined,
+      },
     );
     return { exercises };
   }

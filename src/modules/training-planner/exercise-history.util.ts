@@ -32,6 +32,30 @@ export interface ExerciseHistorySessionInput {
 }
 
 const DEFAULT_RECENT_LIMIT = 6;
+const DATE_ONLY_RE = /^\d{4}-\d{2}-\d{2}$/;
+
+export interface BuildExerciseHistoryOptions {
+  recentLimit?: number;
+  /** Fechas YYYY-MM-DD que no entran en último / máximo (día abierto en el planner). */
+  excludeDates?: string[];
+  /** Sesiones concretas que no entran en último / máximo. */
+  excludeSessionIds?: string[];
+}
+
+function normalizeDateOnly(value: string | null | undefined): string | null {
+  const date = String(value ?? '').slice(0, 10);
+  return DATE_ONLY_RE.test(date) ? date : null;
+}
+
+function shouldExcludeSession(
+  session: ExerciseHistorySessionInput,
+  options?: BuildExerciseHistoryOptions,
+): boolean {
+  if (options?.excludeSessionIds?.includes(session.id)) return true;
+  const date = normalizeDateOnly(session.scheduledDate);
+  if (date && options?.excludeDates?.includes(date)) return true;
+  return false;
+}
 
 function asNumber(value: unknown): number | null {
   if (typeof value === 'number' && Number.isFinite(value) && value > 0) return value;
@@ -58,11 +82,12 @@ function compareDateDesc(a: string, b: string): number {
 
 /**
  * Recorre los bloques JSONB de las sesiones y arma último / máximo por ejercicio.
- * Usa carga real si hay feedback; si no, la prescrita. Omite sesiones skipped y bloques EC.
+ * Usa carga real si hay feedback; si no, la prescrita. Omite sesiones skipped, bloques EC
+ * y el día / sesión abiertos en el planner para que el autoguardado no pise la referencia.
  */
 export function buildExerciseHistory(
   sessions: ExerciseHistorySessionInput[],
-  options?: { recentLimit?: number },
+  options?: BuildExerciseHistoryOptions,
 ): Record<string, ExerciseHistorySummary> {
   const recentLimit = Math.max(1, options?.recentLimit ?? DEFAULT_RECENT_LIMIT);
   const byId = new Map<string, ExerciseHistorySummary>();
@@ -72,8 +97,9 @@ export function buildExerciseHistory(
   );
 
   for (const session of ordered) {
+    if (shouldExcludeSession(session, options)) continue;
     if ((session.athleteCompletionStatus ?? 'pending') === 'skipped') continue;
-    const date = String(session.scheduledDate ?? '').slice(0, 10);
+    const date = normalizeDateOnly(session.scheduledDate);
     if (!date) continue;
     const blocks = Array.isArray(session.blocks) ? session.blocks : [];
 

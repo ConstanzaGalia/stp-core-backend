@@ -315,11 +315,16 @@ export class TrainingPlannerController {
   @Get('athletes/:athleteId/exercise-history')
   async getExerciseHistory(
     @Param('athleteId') athleteId: string,
+    @Query('excludeDate') excludeDate: string | undefined,
+    @Query('excludeSessionId') excludeSessionId: string | undefined,
     @GetUser() user: User,
   ) {
     await this.service.assertCanAccessTrainingAthlete(user, athleteId, false);
     const includePrivate = user.role !== UserRole.ATHLETE;
-    return this.service.getExerciseHistory(athleteId, includePrivate);
+    return this.service.getExerciseHistory(athleteId, includePrivate, {
+      excludeDate,
+      excludeSessionId,
+    });
   }
 
   @Get('sessions/:id')
