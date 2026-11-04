@@ -44,6 +44,8 @@ export type CoachDashboardMetricRow = {
   userId: string;
   evaluationId: string;
   evaluationDate: string;
+  /** Protocolo de la evaluación (p. ej. sprint_30m, sprint_10m): separa métricas de carrera. */
+  protocolCode?: string | null;
   metrics: Record<string, number | null>;
 };
 

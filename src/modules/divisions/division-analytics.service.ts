@@ -303,6 +303,7 @@ export class DivisionAnalyticsService {
         userId: uid,
         evaluationId: ev.id,
         evaluationDate: d.toISOString().slice(0, 10),
+        protocolCode: protocolOf(ev),
         metrics,
       });
     }

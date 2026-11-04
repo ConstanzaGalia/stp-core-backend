@@ -3,6 +3,8 @@ import { TypeOrmModule } from '@nestjs/typeorm';
 import { DivisionsController } from './divisions.controller';
 import { DivisionsService } from './divisions.service';
 import { DivisionAnalyticsService } from './division-analytics.service';
+import { DivisionGroupPlansService } from './division-group-plans.service';
+import { DivisionGroupPlan } from '../../entities/division-group-plan.entity';
 import { Division } from '../../entities/division.entity';
 import { Company } from '../../entities/company.entity';
 import { User } from '../../entities/user.entity';
@@ -15,6 +17,7 @@ import { AuthModule } from '../auth/auth.module';
   imports: [
     TypeOrmModule.forFeature([
       Division,
+      DivisionGroupPlan,
       Company,
       User,
       AthleteInvitation,
@@ -24,7 +27,7 @@ import { AuthModule } from '../auth/auth.module';
     AuthModule,
   ],
   controllers: [DivisionsController],
-  providers: [DivisionsService, DivisionAnalyticsService],
+  providers: [DivisionsService, DivisionAnalyticsService, DivisionGroupPlansService],
   exports: [DivisionsService, DivisionAnalyticsService],
 })
 export class DivisionsModule {}

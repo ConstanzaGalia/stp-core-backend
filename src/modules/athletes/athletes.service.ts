@@ -7,7 +7,7 @@ import {
   Logger,
 } from '@nestjs/common';
 import { InjectRepository } from '@nestjs/typeorm';
-import { QueryFailedError, Repository } from 'typeorm';
+import { In, QueryFailedError, Repository } from 'typeorm';
 import { AthleteInvitation, InvitationStatus } from '../../entities/athlete-invitation.entity';
 import { User } from '../../entities/user.entity';
 import { Company } from '../../entities/company.entity';
@@ -300,6 +300,8 @@ export class AthletesService {
 
     const updatedInvitation = await this.invitationRepository.save(invitation);
 
+    await this.cancelSubscriptionsForCompany(athleteId, companyId);
+
     // Remover del centro
     await this.removeUserFromCompany(athleteId, companyId);
 
@@ -342,6 +344,7 @@ export class AthletesService {
 
       // Remover de la relación many-to-many
       if (invitation.company?.id) {
+        await this.cancelSubscriptionsForCompany(athleteId, invitation.company.id);
         await this.removeUserFromCompany(athleteId, invitation.company.id);
       }
 
@@ -1172,7 +1175,9 @@ export class AthletesService {
     invitation.leftAt = new Date();
 
     const updatedInvitation = await this.invitationRepository.save(invitation);
-    
+
+    await this.cancelSubscriptionsForCompany(athleteId, companyId);
+
     // Remover del centro
     await this.removeUserFromCompany(athleteId, companyId);
 
@@ -1250,6 +1255,38 @@ export class AthletesService {
       company.users = company.users.filter(user => user.id !== userId);
       await this.companyRepository.save(company);
     }
+  }
+
+  /**
+   * Cancela suscripciones active/paused del alumno en ese centro.
+   * No toca cancelled/expired ni borra pagos, créditos o reservas.
+   */
+  private async cancelSubscriptionsForCompany(
+    userId: string,
+    companyId: string,
+  ): Promise<number> {
+    const subscriptions = await this.subscriptionRepository.find({
+      where: {
+        user: { id: userId },
+        companyId,
+        status: In([SubscriptionStatus.ACTIVE, SubscriptionStatus.PAUSED]),
+      },
+    });
+
+    if (subscriptions.length === 0) {
+      return 0;
+    }
+
+    for (const subscription of subscriptions) {
+      subscription.status = SubscriptionStatus.CANCELLED;
+      subscription.autoRenew = false;
+    }
+
+    await this.subscriptionRepository.save(subscriptions);
+    this.logger.log(
+      `Canceladas ${subscriptions.length} suscripción(es) del atleta ${userId} en centro ${companyId}`,
+    );
+    return subscriptions.length;
   }
 
   // === MÉTODOS ADMINISTRATIVOS ===
@@ -1391,11 +1428,12 @@ export class AthletesService {
       invitation.status = InvitationStatus.LEFT;
       invitation.leftAt = new Date();
       await this.invitationRepository.save(invitation);
-      
+
       if (invitation.company?.id) {
+        await this.cancelSubscriptionsForCompany(athleteId, invitation.company.id);
         await this.removeUserFromCompany(athleteId, invitation.company.id);
       }
-      
+
       updatedIds.push(invitation.id);
       this.logger.log(
         `Corregida invitación duplicada: atleta ${user.email} removido de ${invitation.company?.name}`,

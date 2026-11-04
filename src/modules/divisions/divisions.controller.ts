@@ -12,6 +12,8 @@ import {
 import { AuthGuard } from '@nestjs/passport';
 import { DivisionsService } from './divisions.service';
 import { DivisionAnalyticsService } from './division-analytics.service';
+import { DivisionGroupPlansService } from './division-group-plans.service';
+import { SaveDivisionGroupPlanDto } from './dto/division-group-plan.dto';
 import { GetUser } from '../auth/get-user.decorator';
 import { User } from '../../entities/user.entity';
 import { ParseSanitizedUUIDPipe } from 'src/common/pipes/parse-sanitized-uuid.pipe';
@@ -22,6 +24,7 @@ export class DivisionsController {
   constructor(
     private readonly divisionsService: DivisionsService,
     private readonly divisionAnalyticsService: DivisionAnalyticsService,
+    private readonly groupPlansService: DivisionGroupPlansService,
   ) {}
 
   @Get('company/:companyId')
@@ -72,6 +75,42 @@ export class DivisionsController {
     return this.divisionAnalyticsService.getCoachDashboard(actor, id, {
       positionId: positionId ?? null,
     });
+  }
+
+  @Get(':id/group-plans')
+  listGroupPlans(
+    @GetUser() actor: User,
+    @Param('id', ParseSanitizedUUIDPipe) id: string,
+  ) {
+    return this.groupPlansService.list(actor, id);
+  }
+
+  @Post(':id/group-plans')
+  createGroupPlan(
+    @GetUser() actor: User,
+    @Param('id', ParseSanitizedUUIDPipe) id: string,
+    @Body() dto: SaveDivisionGroupPlanDto,
+  ) {
+    return this.groupPlansService.create(actor, id, dto);
+  }
+
+  @Put(':id/group-plans/:planId')
+  updateGroupPlan(
+    @GetUser() actor: User,
+    @Param('id', ParseSanitizedUUIDPipe) id: string,
+    @Param('planId', ParseSanitizedUUIDPipe) planId: string,
+    @Body() dto: SaveDivisionGroupPlanDto,
+  ) {
+    return this.groupPlansService.update(actor, id, planId, dto);
+  }
+
+  @Delete(':id/group-plans/:planId')
+  removeGroupPlan(
+    @GetUser() actor: User,
+    @Param('id', ParseSanitizedUUIDPipe) id: string,
+    @Param('planId', ParseSanitizedUUIDPipe) planId: string,
+  ) {
+    return this.groupPlansService.remove(actor, id, planId);
   }
 
   @Get(':id')
