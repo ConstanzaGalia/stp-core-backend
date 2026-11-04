@@ -359,4 +359,48 @@ export class AthletesController {
   async getCompanyStatistics(@Param('companyId') companyId: string) {
     return await this.athletesService.getCompanyStatistics(companyId);
   }
+
+  // === ENDPOINTS ADMINISTRATIVOS ===
+
+  @Get('admin/search-by-email')
+  @UseGuards(AuthGuard('jwt'))
+  @SkipCompanySubscriptionCheck()
+  async searchAthleteByEmail(
+    @Query('email') email: string,
+    @GetUser() user: User,
+  ) {
+    // Solo STP_ADMIN puede usar esta función
+    if (user.role !== UserRole.STP_ADMIN) {
+      throw new ForbiddenException('Solo los administradores pueden buscar atletas por email');
+    }
+
+    if (!email?.trim()) {
+      throw new BadRequestException('El parámetro email es requerido');
+    }
+
+    return await this.athletesService.findAthleteInvitationsByEmail(email);
+  }
+
+  @Post('admin/fix-duplicate-invitations')
+  @UseGuards(AuthGuard('jwt'))
+  @SkipCompanySubscriptionCheck()
+  async fixDuplicateInvitations(
+    @Body('athleteId') athleteId: string,
+    @Body('keepCompanyId') keepCompanyId: string,
+    @GetUser() user: User,
+  ) {
+    // Solo STP_ADMIN puede usar esta función
+    if (user.role !== UserRole.STP_ADMIN) {
+      throw new ForbiddenException('Solo los administradores pueden corregir invitaciones duplicadas');
+    }
+
+    if (!athleteId?.trim() || !keepCompanyId?.trim()) {
+      throw new BadRequestException('Los parámetros athleteId y keepCompanyId son requeridos');
+    }
+
+    return await this.athletesService.fixDuplicateApprovedInvitations(
+      athleteId,
+      keepCompanyId,
+    );
+  }
 }
