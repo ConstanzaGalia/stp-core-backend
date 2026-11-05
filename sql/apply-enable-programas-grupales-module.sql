@@ -1,18 +1,18 @@
--- Opcional: agrega programas-grupales a centros con lista explícita de módulos
--- (sin depender del alias planes-entrenamiento → programas-grupales en el front).
--- Ejecutar solo si querés el toggle independiente en Configuración del centro.
+-- Persiste programas-grupales en centros que ya tenían planes de entrenamiento
+-- y una lista explícita de módulos. Así el toggle del panel de centros queda
+-- independiente, sin apagar el módulo en los centros que ya lo usaban.
 
 UPDATE company
 SET enabled_modules = (
   SELECT jsonb_agg(DISTINCT elem)
   FROM (
-    SELECT jsonb_array_elements_text(
-      COALESCE(enabled_modules, '[]'::jsonb)
-    ) AS elem
+    SELECT jsonb_array_elements_text(enabled_modules) AS elem
     UNION ALL
     SELECT 'programas-grupales'
   ) s
-)::jsonb
+)
 WHERE enabled_modules IS NOT NULL
+  AND jsonb_typeof(enabled_modules) = 'array'
   AND jsonb_array_length(enabled_modules) > 0
+  AND enabled_modules @> '["planes-entrenamiento"]'::jsonb
   AND NOT (enabled_modules @> '["programas-grupales"]'::jsonb);
