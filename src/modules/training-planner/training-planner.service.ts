@@ -46,13 +46,23 @@ import {
   type SafetyConflict,
 } from './session-safety.util';
 import { buildExerciseHistory } from './exercise-history.util';
+import { GroupProgramService } from './group-program.service';
 import {
   CreateWorkoutTemplateDto,
   InstantiateWorkoutTemplateDto,
   UpdateWorkoutTemplateDto,
   CreateWorkoutCollectionDto,
   UpdateWorkoutCollectionDto,
-} from './dto/workout-template.dto';interface SessionExerciseMeta {
+  ImportWorkoutCsvConfirmDto,
+} from './dto/workout-template.dto';
+import { matchExerciseName } from './exercise-name-match.util';
+import { parseWorkoutCsv } from './workout-csv-import.util';
+import {
+  EXERCISE_PUBLISHER_COMPANY_IDS,
+  isExercisePublisherCompany,
+} from '../exercise/exercise.constants';
+
+interface SessionExerciseMeta {
   videoUrl: string | null;
   esIsometrico: boolean;
   unilateral: boolean;
@@ -310,6 +320,8 @@ export class TrainingPlannerService {
     private readonly injuriesService: InjuriesService,
     @Inject(forwardRef(() => PaymentsService))
     private readonly paymentsService: PaymentsService,
+    @Inject(forwardRef(() => GroupProgramService))
+    private readonly groupProgramService: GroupProgramService,
   ) {}
 
   private isStaffRole(role: UserRole): boolean {
@@ -635,9 +647,13 @@ export class TrainingPlannerService {
       (e) => includePrivate || (e.coachStatus ?? 'published') === 'published',
     );
     if (view === 'summary') {
-      return filtered.map((e) => this.serializeSessionSummary(e, { includePrivate }));
+      const rows = filtered.map((e) =>
+        this.serializeSessionSummary(e, { includePrivate }),
+      );
+      return this.attachGroupProgramToSessions(rows, filtered);
     }
-    return filtered.map((e) => this.serializeSession(e, { includePrivate }));
+    const rows = filtered.map((e) => this.serializeSession(e, { includePrivate }));
+    return this.attachGroupProgramToSessions(rows, filtered);
   }
 
   /**
@@ -710,7 +726,8 @@ export class TrainingPlannerService {
     if (!includePrivate && (entity.coachStatus ?? 'published') !== 'published') {
       return null;
     }
-    const serialized = this.serializeSession(entity, { includePrivate });
+    let serialized = this.serializeSession(entity, { includePrivate });
+    [serialized] = await this.attachGroupProgramToSessions([serialized], [entity]);
     return this.enrichSessionWithExerciseMeta(serialized);
   }
 
@@ -820,6 +837,14 @@ export class TrainingPlannerService {
       coachObservations: isStaff
         ? (data.coachObservations ?? null)
         : (existing?.coachObservations ?? null),
+      groupProgramId: existing?.groupProgramId ?? null,
+      groupProgramSlotId: existing?.groupProgramSlotId ?? null,
+      isCustomized:
+        existing?.groupProgramId &&
+        existing != null &&
+        !isRoutineContentUnchanged(existing, data, blocks)
+          ? true
+          : (existing?.isCustomized ?? false),
     });
 
     if (actor && isStaff) {
@@ -1090,6 +1115,9 @@ export class TrainingPlannerService {
       athleteCompletionStatus: e.athleteCompletionStatus ?? 'pending',
       coachStatus: e.coachStatus ?? 'published',
       sourceWorkoutTemplateId: e.sourceWorkoutTemplateId ?? null,
+      groupProgramId: e.groupProgramId ?? null,
+      groupProgramSlotId: e.groupProgramSlotId ?? null,
+      isCustomized: e.isCustomized ?? false,
       safetyConflicts: Array.isArray(e.safetyConflicts) ? e.safetyConflicts : [],
       attendanceMarkedByUserId: e.attendanceMarkedByUserId ?? null,
       attendanceMarkedByName: e.attendanceMarkedByName ?? null,
@@ -1103,6 +1131,7 @@ export class TrainingPlannerService {
         : {}),
       createdAt: toIso(e.createdAt),
       updatedAt: toIso(e.updatedAt),
+      groupProgram: null as Record<string, unknown> | null,
     };
   }
 
@@ -1191,6 +1220,9 @@ export class TrainingPlannerService {
       athleteCompletionStatus: e.athleteCompletionStatus ?? 'pending',
       coachStatus: e.coachStatus ?? 'published',
       sourceWorkoutTemplateId: e.sourceWorkoutTemplateId ?? null,
+      groupProgramId: e.groupProgramId ?? null,
+      groupProgramSlotId: e.groupProgramSlotId ?? null,
+      isCustomized: e.isCustomized ?? false,
       safetyConflicts: Array.isArray(e.safetyConflicts) ? e.safetyConflicts : [],
       attendanceMarkedByUserId: e.attendanceMarkedByUserId ?? null,
       attendanceMarkedByName: e.attendanceMarkedByName ?? null,
@@ -1208,7 +1240,43 @@ export class TrainingPlannerService {
       lastSavedByName: e.lastSavedByName ?? null,
       createdAt: toIso(e.createdAt),
       updatedAt: toIso(e.updatedAt),
+      groupProgram: null as Record<string, unknown> | null,
     };
+  }
+
+  private async attachGroupProgramToSessions<T extends { groupProgramId?: string | null; groupProgram?: unknown }>(
+    rows: T[],
+    entities: STPSessionInstance[],
+  ): Promise<T[]> {
+    const ids = [
+      ...new Set(
+        entities
+          .map((e) => e.groupProgramId)
+          .filter((id): id is string => typeof id === 'string' && !!id),
+      ),
+    ];
+    const metaMap = await this.groupProgramService.loadGroupProgramMeta(ids);
+    return rows.map((row, i) => {
+      const entity = entities[i];
+      const meta = entity.groupProgramId
+        ? metaMap.get(entity.groupProgramId)
+        : undefined;
+      return {
+        ...row,
+        groupProgram: this.groupProgramService.groupProgramContextFromSession(
+          entity,
+          meta,
+        ),
+      };
+    });
+  }
+
+  cloneSessionBlocks(blocks: unknown[]): unknown[] {
+    return this.cloneBlocksWithNewIds(blocks);
+  }
+
+  async evaluateSessionBlocksSafety(athleteId: string, blocks: unknown[]) {
+    return this.evaluateSessionSafety(athleteId, blocks);
   }
 
   private collectExerciseIdsFromBlocks(blocks: unknown[]): string[] {
@@ -2004,6 +2072,176 @@ export class TrainingPlannerService {
     entity.lastEditedByName = formatStaffDisplayName(actor);
     await this.workoutTemplateRepo.save(entity);
     return { ok: true };
+  }
+
+  /** Catálogo de ejercicios visibles para el centro (propios + publishers). */
+  private async loadCompanyExerciseCatalog(
+    companyId: string,
+  ): Promise<Array<{ id: string; name: string }>> {
+    const qb = this.exerciseRepo
+      .createQueryBuilder('exercise')
+      .select(['exercise.id', 'exercise.name']);
+    if (isExercisePublisherCompany(companyId)) {
+      qb.where('exercise.companyId IN (:...publisherIds)', {
+        publisherIds: [...EXERCISE_PUBLISHER_COMPANY_IDS],
+      });
+    } else {
+      qb.where(
+        '(exercise.companyId = :companyId OR exercise.companyId IN (:...publisherIds))',
+        { companyId, publisherIds: [...EXERCISE_PUBLISHER_COMPANY_IDS] },
+      );
+    }
+    const rows = await qb.getMany();
+    return rows.map((e) => ({ id: e.id, name: e.name }));
+  }
+
+  async previewWorkoutCsvImport(companyId: string, csvText: string) {
+    const parsed = parseWorkoutCsv(csvText);
+    if (!parsed.workouts.length && parsed.warnings.length) {
+      throw new BadRequestException(parsed.warnings[0]);
+    }
+    const catalog = await this.loadCompanyExerciseCatalog(companyId);
+    const matches = parsed.uniqueExerciseNames.map((csvName) =>
+      matchExerciseName(csvName, catalog, 3),
+    );
+    return {
+      workouts: parsed.workouts,
+      matches,
+      warnings: parsed.warnings,
+      catalogSampleSize: catalog.length,
+    };
+  }
+
+  private async resolveImportCollectionId(
+    companyId: string,
+    dto: ImportWorkoutCsvConfirmDto,
+    actor: User,
+  ): Promise<string | null> {
+    if (dto.collectionId) {
+      return this.assertCollectionBelongsToCompany(companyId, dto.collectionId);
+    }
+    if (!dto.useImportCollection) return null;
+    const existing = await this.workoutCollectionRepo.findOne({
+      where: { companyId, isActive: true, name: 'Import CSV' },
+    });
+    if (existing) return existing.id;
+    const created = await this.createWorkoutCollection(
+      companyId,
+      { name: 'Import CSV', description: 'Workouts importados desde CSV' },
+      actor,
+    );
+    return created.id;
+  }
+
+  async confirmWorkoutCsvImport(
+    companyId: string,
+    dto: ImportWorkoutCsvConfirmDto,
+    actor: User,
+  ) {
+    if (!Array.isArray(dto.workouts) || dto.workouts.length === 0) {
+      throw new BadRequestException('No hay workouts para importar.');
+    }
+    const exerciseMap = dto.exerciseMap ?? {};
+    const resolvedIds = Object.values(exerciseMap).filter(
+      (id): id is string => typeof id === 'string' && id.length > 0,
+    );
+    const uniqueIds = [...new Set(resolvedIds)];
+    const catalogById = new Map<string, { id: string; name: string }>();
+    if (uniqueIds.length) {
+      const found = await this.exerciseRepo.find({
+        where: { id: In(uniqueIds) },
+        select: ['id', 'name'],
+      });
+      for (const e of found) catalogById.set(e.id, { id: e.id, name: e.name });
+      for (const id of uniqueIds) {
+        if (!catalogById.has(id)) {
+          throw new BadRequestException(`Ejercicio no encontrado: ${id}`);
+        }
+      }
+    }
+
+    const collectionId = await this.resolveImportCollectionId(
+      companyId,
+      dto,
+      actor,
+    );
+    const created: Array<Record<string, unknown>> = [];
+    const skippedWorkouts: string[] = [];
+
+    for (const workout of dto.workouts) {
+      const blocks: unknown[] = [];
+      let exerciseCount = 0;
+      const sortedBlocks = [...(workout.blocks ?? [])].sort(
+        (a, b) => a.blockOrder - b.blockOrder,
+      );
+      for (const block of sortedBlocks) {
+        const exercises: unknown[] = [];
+        for (const row of block.exercises ?? []) {
+          if (row.omit) continue;
+          const mapped = exerciseMap[row.exerciseName];
+          if (mapped === null || mapped === undefined) continue;
+          const meta = catalogById.get(mapped);
+          if (!meta) continue;
+          exercises.push({
+            id: `session-exercise-${randomUUID()}`,
+            exerciseId: meta.id,
+            exerciseName: meta.name,
+            source: 'manual',
+            prescribedSets: Math.max(1, Number(row.sets) || 3),
+            prescribedReps: String(row.reps || '8'),
+            prescribedLoad: 0,
+            restSeconds: Math.max(0, Number(row.restSeconds) || 90),
+            notes: '',
+            warnings: [],
+            actualFeedback: null,
+          });
+        }
+        if (!exercises.length) continue;
+        exerciseCount += exercises.length;
+        blocks.push({
+          id: `block-${randomUUID()}`,
+          type: 'principal',
+          title: block.blockTitle || (block.isEc ? 'EC' : 'C1'),
+          objective: '',
+          order: block.blockOrder ?? blocks.length + 1,
+          sets: Math.max(
+            1,
+            ...exercises.map(
+              (ex) =>
+                (ex as { prescribedSets?: number }).prescribedSets ?? 1,
+            ),
+          ),
+          candidateExerciseIds: [],
+          exercises,
+          isEC: !!block.isEc,
+        });
+      }
+
+      if (!blocks.length || exerciseCount === 0) {
+        skippedWorkouts.push(workout.workoutName);
+        continue;
+      }
+
+      const saved = await this.createWorkoutTemplate(
+        companyId,
+        {
+          name: workout.workoutName.trim(),
+          phase: workout.phase?.trim() || null,
+          pattern: workout.pattern?.trim() || null,
+          collectionId,
+          tags: ['import-csv'],
+          blocks,
+        },
+        actor,
+      );
+      created.push(saved);
+    }
+
+    return {
+      createdCount: created.length,
+      skippedWorkouts,
+      templates: created,
+    };
   }
 
   private cloneBlocksWithNewIds(blocks: unknown[]): unknown[] {

@@ -57,6 +57,13 @@ pending AS (
   WHERE ts."companyId" = sub."companyId"
     AND r.attendance_status IS NULL
     AND ts.date::date BETWEEN sub.period_start AND sub.period_end
+    AND NOT EXISTS (
+      SELECT 1
+      FROM stp_session_instances sess
+      WHERE sess.athlete_id = sub."userId"::text
+        AND sess.athlete_completion_status = 'completed'
+        AND left(sess.scheduled_date, 10)::date = ts.date::date
+    )
   GROUP BY sub.subscription_id
 ),
 computed AS (

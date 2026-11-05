@@ -66,6 +66,9 @@ import { STPWeeklyTemplate } from './entities/stp-weekly-template.entity';
 import { STPSessionInstance } from './entities/stp-session-instance.entity';
 import { STPWorkoutTemplate } from './entities/stp-workout-template.entity';
 import { STPWorkoutCollection } from './entities/stp-workout-collection.entity';
+import { STPGroupProgram } from './entities/stp-group-program.entity';
+import { STPGroupProgramSlot } from './entities/stp-group-program-slot.entity';
+import { STPGroupProgramEnrollment } from './entities/stp-group-program-enrollment.entity';
 import { User } from './entities/user.entity';
 import { UserPaymentSubscription } from './entities/user-payment-subscription.entity';
 import { UserPlan } from './entities/userPlan.entity';
@@ -137,6 +140,9 @@ export const TYPEORM_ENTITIES = [
   STPSessionInstance,
   STPWorkoutTemplate,
   STPWorkoutCollection,
+  STPGroupProgram,
+  STPGroupProgramSlot,
+  STPGroupProgramEnrollment,
   User,
   UserPaymentSubscription,
   UserPlan,

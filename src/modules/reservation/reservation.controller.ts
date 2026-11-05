@@ -339,9 +339,24 @@ export class ReservationsController {
   @UseGuards(AuthGuard('jwt'))
   async getUserReservations(
     @Param('userId') userId: string,
+    @GetUser() user: User,
     @Query('companyId') companyId?: string,
+    @Query('includePeriodPending') includePeriodPending?: string,
   ) {
-    return this.reservationsService.getUserReservations(userId, companyId);
+    const wantPeriodPending =
+      includePeriodPending === '1'
+      || includePeriodPending === 'true'
+      || includePeriodPending === 'yes';
+    let includePeriodPendingForStaff = false;
+    if (wantPeriodPending && companyId) {
+      includePeriodPendingForStaff = await this.reservationsService.callerCanLoadAthleteSlots(
+        user.id,
+        companyId,
+      );
+    }
+    return this.reservationsService.getUserReservations(userId, companyId, {
+      includePeriodPending: includePeriodPendingForStaff,
+    });
   }
 
   // Endpoints para gestión de excepciones de horarios

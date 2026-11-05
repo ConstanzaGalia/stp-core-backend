@@ -1,7 +1,8 @@
 -- Preview: créditos reales de suscripciones activas. No escribe nada.
 -- Consumida = turno con asistencia (presente o ausente)
 --   + presente en planilla de un día sin turno marcado.
--- Pendiente = reserva del período sin asistencia.
+-- Pendiente = reserva del período sin asistencia, excepto si ese mismo día
+--   ya hay planilla completada (evita doble conteo).
 -- Libres = cupo - consumidas - pendientes (mínimo 0).
 --
 -- Opcional: descomentar el filtro de centro.
@@ -60,6 +61,13 @@ pending AS (
   WHERE ts."companyId" = sub."companyId"
     AND r.attendance_status IS NULL
     AND ts.date::date BETWEEN sub.period_start AND sub.period_end
+    AND NOT EXISTS (
+      SELECT 1
+      FROM stp_session_instances sess
+      WHERE sess.athlete_id = sub."userId"::text
+        AND sess.athlete_completion_status = 'completed'
+        AND left(sess.scheduled_date, 10)::date = ts.date::date
+    )
   GROUP BY sub.subscription_id
 )
 SELECT

@@ -9,6 +9,7 @@ import {
   Param,
   Query,
   UseGuards,
+  BadRequestException,
   ForbiddenException,
 } from '@nestjs/common';
 import { AuthGuard } from '@nestjs/passport';
@@ -16,6 +17,13 @@ import { UserRole } from 'src/common/enums/enums';
 import { GetUser } from '../auth/get-user.decorator';
 import { User } from 'src/entities/user.entity';
 import { TrainingPlannerService } from './training-planner.service';
+import { GroupProgramService } from './group-program.service';
+import {
+  CreateGroupProgramDto,
+  EnrollGroupProgramDto,
+  ReplaceGroupProgramSlotsDto,
+  UpdateGroupProgramDto,
+} from './dto/group-program.dto';
 import {
   CreateWorkoutTemplateDto,
   InstantiateWorkoutTemplateDto,
@@ -25,12 +33,17 @@ import {
   UpdateWorkoutTemplateDto,
   CreateWorkoutCollectionDto,
   UpdateWorkoutCollectionDto,
+  ImportWorkoutCsvPreviewDto,
+  ImportWorkoutCsvConfirmDto,
 } from './dto/workout-template.dto';
 
 @Controller('training-planner')
 @UseGuards(AuthGuard('jwt'))
 export class TrainingPlannerController {
-  constructor(private readonly service: TrainingPlannerService) {}
+  constructor(
+    private readonly service: TrainingPlannerService,
+    private readonly groupPrograms: GroupProgramService,
+  ) {}
 
   private assertCanModify(user: User): void {
     if (user.role === UserRole.SECRETARIA) {
@@ -214,6 +227,31 @@ export class TrainingPlannerController {
     this.assertCanModify(user);
     await this.assertStaffBelongsToCompany(user, companyId);
     return this.service.createWorkoutTemplate(companyId, body, user);
+  }
+
+  @Post('company/:companyId/workout-templates/import-preview')
+  async importWorkoutCsvPreview(
+    @Param('companyId') companyId: string,
+    @Body() body: ImportWorkoutCsvPreviewDto,
+    @GetUser() user: User,
+  ) {
+    this.assertCanModify(user);
+    await this.assertStaffBelongsToCompany(user, companyId);
+    if (!body?.csvText?.trim()) {
+      throw new BadRequestException('csvText es requerido.');
+    }
+    return this.service.previewWorkoutCsvImport(companyId, body.csvText);
+  }
+
+  @Post('company/:companyId/workout-templates/import-confirm')
+  async importWorkoutCsvConfirm(
+    @Param('companyId') companyId: string,
+    @Body() body: ImportWorkoutCsvConfirmDto,
+    @GetUser() user: User,
+  ) {
+    this.assertCanModify(user);
+    await this.assertStaffBelongsToCompany(user, companyId);
+    return this.service.confirmWorkoutCsvImport(companyId, body, user);
   }
 
   @Put('company/:companyId/workout-templates/:templateId')
@@ -474,5 +512,116 @@ export class TrainingPlannerController {
     this.assertCanModify(user);
     await this.service.assertCanAccessTrainingAthlete(user, body.athleteId, true);
     return this.service.saveSession({ ...body, id: sessionId }, user);
+  }
+
+  // ── Programas grupales ────────────────────────────────────────────────────
+
+  @Get('company/:companyId/group-programs')
+  async listGroupPrograms(
+    @Param('companyId') companyId: string,
+    @GetUser() user: User,
+  ) {
+    await this.service.assertStaffBelongsToCompany(user, companyId);
+    return this.groupPrograms.listPrograms(companyId);
+  }
+
+  @Get('company/:companyId/group-programs/:programId')
+  async getGroupProgram(
+    @Param('companyId') companyId: string,
+    @Param('programId') programId: string,
+    @GetUser() user: User,
+  ) {
+    await this.service.assertStaffBelongsToCompany(user, companyId);
+    return this.groupPrograms.getProgramDetail(companyId, programId);
+  }
+
+  @Post('company/:companyId/group-programs')
+  async createGroupProgram(
+    @Param('companyId') companyId: string,
+    @Body() body: CreateGroupProgramDto,
+    @GetUser() user: User,
+  ) {
+    this.assertCanModify(user);
+    await this.service.assertStaffBelongsToCompany(user, companyId);
+    return this.groupPrograms.createProgram(companyId, body, user);
+  }
+
+  @Put('company/:companyId/group-programs/:programId')
+  async updateGroupProgram(
+    @Param('companyId') companyId: string,
+    @Param('programId') programId: string,
+    @Body() body: UpdateGroupProgramDto,
+    @GetUser() user: User,
+  ) {
+    this.assertCanModify(user);
+    await this.service.assertStaffBelongsToCompany(user, companyId);
+    return this.groupPrograms.updateProgram(companyId, programId, body, user);
+  }
+
+  @Put('company/:companyId/group-programs/:programId/slots')
+  async replaceGroupProgramSlots(
+    @Param('companyId') companyId: string,
+    @Param('programId') programId: string,
+    @Body() body: ReplaceGroupProgramSlotsDto,
+    @GetUser() user: User,
+  ) {
+    this.assertCanModify(user);
+    await this.service.assertStaffBelongsToCompany(user, companyId);
+    return this.groupPrograms.replaceSlots(companyId, programId, body, user);
+  }
+
+  @Post('company/:companyId/group-programs/:programId/enrollments')
+  async enrollGroupProgram(
+    @Param('companyId') companyId: string,
+    @Param('programId') programId: string,
+    @Body() body: EnrollGroupProgramDto,
+    @GetUser() user: User,
+  ) {
+    this.assertCanModify(user);
+    await this.service.assertStaffBelongsToCompany(user, companyId);
+    return this.groupPrograms.enrollAthletes(companyId, programId, body, user);
+  }
+
+  @Delete('company/:companyId/group-programs/:programId/enrollments/:athleteId')
+  async removeGroupProgramEnrollment(
+    @Param('companyId') companyId: string,
+    @Param('programId') programId: string,
+    @Param('athleteId') athleteId: string,
+    @GetUser() user: User,
+  ) {
+    this.assertCanModify(user);
+    await this.service.assertStaffBelongsToCompany(user, companyId);
+    return this.groupPrograms.removeEnrollment(
+      companyId,
+      programId,
+      athleteId,
+      user,
+    );
+  }
+
+  @Post('company/:companyId/group-programs/:programId/weeks/:weekIndex/publish')
+  async publishGroupProgramWeek(
+    @Param('companyId') companyId: string,
+    @Param('programId') programId: string,
+    @Param('weekIndex') weekIndex: string,
+    @GetUser() user: User,
+  ) {
+    this.assertCanModify(user);
+    await this.service.assertStaffBelongsToCompany(user, companyId);
+    const idx = Number.parseInt(weekIndex, 10);
+    if (!Number.isFinite(idx) || idx < 1) {
+      throw new BadRequestException('weekIndex inválido');
+    }
+    return this.groupPrograms.publishWeek(companyId, programId, idx, user);
+  }
+
+  @Get('company/:companyId/group-programs/:programId/overview')
+  async groupProgramOverview(
+    @Param('companyId') companyId: string,
+    @Param('programId') programId: string,
+    @GetUser() user: User,
+  ) {
+    await this.service.assertStaffBelongsToCompany(user, companyId);
+    return this.groupPrograms.getOverview(companyId, programId);
   }
 }

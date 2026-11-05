@@ -1899,7 +1899,11 @@ export class ReservationsService {
     };
   }
 
-  async getUserReservations(userId: string, companyId?: string): Promise<any[]> {
+  async getUserReservations(
+    userId: string,
+    companyId?: string,
+    options?: { includePeriodPending?: boolean },
+  ): Promise<any[]> {
     const reservations = await this.reservationRepository.find({
       where: { user: { id: userId } },
       relations: ['user', 'timeSlot', 'timeSlot.company'],
@@ -1909,6 +1913,14 @@ export class ReservationsService {
     const creditLookup = companyId
       ? await this.buildPeriodCreditLookup(userId, companyId, reservations)
       : null;
+
+    let periodStart: string | null = null;
+    let periodEnd: string | null = null;
+    if (options?.includePeriodPending && companyId) {
+      const subscription = await this.getActiveSubscriptionForUser(userId, companyId);
+      periodStart = toDateOnlyKey(subscription?.periodStartDate);
+      periodEnd = toDateOnlyKey(subscription?.periodEndDate);
+    }
 
     const upcoming = reservations
       .filter(reservation => {
@@ -1922,7 +1934,20 @@ export class ReservationsService {
           reservation.timeSlot.date,
           reservation.timeSlot.endTime || reservation.timeSlot.startTime,
         );
-        return endDateTime ? endDateTime >= now : false;
+        const isUpcoming = endDateTime ? endDateTime >= now : false;
+        if (isUpcoming) return true;
+
+        // Staff: incluir reservas del período vigente sin asistencia aunque el turno ya pasó.
+        if (
+          options?.includePeriodPending
+          && periodStart
+          && periodEnd
+          && reservation.attendanceStatus == null
+        ) {
+          const key = toDateOnlyKey(reservation.timeSlot.date);
+          return !!key && key >= periodStart && key <= periodEnd;
+        }
+        return false;
       })
       .sort((a, b) => {
         const dateA = slotInstantInArgentina(a.timeSlot.date, a.timeSlot.startTime);

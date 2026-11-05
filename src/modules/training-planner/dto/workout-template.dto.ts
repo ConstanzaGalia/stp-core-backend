@@ -2,6 +2,7 @@ import {
   IsArray,
   IsBoolean,
   IsInt,
+  IsObject,
   IsOptional,
   IsString,
   IsUUID,
@@ -226,4 +227,82 @@ export class UpdateAthleteOwnProgressDto {
   @IsOptional()
   @IsArray()
   blocks?: Array<{ id: string; athleteCompletionStatus?: string }>;
+}
+
+/** Body de preview: texto CSV completo. */
+export class ImportWorkoutCsvPreviewDto {
+  @IsString()
+  csvText: string;
+}
+
+export class ImportWorkoutCsvExerciseRowDto {
+  @IsString()
+  exerciseName: string;
+
+  @IsInt()
+  @Min(1)
+  sets: number;
+
+  @IsString()
+  reps: string;
+
+  @IsInt()
+  @Min(0)
+  restSeconds: number;
+
+  @IsOptional()
+  @IsBoolean()
+  omit?: boolean;
+}
+
+export class ImportWorkoutCsvBlockDto {
+  @IsString()
+  blockTitle: string;
+
+  @IsInt()
+  @Min(0)
+  blockOrder: number;
+
+  @IsBoolean()
+  isEc: boolean;
+
+  @IsArray()
+  exercises: ImportWorkoutCsvExerciseRowDto[];
+}
+
+export class ImportWorkoutCsvWorkoutDto {
+  @IsString()
+  @MaxLength(150)
+  workoutName: string;
+
+  @IsOptional()
+  @IsString()
+  phase?: string | null;
+
+  @IsOptional()
+  @IsString()
+  pattern?: string | null;
+
+  @IsArray()
+  blocks: ImportWorkoutCsvBlockDto[];
+}
+
+/** Confirmación: workouts parseados + mapa csvName → exerciseId (null = omitir). */
+export class ImportWorkoutCsvConfirmDto {
+  @IsArray()
+  workouts: ImportWorkoutCsvWorkoutDto[];
+
+  /** Clave: nombre exacto del CSV; valor: UUID del ejercicio o null para omitir. */
+  @IsObject()
+  exerciseMap: Record<string, string | null>;
+
+  @IsOptional()
+  @ValidateIf((_, v) => v !== null)
+  @IsUUID()
+  collectionId?: string | null;
+
+  /** Si true y no hay collectionId, crea/reusa la colección "Import CSV". */
+  @IsOptional()
+  @IsBoolean()
+  useImportCollection?: boolean;
 }

@@ -89,6 +89,18 @@ export class PaymentsController {
     return await this.paymentsService.getStudentPlanAndPayments(userId, companyId);
   }
 
+  /** Cupo del período: desglose para staff (secretaria / turnos). */
+  @Get('student/:userId/company/:companyId/period-credits')
+  @SkipCompanySubscriptionCheck()
+  async getStudentPeriodCredits(
+    @Param('userId') userId: string,
+    @Param('companyId') companyId: string,
+    @GetUser() user: User,
+  ) {
+    await this.paymentsService.assertTurnosStaffOfCompany(user.id, companyId, user.role);
+    return await this.paymentsService.getStudentPeriodCredits(userId, companyId);
+  }
+
   // ===== GESTIÓN DE CLASES =====
   @Get('subscriptions/:subscriptionId/class-status')
   async getClassStatus(@Param('subscriptionId') subscriptionId: string) {

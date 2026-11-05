@@ -6,6 +6,10 @@ import { STPWeeklyTemplate } from 'src/entities/stp-weekly-template.entity';
 import { STPSessionInstance } from 'src/entities/stp-session-instance.entity';
 import { STPWorkoutTemplate } from 'src/entities/stp-workout-template.entity';
 import { STPWorkoutCollection } from 'src/entities/stp-workout-collection.entity';
+import { STPGroupProgram } from 'src/entities/stp-group-program.entity';
+import { STPGroupProgramSlot } from 'src/entities/stp-group-program-slot.entity';
+import { STPGroupProgramEnrollment } from 'src/entities/stp-group-program-enrollment.entity';
+import { GroupProgramService } from './group-program.service';
 import { Exercise } from 'src/entities/excercise.entity';
 import { AthleteInvitation } from 'src/entities/athlete-invitation.entity';
 import { Reservation } from 'src/entities/reservation.entity';
@@ -30,6 +34,9 @@ import { PaymentsModule } from '../payments/payments.module';
       STPSessionInstance,
       STPWorkoutTemplate,
       STPWorkoutCollection,
+      STPGroupProgram,
+      STPGroupProgramSlot,
+      STPGroupProgramEnrollment,
       Exercise,
       AthleteInvitation,
       Reservation,
@@ -44,7 +51,7 @@ import { PaymentsModule } from '../payments/payments.module';
     forwardRef(() => InjuriesModule),
     forwardRef(() => PaymentsModule),
   ],
-  providers: [TrainingPlannerService],
+  providers: [TrainingPlannerService, GroupProgramService],
   controllers: [TrainingPlannerController],
   exports: [TrainingPlannerService],
 })

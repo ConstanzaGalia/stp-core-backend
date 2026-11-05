@@ -1584,6 +1584,14 @@ export class PaymentsService {
     };
   }
 
+  private static readonly TURNOS_STAFF_ROLES: UserRole[] = [
+    UserRole.STP_ADMIN,
+    UserRole.DIRECTOR,
+    UserRole.TRAINER,
+    UserRole.SUB_TRAINER,
+    UserRole.SECRETARIA,
+  ];
+
   /** Solo directores asociados a la empresa (mismo criterio estricto que estadísticas). */
   async assertDirectorOfCompany(
     userId: string,
@@ -1610,6 +1618,51 @@ export class PaymentsService {
         'Only company directors or STP administrators can view gym statistics',
       );
     }
+  }
+
+  /** Staff de turnos del centro (incluye SECRETARIA). */
+  async assertTurnosStaffOfCompany(callerId: string, companyId: string, role?: UserRole): Promise<void> {
+    if (role === UserRole.STP_ADMIN) return;
+    const company = await this.companyRepository.findOne({
+      where: { id: companyId },
+      relations: ['users'],
+    });
+    if (!company) {
+      throw new NotFoundException('Company not found');
+    }
+    const ok = company.users.some(
+      (u) => u.id === callerId && PaymentsService.TURNOS_STAFF_ROLES.includes(u.role),
+    );
+    if (!ok) {
+      throw new ForbiddenException('Solo el staff del centro puede ver el cupo del período');
+    }
+  }
+
+  /**
+   * Detalle de créditos del período para staff (secretaria): KPIs + reservas pendientes
+   * (incluye pasadas) con flag overlapsPlanillaDay.
+   */
+  async getStudentPeriodCredits(userId: string, companyId: string) {
+    const detail = await this.periodCreditsService.getDetailForStaff(userId, companyId);
+    let canBook = true;
+    let canBookReason: CanBookClassReason | undefined;
+    let canBookMessage: string | undefined;
+    if (detail.subscriptionId) {
+      const bookCheck = await this.canUserBookClass(detail.subscriptionId);
+      canBook = bookCheck.canBook;
+      canBookReason = bookCheck.reason;
+      canBookMessage = bookCheck.message;
+    } else if (detail.libres <= 0) {
+      canBook = false;
+      canBookReason = 'PERIOD_LIMIT';
+      canBookMessage = CAN_BOOK_CLASS_MESSAGES.PERIOD_LIMIT;
+    }
+    return {
+      ...detail,
+      canBook,
+      canBookReason,
+      canBookMessage,
+    };
   }
 
   /**

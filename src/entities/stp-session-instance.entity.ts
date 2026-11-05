@@ -153,6 +153,15 @@ export class STPSessionInstance {
   @Column({ name: 'last_saved_by_name', type: 'text', nullable: true })
   lastSavedByName: string | null;
 
+  @Column({ name: 'group_program_id', type: 'uuid', nullable: true })
+  groupProgramId: string | null;
+
+  @Column({ name: 'group_program_slot_id', type: 'uuid', nullable: true })
+  groupProgramSlotId: string | null;
+
+  @Column({ name: 'is_customized', type: 'boolean', default: false })
+  isCustomized: boolean;
+
   @CreateDateColumn({ name: 'created_at' })
   createdAt: Date;
 
