@@ -95,6 +95,7 @@ export class PeriodCreditsService {
             SELECT COUNT(DISTINCT left(sess.scheduled_date, 10))::int
             FROM stp_session_instances sess
             WHERE sess.athlete_id = $1::text
+              AND sess.deleted_at IS NULL
               AND sess.athlete_completion_status = 'completed'
               AND left(sess.scheduled_date, 10)::date BETWEEN $3::date AND $4::date
               AND NOT EXISTS (
@@ -119,6 +120,7 @@ export class PeriodCreditsService {
                 SELECT 1
                 FROM stp_session_instances sess3
                 WHERE sess3.athlete_id = $1::text
+                  AND sess3.deleted_at IS NULL
                   AND sess3.athlete_completion_status = 'completed'
                   AND left(sess3.scheduled_date, 10)::date = ts3.date::date
               )
@@ -272,6 +274,7 @@ export class PeriodCreditsService {
       SELECT DISTINCT to_char(left(sess.scheduled_date, 10)::date, 'YYYY-MM-DD') AS day
       FROM stp_session_instances sess
       WHERE sess.athlete_id = $1::text
+        AND sess.deleted_at IS NULL
         AND sess.athlete_completion_status = 'completed'
         AND left(sess.scheduled_date, 10)::date BETWEEN $3::date AND $4::date
         AND NOT EXISTS (

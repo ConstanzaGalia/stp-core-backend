@@ -842,6 +842,7 @@ export class AthletesService {
         SELECT COUNT(DISTINCT left(sess.scheduled_date, 10))::int
         FROM stp_session_instances sess
         WHERE sess.athlete_id = s."userId"::text
+          AND sess.deleted_at IS NULL
           AND sess.athlete_completion_status = 'completed'
           AND left(sess.scheduled_date, 10)::date >= s."periodStartDate"::date
           AND left(sess.scheduled_date, 10)::date <= s."periodEndDate"::date

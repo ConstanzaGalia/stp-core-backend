@@ -1344,6 +1344,7 @@ export class CompanyService {
         coach_status AS "coachStatus"
       FROM stp_session_instances
       WHERE athlete_id = ANY($1::text[])
+        AND deleted_at IS NULL
         AND ${plannedSql}
       ORDER BY athlete_id, scheduled_date DESC, updated_at DESC
       `,
@@ -1356,6 +1357,7 @@ export class CompanyService {
         SELECT athlete_id AS "athleteId", COUNT(*)::int AS "sessionCount"
         FROM stp_session_instances
         WHERE athlete_id = ANY($1::text[])
+          AND deleted_at IS NULL
           AND ${plannedSql}
         GROUP BY athlete_id
         `,

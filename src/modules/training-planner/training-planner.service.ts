@@ -1,5 +1,6 @@
 import {
   BadRequestException,
+  ConflictException,
   ForbiddenException,
   Injectable,
   Logger,
@@ -772,7 +773,16 @@ export class TrainingPlannerService {
     },
     actor?: User,
   ) {
-    const existing = await this.sessionRepo.findOne({ where: { id: data.id } });
+    const existing = await this.sessionRepo.findOne({
+      where: { id: data.id },
+      withDeleted: true,
+    });
+    if (existing?.deletedAt) {
+      // Evita que un autosave desactualizado "resucite" o choque con una sesión eliminada.
+      throw new ConflictException(
+        'Esta sesión fue eliminada. Recargá el plan para ver el estado actual.',
+      );
+    }
     const isNew = !existing;
     let entity = existing ?? this.sessionRepo.create({ id: data.id });
     const isStaff = actor ? isStaffUser(actor) : false;
@@ -1050,13 +1060,44 @@ export class TrainingPlannerService {
     }
   }
 
-  async deleteSession(athleteId: string, sessionId: string) {
+  /** Soft delete: conserva la fila (deleted_at) para poder restaurarla y auditar. */
+  async deleteSession(athleteId: string, sessionId: string, actor?: User) {
     const entity = await this.sessionRepo.findOne({
       where: { id: sessionId, athleteId },
     });
     if (!entity) return false;
-    await this.sessionRepo.remove(entity);
+    await this.sessionRepo.update(
+      { id: sessionId },
+      {
+        deletedByUserId: actor?.id ?? null,
+        deletedByName: actor ? formatStaffDisplayName(actor) : null,
+        deletedReason: 'manual',
+      },
+    );
+    await this.sessionRepo.softDelete({ id: sessionId });
+    this.logger.warn(
+      `[session] soft-deleted ${sessionId} athlete=${athleteId} by=${actor?.id ?? 'unknown'}`,
+    );
     return true;
+  }
+
+  /** Restaura una sesión eliminada (soft delete). */
+  async restoreSession(athleteId: string, sessionId: string, actor?: User) {
+    const entity = await this.sessionRepo.findOne({
+      where: { id: sessionId, athleteId },
+      withDeleted: true,
+    });
+    if (!entity || !entity.deletedAt) return null;
+    await this.sessionRepo.restore({ id: sessionId });
+    await this.sessionRepo.update(
+      { id: sessionId },
+      { deletedByUserId: null, deletedByName: null, deletedReason: null },
+    );
+    this.logger.warn(
+      `[session] restored ${sessionId} athlete=${athleteId} by=${actor?.id ?? 'unknown'}`,
+    );
+    const restored = await this.sessionRepo.findOne({ where: { id: sessionId } });
+    return restored ? this.serializeSession(restored, { includePrivate: true }) : null;
   }
 
   /**

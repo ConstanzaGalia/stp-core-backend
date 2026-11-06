@@ -1,4 +1,4 @@
-import { Entity, PrimaryColumn, Column, Index, CreateDateColumn, UpdateDateColumn } from 'typeorm';
+import { Entity, PrimaryColumn, Column, Index, CreateDateColumn, UpdateDateColumn, DeleteDateColumn } from 'typeorm';
 
 /**
  * A single generated training session instance.
@@ -161,6 +161,19 @@ export class STPSessionInstance {
 
   @Column({ name: 'is_customized', type: 'boolean', default: false })
   isCustomized: boolean;
+
+  /** Soft delete: la fila se conserva para poder restaurarla y auditar. */
+  @DeleteDateColumn({ name: 'deleted_at', type: 'timestamp', nullable: true })
+  deletedAt: Date | null;
+
+  @Column({ name: 'deleted_by_user_id', type: 'varchar', length: 100, nullable: true })
+  deletedByUserId: string | null;
+
+  @Column({ name: 'deleted_by_name', type: 'varchar', length: 200, nullable: true })
+  deletedByName: string | null;
+
+  @Column({ name: 'deleted_reason', type: 'varchar', length: 100, nullable: true })
+  deletedReason: string | null;
 
   @CreateDateColumn({ name: 'created_at' })
   createdAt: Date;

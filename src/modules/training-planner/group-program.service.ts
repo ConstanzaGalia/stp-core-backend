@@ -156,6 +156,9 @@ export class GroupProgramService {
     actor: User,
   ) {
     const entity = await this.requireProgram(companyId, programId);
+    const previousWeeks = entity.weeksCount;
+    const previousSessionsPerWeek = entity.sessionsPerWeek ?? 3;
+
     if (dto.sessionsPerWeek !== undefined) {
       this.validateSessionsPerWeek(dto.sessionsPerWeek);
       entity.sessionsPerWeek = dto.sessionsPerWeek;
@@ -175,7 +178,6 @@ export class GroupProgramService {
     }
     if (dto.phase !== undefined) entity.phase = dto.phase.trim();
     if (dto.startDate !== undefined) entity.startDate = dto.startDate.slice(0, 10);
-    const previousWeeks = entity.weeksCount;
     if (dto.weeksCount !== undefined) {
       if (!Number.isInteger(dto.weeksCount) || dto.weeksCount < 1 || dto.weeksCount > 52) {
         throw new BadRequestException('weeksCount debe ser 1–52.');
@@ -189,8 +191,23 @@ export class GroupProgramService {
     if (saved.weeksCount < previousWeeks) {
       await this.pruneWeeksBeyond(saved.id, saved.weeksCount);
     }
+    if (saved.sessionsPerWeek < previousSessionsPerWeek) {
+      await this.pruneSessionsBeyond(saved.id, saved.sessionsPerWeek);
+    }
     await this.syncAllSessionsForProgram(saved.id, actor);
     return this.serializeProgram(saved, await this.countActiveEnrollments(saved.id));
+  }
+
+  private async deleteSlotsAndLinkedSessions(removeIds: string[]) {
+    if (removeIds.length === 0) return;
+    await this.sessionRepo
+      .createQueryBuilder()
+      .softDelete()
+      .where('group_program_slot_id IN (:...removeIds)', { removeIds })
+      .andWhere('is_customized = false')
+      .andWhere('feedback_status = :none', { none: 'none' })
+      .execute();
+    await this.slotRepo.delete({ id: In(removeIds) });
   }
 
   /** Elimina slots (y sesiones no customizadas sin feedback) de semanas fuera de rango. */
@@ -200,16 +217,17 @@ export class GroupProgramService {
       .where('s.program_id = :programId', { programId })
       .andWhere('s.week_index > :weeksCount', { weeksCount })
       .getMany();
-    if (excess.length === 0) return;
-    const removeIds = excess.map((s) => s.id);
-    await this.sessionRepo
-      .createQueryBuilder()
-      .delete()
-      .where('group_program_slot_id IN (:...removeIds)', { removeIds })
-      .andWhere('is_customized = false')
-      .andWhere('feedback_status = :none', { none: 'none' })
-      .execute();
-    await this.slotRepo.delete({ id: In(removeIds) });
+    await this.deleteSlotsAndLinkedSessions(excess.map((s) => s.id));
+  }
+
+  /** Elimina slots (y sesiones no customizadas sin feedback) de ordinales fuera de frecuencia. */
+  private async pruneSessionsBeyond(programId: string, sessionsPerWeek: number) {
+    const excess = await this.slotRepo
+      .createQueryBuilder('s')
+      .where('s.program_id = :programId', { programId })
+      .andWhere('s.session_ordinal > :sessionsPerWeek', { sessionsPerWeek })
+      .getMany();
+    await this.deleteSlotsAndLinkedSessions(excess.map((s) => s.id));
   }
 
   async replaceSlots(
@@ -281,7 +299,7 @@ export class GroupProgramService {
       const removeIds = toRemove.map((s) => s.id);
       await this.sessionRepo
         .createQueryBuilder()
-        .delete()
+        .softDelete()
         .where('group_program_slot_id IN (:...removeIds)', { removeIds })
         .andWhere('is_customized = false')
         .andWhere('feedback_status = :none', { none: 'none' })
@@ -358,7 +376,7 @@ export class GroupProgramService {
     const today = calendarDateInArgentina();
     await this.sessionRepo
       .createQueryBuilder()
-      .delete()
+      .softDelete()
       .where('group_program_id = :programId', { programId })
       .andWhere('athlete_id = :athleteId', { athleteId })
       .andWhere('scheduled_date >= :today', { today })
@@ -374,25 +392,209 @@ export class GroupProgramService {
     weekIndex: number,
     actor: User,
   ) {
-    await this.requireProgram(companyId, programId);
+    const program = await this.requireProgram(companyId, programId);
+    if (weekIndex < 1 || weekIndex > program.weeksCount) {
+      throw new BadRequestException('weekIndex fuera del rango del mesociclo.');
+    }
+
+    const weekSlots = await this.slotRepo.count({
+      where: { programId, weekIndex },
+    });
+    if (weekSlots === 0) {
+      throw new BadRequestException(
+        `La semana ${weekIndex} no tiene workouts asignados. Guardá la planificación antes de publicar.`,
+      );
+    }
+
+    // Asegura sesiones materializadas para todos los inscriptos activos.
+    await this.syncAllSessionsForProgram(programId, actor);
+
     const macroWeekId = macroWeekIdFor(programId, weekIndex);
     const sessions = await this.sessionRepo.find({
       where: { groupProgramId: programId, macroWeekId },
     });
-    const results: { sessionId: string; ok: boolean; error?: string }[] = [];
+
+    if (sessions.length === 0) {
+      throw new BadRequestException(
+        `No hay sesiones para la semana ${weekIndex}. Inscribí alumnos y guardá la planificación con workouts en esa semana.`,
+      );
+    }
+
+    const results: {
+      sessionId: string;
+      athleteId: string;
+      ok: boolean;
+      error?: string;
+    }[] = [];
+
+    const slots = await this.slotRepo.find({ where: { programId } });
+    const slotMap = new Map(slots.map((s) => [s.id, s]));
+    const templateIds = [
+      ...new Set(slots.map((s) => s.workoutTemplateId).filter(Boolean)),
+    ];
+    const templates =
+      templateIds.length > 0
+        ? await this.templateRepo.find({ where: { id: In(templateIds) } })
+        : [];
+    const templateMap = new Map(templates.map((t) => [t.id, t]));
+
     for (const session of sessions) {
       try {
-        await this.planner.publishSession(session.id, session.athleteId, actor);
-        results.push({ sessionId: session.id, ok: true });
-      } catch (e) {
+        let blocks = Array.isArray(session.blocks) ? session.blocks : [];
+
+        // Si quedó vacía (p.ej. se inscribió antes de guardar workouts), rehidratar desde el slot.
+        if (blocks.length === 0 && session.groupProgramSlotId) {
+          const slot = slotMap.get(session.groupProgramSlotId);
+          const template = slot
+            ? templateMap.get(slot.workoutTemplateId)
+            : undefined;
+          if (template && Array.isArray(template.blocks) && template.blocks.length > 0) {
+            const loadMap = await this.buildLoadMapForAthlete(session.athleteId);
+            blocks = applySuggestedLoads(
+              this.planner.cloneSessionBlocks(template.blocks),
+              loadMap,
+            );
+            session.blocks = blocks;
+            session.sourceWorkoutTemplateId = template.id;
+            session.pattern = template.pattern ?? session.pattern ?? 'libre';
+            session.enduranceFormat = template.enduranceFormat;
+            session.enduranceConfig = template.enduranceConfig;
+          }
+        }
+
+        if (blocks.length === 0) {
+          results.push({
+            sessionId: session.id,
+            athleteId: session.athleteId,
+            ok: false,
+            error: 'Sesión sin circuitos (workout vacío). Guardá la planificación y volvé a publicar.',
+          });
+          continue;
+        }
+
+        const safety = await this.planner.evaluateSessionBlocksSafety(
+          session.athleteId,
+          blocks,
+        );
+        session.safetyConflicts = safety.conflicts;
+        session.warnings = mergeSessionWarnings(
+          session.warnings ?? [],
+          safety.warnings,
+        );
+
+        if (safety.conflicts.length > 0) {
+          session.coachStatus = 'draft';
+          await this.sessionRepo.save(session);
+          results.push({
+            sessionId: session.id,
+            athleteId: session.athleteId,
+            ok: false,
+            error:
+              'No se puede publicar: ejercicios incompatibles con lesiones activas.',
+          });
+          continue;
+        }
+
+        session.coachStatus = 'published';
+        session.lastSavedByUserId = actor.id;
+        session.lastSavedByName = staffName(actor);
+        await this.sessionRepo.save(session);
         results.push({
           sessionId: session.id,
+          athleteId: session.athleteId,
+          ok: true,
+        });
+      } catch (e: unknown) {
+        results.push({
+          sessionId: session.id,
+          athleteId: session.athleteId,
           ok: false,
           error: e instanceof Error ? e.message : 'Error al publicar',
         });
       }
     }
-    return { weekIndex, results, published: results.filter((r) => r.ok).length };
+
+    const published = results.filter((r) => r.ok).length;
+    const failed = results.filter((r) => !r.ok);
+    if (published === 0) {
+      throw new BadRequestException(
+        failed[0]?.error ??
+          'No se pudo publicar ninguna sesión de la semana (revisá lesiones o circuitos vacíos).',
+      );
+    }
+
+    if (program.status === 'draft') {
+      program.status = 'active';
+      program.lastEditedByUserId = actor.id;
+      program.lastEditedByName = staffName(actor);
+      await this.programRepo.save(program);
+    }
+
+    return {
+      weekIndex,
+      results,
+      published,
+      failed: failed.length,
+      total: sessions.length,
+    };
+  }
+
+  /** Programas grupales activos de un atleta en el centro (ficha / portal). */
+  async listAthleteGroupPrograms(companyId: string, athleteId: string) {
+    const enrollments = await this.enrollRepo.find({
+      where: { athleteId, status: 'active' },
+    });
+    if (enrollments.length === 0) return [];
+
+    const programIds = enrollments.map((e) => e.programId);
+    const programs = await this.programRepo.find({
+      where: { id: In(programIds), companyId },
+    });
+    const programMap = new Map(programs.map((p) => [p.id, p]));
+
+    const out: Array<{
+      enrollmentId: string;
+      programId: string;
+      name: string;
+      shortName: string;
+      phase: string;
+      startDate: string;
+      weeksCount: number;
+      sessionsPerWeek: number;
+      trainingDays: number[];
+      publishedSessions: number;
+      draftSessions: number;
+    }> = [];
+
+    for (const enrollment of enrollments) {
+      const program = programMap.get(enrollment.programId);
+      if (!program) continue;
+      const sessions = await this.sessionRepo.find({
+        where: { groupProgramId: program.id, athleteId },
+        select: ['id', 'coachStatus'],
+      });
+      out.push({
+        enrollmentId: enrollment.id,
+        programId: program.id,
+        name: program.name,
+        shortName: program.shortName ?? program.name.slice(0, 24),
+        phase: program.phase,
+        startDate:
+          typeof program.startDate === 'string'
+            ? program.startDate.slice(0, 10)
+            : String(program.startDate).slice(0, 10),
+        weeksCount: program.weeksCount,
+        sessionsPerWeek: program.sessionsPerWeek ?? 3,
+        trainingDays: enrollment.trainingDays ?? [],
+        publishedSessions: sessions.filter(
+          (s) => (s.coachStatus ?? 'draft') === 'published',
+        ).length,
+        draftSessions: sessions.filter(
+          (s) => (s.coachStatus ?? 'draft') !== 'published',
+        ).length,
+      });
+    }
+    return out;
   }
 
   async getOverview(companyId: string, programId: string) {
@@ -694,7 +896,8 @@ export class GroupProgramService {
         feedback: null,
         review: null,
         athleteCompletionStatus: 'pending',
-        coachStatus: safety.conflicts.length > 0 ? 'draft' : 'draft',
+        // Grupal: siempre borrador hasta "Publicar" semana.
+        coachStatus: 'draft',
         sourceWorkoutTemplateId: template.id,
         safetyConflicts: safety.conflicts,
         groupProgramId: program.id,
@@ -756,7 +959,7 @@ export class GroupProgramService {
         : undefined;
       if (!slot) continue;
       if (slot.sessionOrdinal > athleteDays.length) {
-        await this.sessionRepo.delete({ id: session.id });
+        await this.sessionRepo.softDelete({ id: session.id });
         continue;
       }
       const template = templateMap.get(slot.workoutTemplateId);
@@ -769,7 +972,7 @@ export class GroupProgramService {
         athleteDays,
       );
       if (!scheduledDate) {
-        await this.sessionRepo.delete({ id: session.id });
+        await this.sessionRepo.softDelete({ id: session.id });
         continue;
       }
 

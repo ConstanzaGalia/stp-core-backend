@@ -402,7 +402,18 @@ export class TrainingPlannerController {
   ) {
     this.assertCanModify(user);
     await this.service.assertCanAccessTrainingAthlete(user, athleteId, true);
-    return this.service.deleteSession(athleteId, id);
+    return this.service.deleteSession(athleteId, id, user);
+  }
+
+  @Post('sessions/:id/restore')
+  async restoreSession(
+    @Param('id') id: string,
+    @Query('athleteId') athleteId: string,
+    @GetUser() user: User,
+  ) {
+    this.assertCanModify(user);
+    await this.service.assertCanAccessTrainingAthlete(user, athleteId, true);
+    return this.service.restoreSession(athleteId, id, user);
   }
 
   @Post('sessions/:id/publish')
@@ -623,5 +634,16 @@ export class TrainingPlannerController {
   ) {
     await this.service.assertStaffBelongsToCompany(user, companyId);
     return this.groupPrograms.getOverview(companyId, programId);
+  }
+
+  @Get('company/:companyId/athletes/:athleteId/group-programs')
+  async listAthleteGroupPrograms(
+    @Param('companyId') companyId: string,
+    @Param('athleteId') athleteId: string,
+    @GetUser() user: User,
+  ) {
+    await this.service.assertStaffBelongsToCompany(user, companyId);
+    await this.service.assertCanAccessTrainingAthlete(user, athleteId, false);
+    return this.groupPrograms.listAthleteGroupPrograms(companyId, athleteId);
   }
 }
