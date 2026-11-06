@@ -22,6 +22,7 @@ import {
   CreateGroupProgramDto,
   EnrollGroupProgramDto,
   ReplaceGroupProgramSlotsDto,
+  TransferGroupProgramDto,
   UpdateGroupProgramDto,
 } from './dto/group-program.dto';
 import {
@@ -606,6 +607,27 @@ export class TrainingPlannerController {
       companyId,
       programId,
       athleteId,
+      user,
+    );
+  }
+
+  @Post(
+    'company/:companyId/group-programs/:programId/enrollments/:athleteId/transfer',
+  )
+  async transferGroupProgramEnrollment(
+    @Param('companyId') companyId: string,
+    @Param('programId') programId: string,
+    @Param('athleteId') athleteId: string,
+    @Body() body: TransferGroupProgramDto,
+    @GetUser() user: User,
+  ) {
+    this.assertCanModify(user);
+    await this.service.assertStaffBelongsToCompany(user, companyId);
+    return this.groupPrograms.transferAthlete(
+      companyId,
+      programId,
+      athleteId,
+      body,
       user,
     );
   }

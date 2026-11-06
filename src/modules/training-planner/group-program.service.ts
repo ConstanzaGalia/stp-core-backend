@@ -19,6 +19,7 @@ import { TrainingPlannerService } from './training-planner.service';
 import { mergeSessionWarnings } from './session-safety.util';
 import {
   defaultTrainingDaysForFrequency,
+  resolveEnrollmentScheduleAnchor,
   scheduledDateForAthleteSlot,
   weekStartDateForProgram,
 } from './group-program-date.util';
@@ -26,6 +27,7 @@ import {
   CreateGroupProgramDto,
   EnrollGroupProgramDto,
   ReplaceGroupProgramSlotsDto,
+  TransferGroupProgramDto,
   UpdateGroupProgramDto,
 } from './dto/group-program.dto';
 
@@ -111,14 +113,7 @@ export class GroupProgramService {
     return {
       ...this.serializeProgram(program, enrollments.length),
       slots: slots.map((s) => this.serializeSlot(s)),
-      enrollments: enrollments.map((e) => ({
-        id: e.id,
-        athleteId: e.athleteId,
-        startWeekIndex: e.startWeekIndex,
-        trainingDays: e.trainingDays ?? [],
-        status: e.status,
-        enrolledAt: e.enrolledAt.toISOString(),
-      })),
+      enrollments: enrollments.map((e) => this.serializeEnrollment(e)),
     };
   }
 
@@ -321,7 +316,6 @@ export class GroupProgramService {
     actor: User,
   ) {
     const program = await this.requireProgram(companyId, programId);
-    const startWeek = dto.startWeekIndex ?? 1;
     const maxSessions = program.sessionsPerWeek ?? 3;
     const batchDays = this.normalizeAthleteTrainingDays(
       dto.trainingDays,
@@ -334,24 +328,38 @@ export class GroupProgramService {
       ]),
     );
     const uniqueIds = [...new Set(dto.athleteIds)];
+    const today = calendarDateInArgentina();
+    const programStart = this.programStartDate(program);
     for (const athleteId of uniqueIds) {
       await this.planner.assertCanAccessTrainingAthlete(actor, athleteId, true);
       const trainingDays = perAthleteMap.get(athleteId) ?? batchDays;
       let row = await this.enrollRepo.findOne({
         where: { programId, athleteId },
       });
+      const scheduleAnchorDate = resolveEnrollmentScheduleAnchor(
+        programStart,
+        today,
+      );
       if (!row) {
         row = this.enrollRepo.create({
           programId,
           athleteId,
-          startWeekIndex: startWeek,
+          startWeekIndex: 1,
+          scheduleAnchorDate,
           trainingDays,
           status: 'active',
         });
-      } else {
+      } else if (row.status !== 'active') {
         row.status = 'active';
-        row.startWeekIndex = Math.min(row.startWeekIndex, startWeek);
+        row.startWeekIndex = 1;
+        row.scheduleAnchorDate = scheduleAnchorDate;
         row.trainingDays = trainingDays;
+      } else {
+        row.trainingDays = trainingDays;
+        if (!row.scheduleAnchorDate) {
+          row.scheduleAnchorDate = scheduleAnchorDate;
+        }
+        row.startWeekIndex = 1;
       }
       await this.enrollRepo.save(row);
       await this.materializeSessionsForAthlete(program, athleteId, actor);
@@ -371,19 +379,90 @@ export class GroupProgramService {
       where: { programId, athleteId, status: 'active' },
     });
     if (!row) throw new NotFoundException('Inscripción no encontrada');
-    row.status = 'removed';
-    await this.enrollRepo.save(row);
-    const today = calendarDateInArgentina();
-    await this.sessionRepo
-      .createQueryBuilder()
-      .softDelete()
-      .where('group_program_id = :programId', { programId })
-      .andWhere('athlete_id = :athleteId', { athleteId })
-      .andWhere('scheduled_date >= :today', { today })
-      .andWhere('athlete_completion_status = :pending', { pending: 'pending' })
-      .andWhere('feedback_status = :none', { none: 'none' })
-      .execute();
+    await this.closeEnrollmentKeepingDoneSessions(row);
     return { ok: true };
+  }
+
+  /**
+   * Cierra el programa origen (conservando sesiones hechas) e inscribe en el destino
+   * desde la sesión 1 con ancla = esta semana.
+   */
+  async transferAthlete(
+    companyId: string,
+    fromProgramId: string,
+    athleteId: string,
+    dto: TransferGroupProgramDto,
+    actor: User,
+  ) {
+    if (fromProgramId === dto.targetProgramId) {
+      throw new BadRequestException('El programa destino debe ser distinto.');
+    }
+    await this.planner.assertCanAccessTrainingAthlete(actor, athleteId, true);
+    const fromProgram = await this.requireProgram(companyId, fromProgramId);
+    const targetProgram = await this.requireProgram(
+      companyId,
+      dto.targetProgramId,
+    );
+
+    const source = await this.enrollRepo.findOne({
+      where: { programId: fromProgramId, athleteId, status: 'active' },
+    });
+    if (!source) {
+      throw new NotFoundException('Inscripción de origen no encontrada');
+    }
+
+    const otherActive = await this.enrollRepo.find({
+      where: { athleteId, status: 'active' },
+    });
+    for (const row of otherActive) {
+      if (row.programId === fromProgramId) continue;
+      if (row.programId === dto.targetProgramId) continue;
+      await this.closeEnrollmentKeepingDoneSessions(row);
+    }
+
+    await this.closeEnrollmentKeepingDoneSessions(source);
+
+    const maxSessions = targetProgram.sessionsPerWeek ?? 3;
+    const trainingDays = this.normalizeAthleteTrainingDays(
+      dto.trainingDays && dto.trainingDays.length > 0
+        ? dto.trainingDays
+        : source.trainingDays?.length
+          ? source.trainingDays
+          : targetProgram.trainingDays,
+      maxSessions,
+    );
+    const today = calendarDateInArgentina();
+    const scheduleAnchorDate = resolveEnrollmentScheduleAnchor(
+      this.programStartDate(targetProgram),
+      today,
+    );
+
+    let target = await this.enrollRepo.findOne({
+      where: { programId: targetProgram.id, athleteId },
+    });
+    if (!target) {
+      target = this.enrollRepo.create({
+        programId: targetProgram.id,
+        athleteId,
+        startWeekIndex: 1,
+        scheduleAnchorDate,
+        trainingDays,
+        status: 'active',
+      });
+    } else {
+      target.status = 'active';
+      target.startWeekIndex = 1;
+      target.scheduleAnchorDate = scheduleAnchorDate;
+      target.trainingDays = trainingDays;
+    }
+    await this.enrollRepo.save(target);
+    await this.materializeSessionsForAthlete(targetProgram, athleteId, actor);
+    await this.syncLinkedSessionsForAthlete(targetProgram, athleteId, actor);
+
+    return {
+      fromProgramId: fromProgram.id,
+      targetProgram: await this.getProgramDetail(companyId, targetProgram.id),
+    };
   }
 
   async publishWeek(
@@ -559,6 +638,7 @@ export class GroupProgramService {
       shortName: string;
       phase: string;
       startDate: string;
+      scheduleAnchorDate: string;
       weeksCount: number;
       sessionsPerWeek: number;
       trainingDays: number[];
@@ -579,10 +659,8 @@ export class GroupProgramService {
         name: program.name,
         shortName: program.shortName ?? program.name.slice(0, 24),
         phase: program.phase,
-        startDate:
-          typeof program.startDate === 'string'
-            ? program.startDate.slice(0, 10)
-            : String(program.startDate).slice(0, 10),
+        startDate: this.programStartDate(program),
+        scheduleAnchorDate: this.enrollmentAnchorDate(enrollment, program),
         weeksCount: program.weeksCount,
         sessionsPerWeek: program.sessionsPerWeek ?? 3,
         trainingDays: enrollment.trainingDays ?? [],
@@ -801,6 +879,77 @@ export class GroupProgramService {
     };
   }
 
+  private serializeEnrollment(e: STPGroupProgramEnrollment) {
+    return {
+      id: e.id,
+      athleteId: e.athleteId,
+      startWeekIndex: e.startWeekIndex,
+      scheduleAnchorDate:
+        typeof e.scheduleAnchorDate === 'string'
+          ? e.scheduleAnchorDate.slice(0, 10)
+          : String(e.scheduleAnchorDate ?? '').slice(0, 10),
+      trainingDays: e.trainingDays ?? [],
+      status: e.status,
+      enrolledAt: e.enrolledAt.toISOString(),
+    };
+  }
+
+  private programStartDate(program: STPGroupProgram): string {
+    return typeof program.startDate === 'string'
+      ? program.startDate.slice(0, 10)
+      : String(program.startDate).slice(0, 10);
+  }
+
+  private enrollmentAnchorDate(
+    enrollment: STPGroupProgramEnrollment,
+    program: STPGroupProgram,
+  ): string {
+    if (enrollment.scheduleAnchorDate) {
+      return typeof enrollment.scheduleAnchorDate === 'string'
+        ? enrollment.scheduleAnchorDate.slice(0, 10)
+        : String(enrollment.scheduleAnchorDate).slice(0, 10);
+    }
+    return this.programStartDate(program);
+  }
+
+  private async closeEnrollmentKeepingDoneSessions(
+    enrollment: STPGroupProgramEnrollment,
+  ) {
+    enrollment.status = 'removed';
+    await this.enrollRepo.save(enrollment);
+    const today = calendarDateInArgentina();
+    await this.sessionRepo
+      .createQueryBuilder()
+      .softDelete()
+      .where('group_program_id = :programId', {
+        programId: enrollment.programId,
+      })
+      .andWhere('athlete_id = :athleteId', { athleteId: enrollment.athleteId })
+      .andWhere('scheduled_date >= :today', { today })
+      .andWhere('athlete_completion_status = :pending', { pending: 'pending' })
+      .andWhere('feedback_status = :none', { none: 'none' })
+      .execute();
+  }
+
+  /** Semanas del programa que ya tienen al menos una sesión publicada. */
+  private async loadPublishedWeekIndexes(
+    programId: string,
+  ): Promise<Set<number>> {
+    const published = await this.sessionRepo
+      .createQueryBuilder('s')
+      .select('DISTINCT s.macro_week_id', 'macroWeekId')
+      .where('s.group_program_id = :programId', { programId })
+      .andWhere('s.coach_status = :published', { published: 'published' })
+      .andWhere('s.deleted_at IS NULL')
+      .getRawMany<{ macroWeekId: string }>();
+    const weeks = new Set<number>();
+    for (const row of published) {
+      const match = String(row.macroWeekId ?? '').match(/-w-(\d+)$/);
+      if (match) weeks.add(Number(match[1]));
+    }
+    return weeks;
+  }
+
   private async syncAllSessionsForProgram(programId: string, actor: User) {
     const enrollments = await this.enrollRepo.find({
       where: { programId, status: 'active' },
@@ -833,11 +982,9 @@ export class GroupProgramService {
     });
     const templateMap = new Map(templates.map((t) => [t.id, t]));
     const loadMap = await this.buildLoadMapForAthlete(athleteId);
-    const startDate =
-      typeof program.startDate === 'string'
-        ? program.startDate.slice(0, 10)
-        : String(program.startDate).slice(0, 10);
+    const anchorDate = this.enrollmentAnchorDate(enrollment, program);
     const athleteDays = this.resolveAthleteTrainingDays(enrollment, program);
+    const publishedWeeks = await this.loadPublishedWeekIndexes(program.id);
 
     const toSave: STPSessionInstance[] = [];
 
@@ -856,13 +1003,13 @@ export class GroupProgramService {
       if (!template) continue;
 
       const scheduledDate = scheduledDateForAthleteSlot(
-        startDate,
+        anchorDate,
         slot.weekIndex,
         slot.sessionOrdinal,
         athleteDays,
       );
       if (!scheduledDate) continue;
-      const weekStartDate = weekStartDateForProgram(startDate, slot.weekIndex);
+      const weekStartDate = weekStartDateForProgram(anchorDate, slot.weekIndex);
       const weekLabel = `Microciclo ${slot.weekIndex} de ${program.weeksCount}`;
       let blocks = this.planner.cloneSessionBlocks(
         Array.isArray(template.blocks) ? template.blocks : [],
@@ -872,6 +1019,10 @@ export class GroupProgramService {
         athleteId,
         blocks,
       );
+
+      const weekAlreadyPublished = publishedWeeks.has(slot.weekIndex);
+      const canAutoPublish =
+        weekAlreadyPublished && safety.conflicts.length === 0;
 
       const entity = this.sessionRepo.create({
         id: `session-${randomUUID()}`,
@@ -896,8 +1047,8 @@ export class GroupProgramService {
         feedback: null,
         review: null,
         athleteCompletionStatus: 'pending',
-        // Grupal: siempre borrador hasta "Publicar" semana.
-        coachStatus: 'draft',
+        // Si la semana ya se publicó para el grupo, el que entra tarde hereda publicado.
+        coachStatus: canAutoPublish ? 'published' : 'draft',
         sourceWorkoutTemplateId: template.id,
         safetyConflicts: safety.conflicts,
         groupProgramId: program.id,
@@ -936,6 +1087,7 @@ export class GroupProgramService {
     });
     if (!enrollment) return;
     const athleteDays = this.resolveAthleteTrainingDays(enrollment, program);
+    const anchorDate = this.enrollmentAnchorDate(enrollment, program);
 
     const slots = await this.slotRepo.find({ where: { programId: program.id } });
     const slotMap = new Map(slots.map((s) => [s.id, s]));
@@ -945,15 +1097,13 @@ export class GroupProgramService {
     });
     const templateMap = new Map(templates.map((t) => [t.id, t]));
     const loadMap = await this.buildLoadMapForAthlete(athleteId);
-    const startDate =
-      typeof program.startDate === 'string'
-        ? program.startDate.slice(0, 10)
-        : String(program.startDate).slice(0, 10);
 
     for (const session of sessions) {
       if (session.scheduledDate < today) continue;
       if (session.feedbackStatus !== 'none' || session.feedback) continue;
       if (session.athleteCompletionStatus !== 'pending') continue;
+      // Pesos / ediciones del coach: no pisar la copia personalizada.
+      if (session.isCustomized) continue;
       const slot = session.groupProgramSlotId
         ? slotMap.get(session.groupProgramSlotId)
         : undefined;
@@ -966,7 +1116,7 @@ export class GroupProgramService {
       if (!template) continue;
 
       const scheduledDate = scheduledDateForAthleteSlot(
-        startDate,
+        anchorDate,
         slot.weekIndex,
         slot.sessionOrdinal,
         athleteDays,
@@ -986,7 +1136,7 @@ export class GroupProgramService {
       );
       session.blocks = blocks;
       session.scheduledDate = scheduledDate;
-      session.weekStartDate = weekStartDateForProgram(startDate, slot.weekIndex);
+      session.weekStartDate = weekStartDateForProgram(anchorDate, slot.weekIndex);
       session.sessionOrdinal = slot.sessionOrdinal;
       session.weekLabel = `Microciclo ${slot.weekIndex} de ${program.weeksCount}`;
       session.phase = program.phase;

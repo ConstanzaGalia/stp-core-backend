@@ -34,6 +34,25 @@ export function weekStartDateForProgram(
   return addDaysYmd(programStartDate, (weekIndex - 1) * 7);
 }
 
+/** Lunes de la semana civil de `ymd` (Lun=inicio). */
+export function mondayOfWeekContaining(ymd: string): string {
+  const dow = dayOfWeekMon0(ymd);
+  return addDaysYmd(ymd, -dow);
+}
+
+/**
+ * Ancla de inscripción: la mayor entre el inicio del programa y el lunes
+ * de la semana en que se inscribe el alumno.
+ */
+export function resolveEnrollmentScheduleAnchor(
+  programStartDate: string,
+  enrollmentYmd: string,
+): string {
+  const programStart = programStartDate.slice(0, 10);
+  const monday = mondayOfWeekContaining(enrollmentYmd.slice(0, 10));
+  return monday > programStart ? monday : programStart;
+}
+
 export function scheduledDateForSlot(
   programStartDate: string,
   weekIndex: number,

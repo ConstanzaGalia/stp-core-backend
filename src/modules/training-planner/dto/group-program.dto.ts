@@ -164,8 +164,21 @@ export class EnrollGroupProgramDto {
   @Type(() => AthleteTrainingDaysDto)
   perAthlete?: AthleteTrainingDaysDto[];
 
+  /** @deprecated La progresión personal siempre arranca en semana 1 con ancla propia. */
   @IsOptional()
   @IsInt()
   @Min(1)
   startWeekIndex?: number;
+}
+
+export class TransferGroupProgramDto {
+  @IsUUID()
+  targetProgramId: string;
+
+  @IsOptional()
+  @IsArray()
+  @ArrayMinSize(1)
+  @ArrayMaxSize(5)
+  @IsInt({ each: true })
+  trainingDays?: number[];
 }

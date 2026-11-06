@@ -175,20 +175,6 @@ export class CompanyService {
     };
   }
 
-  private async releaseFutureShiftAssignments(
-    companyId: string,
-    userId: string,
-  ): Promise<void> {
-    const today = new Date().toISOString().slice(0, 10);
-    await this.shiftAssignmentRepository
-      .createQueryBuilder()
-      .delete()
-      .where('"companyId" = :companyId', { companyId })
-      .andWhere('"userId" = :userId', { userId })
-      .andWhere('date > :today', { today })
-      .execute();
-  }
-
   public async create(createCompanyDto: CreateCompanyDto, user: User) {
     try {
       const payload: Partial<CreateCompanyDto> = {
@@ -993,7 +979,6 @@ export class CompanyService {
         company.users = company.users.filter((user) => user.id !== staffId);
         await this.companyRepository.save(company);
       }
-      await this.releaseFutureShiftAssignments(companyId, staffId);
     }
 
     return this.toStaffResponse(target, membership);

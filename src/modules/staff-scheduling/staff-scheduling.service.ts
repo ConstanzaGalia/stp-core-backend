@@ -193,6 +193,16 @@ export class StaffSchedulingService {
     };
   }
 
+  private visibleMembershipStatus(
+    member: User,
+    status?: StaffMembershipStatus,
+  ): StaffMembershipStatus {
+    if (member.isActive === false || status === StaffMembershipStatus.INACTIVE) {
+      return StaffMembershipStatus.INACTIVE;
+    }
+    return status ?? StaffMembershipStatus.ACTIVE;
+  }
+
   /** Staff que puede cubrir turnos: roles operativos + cualquiera con perfil de compensación (ej. sueldo fijo). */
   private getSchedulableStaff(
     company: Company,
@@ -381,18 +391,34 @@ export class StaffSchedulingService {
           profiles.map((p) => p.userId),
         )
       : [];
+    const memberships = await this.membershipRepository.find({ where: { companyId } });
+    const statusByUser = new Map(memberships.map((row) => [row.userId, row.status]));
+    const activeIds = new Set(staff.map((member) => member.id));
+    const inactiveById = new Map<string, User>();
+    for (const assignment of assignments) {
+      if (activeIds.has(assignment.userId) || !assignment.user) continue;
+      inactiveById.set(assignment.userId, assignment.user);
+    }
+
+    const toStaff = (member: User) => ({
+      id: member.id,
+      name: formatStaffDisplayNameFromParts(member.name, member.lastName),
+      role: member.role,
+      payType: profileByUser.get(member.id)?.payType ?? StaffPayType.HOURLY,
+      displayColor: profileByUser.get(member.id)?.displayColor,
+      membershipStatus: activeIds.has(member.id)
+        ? this.visibleMembershipStatus(member, statusByUser.get(member.id))
+        : StaffMembershipStatus.INACTIVE,
+    });
 
     return {
       weekStart,
       weekEnd,
       cells,
-      staff: staff.map((s) => ({
-        id: s.id,
-        name: formatStaffDisplayNameFromParts(s.name, s.lastName),
-        role: s.role,
-        payType: profileByUser.get(s.id)?.payType ?? StaffPayType.HOURLY,
-        displayColor: profileByUser.get(s.id)?.displayColor,
-      })),
+      staff: [
+        ...staff.map(toStaff),
+        ...[...inactiveById.values()].map(toStaff),
+      ],
     };
   }
 
@@ -410,7 +436,6 @@ export class StaffSchedulingService {
     const staffIds = new Set(
       this.getSchedulableStaff(company, profiles.map((p) => p.userId)).map((s) => s.id),
     );
-    const today = toCalendarDateString(new Date());
 
     for (const cell of dto.cells) {
       if (cell.date < weekStart || cell.date > weekEnd) {
@@ -430,11 +455,19 @@ export class StaffSchedulingService {
         ...(branchId ? { branchId } : {}),
       },
     });
-    const preservedHistory = existing.filter(
-      (assignment) =>
-        !staffIds.has(assignment.userId) &&
-        toCalendarDateString(assignment.date) <= today,
+    const closedKeys = new Set(
+      dto.cells
+        .filter((cell) => cell.isClosed)
+        .map((cell) => cellKey(cell.date, cell.startTime)),
     );
+    const preservedHistory = existing.filter((assignment) => {
+      if (staffIds.has(assignment.userId)) return false;
+      const key = cellKey(
+        toCalendarDateString(assignment.date),
+        assignment.startTime,
+      );
+      return !closedKeys.has(key);
+    });
 
     await this.assignmentRepository.delete({
       companyId,
@@ -696,9 +729,14 @@ export class StaffSchedulingService {
     }
 
     const staffIds = new Set(staff.map((s) => s.id));
-    const extraUserIds = [...hoursByUserMonth.keys()].filter((id) => !staffIds.has(id));
-    const extraUsers = extraUserIds.length
-      ? await this.userRepository.find({ where: { id: In(extraUserIds) } })
+    const extraUserIds = new Set(
+      [...hoursByUserMonth.keys()].filter((id) => !staffIds.has(id)),
+    );
+    for (const profile of profiles) {
+      if (!staffIds.has(profile.userId)) extraUserIds.add(profile.userId);
+    }
+    const extraUsers = extraUserIds.size
+      ? await this.userRepository.find({ where: { id: In([...extraUserIds]) } })
       : [];
     const memberships = await this.membershipRepository.find({ where: { companyId } });
     const statusByUser = new Map(memberships.map((row) => [row.userId, row.status]));
@@ -723,7 +761,7 @@ export class StaffSchedulingService {
           userId: s.id,
           name: formatStaffDisplayNameFromParts(s.name, s.lastName),
           role: s.role,
-          membershipStatus: statusByUser.get(s.id) ?? StaffMembershipStatus.ACTIVE,
+          membershipStatus: this.visibleMembershipStatus(s, statusByUser.get(s.id)),
           months: Object.fromEntries(months.map((h, i) => [i + 1, h > 0 ? h : null])),
           total: total > 0 ? total : null,
           byBranch: [...branchHours.entries()].map(([id, hours]) => ({
@@ -768,6 +806,9 @@ export class StaffSchedulingService {
       hoursByUser.set(a.userId, (hoursByUser.get(a.userId) ?? 0) + h);
     }
 
+    const memberships = await this.membershipRepository.find({ where: { companyId } });
+    const statusByUser = new Map(memberships.map((row) => [row.userId, row.status]));
+
     let totalHours = 0;
     const lines = staff.map((s) => {
       const hoursMonth = hoursByUser.get(s.id) ?? 0;
@@ -787,7 +828,7 @@ export class StaffSchedulingService {
         userId: s.id,
         name: formatStaffDisplayNameFromParts(s.name, s.lastName),
         role: s.role,
-        membershipStatus: StaffMembershipStatus.ACTIVE,
+        membershipStatus: this.visibleMembershipStatus(s, statusByUser.get(s.id)),
         payType: resolved.payType,
         hoursMonth,
         hourlyRate:
@@ -802,14 +843,16 @@ export class StaffSchedulingService {
     });
 
     const staffIdSet = new Set(staff.map((member) => member.id));
-    const extraIds = [...hoursByUser.keys()].filter((id) => !staffIdSet.has(id));
+    const extraIds = [
+      ...new Set([...hoursByUser.keys(), ...profiles.map((profile) => profile.userId)]),
+    ].filter((id) => !staffIdSet.has(id));
     if (extraIds.length) {
       const extraUsers = await this.userRepository.find({ where: { id: In(extraIds) } });
       for (const member of extraUsers) {
         const hoursMonth = hoursByUser.get(member.id) ?? 0;
-        if (hoursMonth <= 0) continue;
-        totalHours += hoursMonth;
         const profile = profileByUser.get(member.id);
+        if (hoursMonth <= 0 && !profile) continue;
+        totalHours += hoursMonth;
         const periodRate = periodRateByUser.get(member.id);
         const resolved = this.resolveCompensationForPeriod(profile, periodRate);
         const monthlyTotal =
@@ -820,7 +863,10 @@ export class StaffSchedulingService {
           userId: member.id,
           name: formatStaffDisplayNameFromParts(member.name, member.lastName),
           role: member.role,
-          membershipStatus: StaffMembershipStatus.INACTIVE,
+          membershipStatus: this.visibleMembershipStatus(
+            member,
+            statusByUser.get(member.id) ?? StaffMembershipStatus.INACTIVE,
+          ),
           payType: resolved.payType,
           hoursMonth,
           hourlyRate:
@@ -881,11 +927,23 @@ export class StaffSchedulingService {
     }
 
     const companyUsers = new Map((company.users ?? []).map((u) => [u.id, u]));
+    const missingIds = profiles
+      .map((profile) => profile.userId)
+      .filter((userId) => !companyUsers.has(userId));
+    const extraUsers = missingIds.length
+      ? await this.userRepository.find({ where: { id: In(missingIds) } })
+      : [];
+    const usersById = new Map<string, User>([
+      ...companyUsers,
+      ...extraUsers.map((member) => [member.id, member] as const),
+    ]);
+    const memberships = await this.membershipRepository.find({ where: { companyId } });
+    const statusByUser = new Map(memberships.map((row) => [row.userId, row.status]));
 
     return profiles
-      .filter((p) => companyUsers.has(p.userId))
+      .filter((p) => usersById.has(p.userId))
       .map((p) => {
-        const s = companyUsers.get(p.userId)!;
+        const s = usersById.get(p.userId)!;
         return {
           id: p.id,
           userId: p.userId,
@@ -897,6 +955,13 @@ export class StaffSchedulingService {
             p.fixedMonthlyAmount != null ? Number(p.fixedMonthlyAmount) : null,
           displayColor: p.displayColor,
           sortOrder: p.sortOrder,
+          membershipStatus: this.visibleMembershipStatus(
+            s,
+            statusByUser.get(p.userId) ??
+              (companyUsers.has(p.userId)
+                ? StaffMembershipStatus.ACTIVE
+                : StaffMembershipStatus.INACTIVE),
+          ),
         };
       });
   }

@@ -24,6 +24,13 @@ export class STPGroupProgramEnrollment {
   @Column({ name: 'start_week_index', type: 'int', default: 1 })
   startWeekIndex: number;
 
+  /**
+   * Lunes (o start_date del programa si es posterior) desde el cual este alumno
+   * recorre la sesión 1 del plan. Independiente del calendario del resto del grupo.
+   */
+  @Column({ name: 'schedule_anchor_date', type: 'date' })
+  scheduleAnchorDate: string;
+
   /** Días de asistencia del alumno (Lun=0 … Dom=6). Sesión k → trainingDays[k-1]. */
   @Column({ name: 'training_days', type: 'int', array: true, default: () => "'{}'" })
   trainingDays: number[];
