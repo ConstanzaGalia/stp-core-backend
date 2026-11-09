@@ -86,8 +86,9 @@ import { CompanyService } from '../company/company.service';
 import { UserRole } from '../../common/enums/enums';
 import { CenterCurrency, normalizeMoneyCurrency, resolveCompanyCurrencies } from '../../common/center-currencies';
 import {
-  ARGENTINA_TIME_ZONE,
-  parseDateOnlyLocal,
+  addCalendarDaysYmd,
+  calendarDateInArgentina,
+  getCalendarWeekBoundsFromYmd,
   toDateOnlyKey,
 } from '../../common/utils/date-only.util';
 
@@ -466,31 +467,6 @@ export class PaymentsService {
     return `${y}-${m}-${d}`;
   }
 
-  private toArgentinaYmd(date: Date): string {
-    return date.toLocaleDateString('en-CA', { timeZone: ARGENTINA_TIME_ZONE });
-  }
-
-  private addCalendarDaysYmd(ymd: string, days: number): string {
-    const date = parseDateOnlyLocal(ymd);
-    if (!date) return ymd;
-    date.setDate(date.getDate() + days);
-    return this.formatLocalYmd(date);
-  }
-
-  /** Lunes–domingo de la semana civil en Argentina. */
-  private getCalendarWeekBoundsYmd(referenceDate: Date): { weekStart: string; weekEnd: string } {
-    const ymd = this.toArgentinaYmd(referenceDate);
-    const cursor = parseDateOnlyLocal(ymd);
-    if (!cursor) {
-      const weekStart = this.formatLocalYmd(this.getWeekStartDate(referenceDate));
-      return { weekStart, weekEnd: this.addCalendarDaysYmd(weekStart, 6) };
-    }
-    const day = cursor.getDay();
-    cursor.setDate(cursor.getDate() + (day === 0 ? -6 : 1 - day));
-    const weekStart = this.formatLocalYmd(cursor);
-    return { weekStart, weekEnd: this.addCalendarDaysYmd(weekStart, 6) };
-  }
-
   private getWeekEndDate(date: Date): Date {
     const monday = this.getWeekStartDate(date);
     const sunday = new Date(monday);
@@ -500,23 +476,23 @@ export class PaymentsService {
   }
 
   /**
-   * Reservas reales del alumno en la semana de `referenceDate` (lunes a domingo).
+   * Reservas reales del alumno en la semana de `weekYmd` (lunes a domingo).
    * Compara el día calendario UTC del turno (igual que toDateOnlyKey / la UI),
    * no `date::date` de Postgres, que en UTC−3 mueve el lunes a la semana anterior.
    */
   private async countUserReservationsInWeek(
     userId: string,
     companyId: string | undefined,
-    referenceDate: Date,
+    weekYmd: string,
   ): Promise<number> {
-    const { weekStart, weekEnd } = this.getCalendarWeekBoundsYmd(referenceDate);
+    const { weekStart, weekEnd } = getCalendarWeekBoundsFromYmd(weekYmd);
 
     const qb = this.reservationRepository
       .createQueryBuilder('reservation')
       .innerJoinAndSelect('reservation.timeSlot', 'slot')
       .where('reservation.userId = :userId', { userId })
-      .andWhere('slot.date >= :from', { from: `${this.addCalendarDaysYmd(weekStart, -1)}T00:00:00.000Z` })
-      .andWhere('slot.date < :to', { to: `${this.addCalendarDaysYmd(weekEnd, 2)}T00:00:00.000Z` });
+      .andWhere('slot.date >= :from', { from: `${addCalendarDaysYmd(weekStart, -1)}T00:00:00.000Z` })
+      .andWhere('slot.date < :to', { to: `${addCalendarDaysYmd(weekEnd, 2)}T00:00:00.000Z` });
 
     if (companyId) {
       qb.andWhere('slot.companyId = :companyId', { companyId });
@@ -546,8 +522,8 @@ export class PaymentsService {
       .createQueryBuilder('reservation')
       .innerJoinAndSelect('reservation.timeSlot', 'slot')
       .where('reservation.userId = :userId', { userId })
-      .andWhere('slot.date >= :from', { from: `${this.addCalendarDaysYmd(startKey, -1)}T00:00:00.000Z` })
-      .andWhere('slot.date < :to', { to: `${this.addCalendarDaysYmd(endKey, 2)}T00:00:00.000Z` });
+      .andWhere('slot.date >= :from', { from: `${addCalendarDaysYmd(startKey, -1)}T00:00:00.000Z` })
+      .andWhere('slot.date < :to', { to: `${addCalendarDaysYmd(endKey, 2)}T00:00:00.000Z` });
 
     if (companyId) {
       qb.andWhere('slot.companyId = :companyId', { companyId });
@@ -590,16 +566,16 @@ export class PaymentsService {
       subscription.companyId = subscription.companyId ?? subscriptionWithPlan.companyId;
     }
 
-    const today = new Date();
-    today.setHours(0, 0, 0, 0);
+    const todayYmd = calendarDateInArgentina();
+    const { weekStart } = getCalendarWeekBoundsFromYmd(todayYmd);
     const userId = subscription.user?.id;
     const companyId = subscription.company?.id ?? subscription.companyId;
     const allowed = this.resolveWeeklyClassAllowance(subscription.paymentPlan, subscription);
     const used = userId
-      ? await this.countUserReservationsInWeek(userId, companyId, today)
+      ? await this.countUserReservationsInWeek(userId, companyId, todayYmd)
       : (subscription.classesUsedThisWeek ?? 0);
 
-    subscription.weekStartDate = this.getWeekStartDate(today);
+    subscription.weekStartDate = this.parseDateOnlyAsNoonUTC(weekStart);
     subscription.classesUsedThisWeek = used;
     subscription.classesRemainingThisWeek = Math.max(0, allowed - used);
 
@@ -844,9 +820,11 @@ export class PaymentsService {
     const enforceWeeklyLimit = plan?.enforceWeeklyLimit !== false;
     if (enforceWeeklyLimit) {
       const allowedThisWeek = this.resolveWeeklyClassAllowance(plan, subscription);
-      const targetDate = reservationDate ? (this.toCalendarDate(reservationDate) ?? new Date()) : new Date();
+      const targetYmd = reservationDate
+        ? (toDateOnlyKey(reservationDate) ?? calendarDateInArgentina())
+        : calendarDateInArgentina();
       const usedInTargetWeek = userId
-        ? await this.countUserReservationsInWeek(userId, companyId, targetDate)
+        ? await this.countUserReservationsInWeek(userId, companyId, targetYmd)
         : 0;
 
       if (allowedThisWeek <= 0 || usedInTargetWeek >= allowedThisWeek) {

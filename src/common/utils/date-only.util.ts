@@ -115,6 +115,37 @@ export function calendarDateInArgentina(now: Date = new Date()): string {
   return `${year}-${month}-${day}`;
 }
 
+function formatLocalComponentsYmd(date: Date): string {
+  return `${date.getFullYear()}-${pad2(date.getMonth() + 1)}-${pad2(date.getDate())}`;
+}
+
+/** Suma/resta días a un YYYY-MM-DD sin depender de la zona del proceso para el parsing. */
+export function addCalendarDaysYmd(ymd: string, days: number): string {
+  const date = parseDateOnlyLocal(ymd);
+  if (!date) return ymd;
+  date.setDate(date.getDate() + days);
+  return formatLocalComponentsYmd(date);
+}
+
+/**
+ * Lunes–domingo civil a partir de un YYYY-MM-DD.
+ * No convierte instantes: el caller decide si el día viene de Argentina (`calendarDateInArgentina`)
+ * o del día calendario del turno (`toDateOnlyKey`).
+ */
+export function getCalendarWeekBoundsFromYmd(ymd: string): {
+  weekStart: string;
+  weekEnd: string;
+} {
+  const cursor = parseDateOnlyLocal(ymd);
+  if (!cursor) {
+    return { weekStart: ymd, weekEnd: ymd };
+  }
+  const day = cursor.getDay();
+  cursor.setDate(cursor.getDate() + (day === 0 ? -6 : 1 - day));
+  const weekStart = formatLocalComponentsYmd(cursor);
+  return { weekStart, weekEnd: addCalendarDaysYmd(weekStart, 6) };
+}
+
 /** Month-day in Argentina: MM-DD (for birthdays). */
 export function monthDayInArgentina(now: Date = new Date()): string {
   return calendarDateInArgentina(now).slice(5);
