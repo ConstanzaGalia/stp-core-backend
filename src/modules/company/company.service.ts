@@ -49,6 +49,24 @@ const STAFF_ROLES = [
   UserRole.SECRETARIA,
 ];
 
+/** Años de experiencia: solo enteros >= 0. Texto/autofill (mails) → undefined. */
+function parseExperienceYears(value?: string | null): number | undefined {
+  if (value == null || !String(value).trim()) return undefined;
+  const parsed = Number.parseInt(String(value).trim(), 10);
+  if (!Number.isFinite(parsed) || parsed < 0) return undefined;
+  return parsed;
+}
+
+/** Teléfono como bigint: solo dígitos. Sin dígitos / NaN → undefined. */
+function parsePhoneNumber(value?: string | null): number | undefined {
+  if (value == null || !String(value).trim()) return undefined;
+  const digits = String(value).replace(/\D/g, '');
+  if (!digits) return undefined;
+  const parsed = Number.parseInt(digits, 10);
+  if (!Number.isFinite(parsed) || parsed <= 0) return undefined;
+  return parsed;
+}
+
 const STAFF_ASSOCIATION_REQUEST_ROLES = [
   UserRole.TRAINER,
   UserRole.SUB_TRAINER,
@@ -1417,10 +1435,12 @@ export class CompanyService {
           user.specialty = addStaffDto.specialty;
         }
         if (addStaffDto.experience && (user.role === UserRole.TRAINER || user.role === UserRole.SUB_TRAINER)) {
-          user.experienceYears = parseInt(addStaffDto.experience, 10) || undefined;
+          const years = parseExperienceYears(addStaffDto.experience);
+          if (years !== undefined) user.experienceYears = years;
         }
-        if (addStaffDto.phone) {
-          user.phoneNumber = parseInt(addStaffDto.phone.replace(/\D/g, ''), 10) || user.phoneNumber;
+        const phone = parsePhoneNumber(addStaffDto.phone);
+        if (phone !== undefined) {
+          user.phoneNumber = phone;
         }
         shouldSaveUser = true;
       }
@@ -1448,9 +1468,9 @@ export class CompanyService {
       email: addStaffDto.email,
       password: passwordEncrypted,
       role: addStaffDto.role,
-      phoneNumber: addStaffDto.phone ? parseInt(addStaffDto.phone.replace(/\D/g, ''), 10) : undefined,
+      phoneNumber: parsePhoneNumber(addStaffDto.phone),
       specialty: addStaffDto.specialty,
-      experienceYears: addStaffDto.experience ? parseInt(addStaffDto.experience, 10) : undefined,
+      experienceYears: parseExperienceYears(addStaffDto.experience),
       isActive: true,
     });
 
