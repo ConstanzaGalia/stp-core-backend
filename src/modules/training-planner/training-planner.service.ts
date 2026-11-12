@@ -563,6 +563,44 @@ export class TrainingPlannerService {
     };
   }
 
+  /**
+   * Sesiones individuales deben anclarse a un plan macro del mismo atleta
+   * y a una semana que exista en ese plan. Las de programa grupal no.
+   */
+  private async assertIndividualSessionMacroAnchor(data: {
+    athleteId: string;
+    macroPlanId?: string | null;
+    macroWeekId: string;
+    groupProgramId?: string | null;
+  }) {
+    if (data.groupProgramId) return;
+    if (!data.macroPlanId) {
+      throw new BadRequestException(
+        'La sesión individual requiere un plan macro. Creá la semana del macro antes de guardar.',
+      );
+    }
+    const plan = await this.macroPlanRepo.findOne({
+      where: { id: data.macroPlanId, athleteId: data.athleteId },
+    });
+    if (!plan) {
+      throw new BadRequestException(
+        'El plan macro no pertenece a este atleta o no existe.',
+      );
+    }
+    const weeks = Array.isArray(plan.weeks) ? plan.weeks : [];
+    const hasWeek = weeks.some(
+      (week) =>
+        week != null &&
+        typeof week === 'object' &&
+        (week as { id?: unknown }).id === data.macroWeekId,
+    );
+    if (!hasWeek) {
+      throw new BadRequestException(
+        'La semana de la sesión no pertenece al plan macro.',
+      );
+    }
+  }
+
   // ── Weekly Template ─────────────────────────────────────────────────────────
 
   async getWeeklyTemplate(
@@ -783,6 +821,12 @@ export class TrainingPlannerService {
         'Esta sesión fue eliminada. Recargá el plan para ver el estado actual.',
       );
     }
+    await this.assertIndividualSessionMacroAnchor({
+      athleteId: data.athleteId,
+      macroPlanId: data.macroPlanId ?? existing?.macroPlanId ?? null,
+      macroWeekId: data.macroWeekId,
+      groupProgramId: existing?.groupProgramId ?? null,
+    });
     const isNew = !existing;
     let entity = existing ?? this.sessionRepo.create({ id: data.id });
     const isStaff = actor ? isStaffUser(actor) : false;
@@ -2315,6 +2359,12 @@ export class TrainingPlannerService {
     actor: User,
   ) {
     await this.assertCanAccessTrainingAthlete(actor, dto.athleteId, true);
+    await this.assertIndividualSessionMacroAnchor({
+      athleteId: dto.athleteId,
+      macroPlanId: dto.macroPlanId ?? null,
+      macroWeekId: dto.macroWeekId,
+      groupProgramId: null,
+    });
     const template = await this.workoutTemplateRepo.findOne({
       where: { id: templateId, companyId, isActive: true },
     });
