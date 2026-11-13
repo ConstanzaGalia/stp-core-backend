@@ -9,6 +9,7 @@ import { CreateScheduleExceptionDto } from './dto/create-schedule-exception.dto'
 import { UpdateScheduleExceptionDto } from './dto/update-schedule-exception.dto';
 import { CreateRecurringReservationDto } from './dto/create-recurring-reservation.dto';
 import { UpdateRecurringReservationDto } from './dto/update-recurring-reservation.dto';
+import { ReconcileRecurringReservationsDto } from './dto/reconcile-recurring-reservations.dto';
 import { CreateScheduleResourceDto, UpdateScheduleResourceDto } from './dto/schedule-resource.dto';
 import { AuthGuard } from '@nestjs/passport';
 import { GetUser } from '../auth/get-user.decorator';
@@ -434,19 +435,9 @@ export class ReservationsController {
     return { message: 'Schedule exception deleted successfully' };
   }
 
-  // Endpoint para crear reservas - debe ir al final para evitar conflictos de routing
-  @Post(':userId/:timeSlotId')
-  @UseGuards(AuthGuard('jwt'))
-  async createReservation(
-    @Param('userId') userId: string,
-    @Param('timeSlotId') timeSlotId: string,
-    @GetUser() user: User,
-  ) {
-    await this.reservationsService.assertCallerCanCreateReservation(user.id, userId, timeSlotId);
-    return this.reservationsService.createReservation(userId, timeSlotId);
-  }
-
   // ========== ENDPOINTS PARA RESERVAS RECURRENTES ==========
+  // Rutas estáticas de recurring ANTES de POST :userId/:timeSlotId
+  // (si no, Nest interpreta "recurring"/"reconcile" como UUIDs).
 
   /**
    * Crear una reserva recurrente
@@ -475,6 +466,51 @@ export class ReservationsController {
     const { userId, ...dto } = createRecurringDto;
     
     return this.reservationsService.createRecurringReservation(targetUserId, dto);
+  }
+
+  /**
+   * Reconciliar turnos futuros del período con los horarios fijos actuales.
+   * POST /reservations/recurring/reconcile
+   */
+  @Post('recurring/reconcile')
+  @UseGuards(AuthGuard('jwt'))
+  async reconcileRecurringReservations(
+    @GetUser() user: User,
+    @Body() body: ReconcileRecurringReservationsDto,
+  ) {
+    const canActForOther = [
+      UserRole.STP_ADMIN,
+      UserRole.DIRECTOR,
+      UserRole.TRAINER,
+      UserRole.SUB_TRAINER,
+      UserRole.SECRETARIA,
+    ].includes(user.role);
+
+    let athleteUserId = user.id;
+    if (body.userId && body.userId !== user.id) {
+      if (!canActForOther) {
+        throw new ForbiddenException('No tienes permiso para reconciliar turnos de otro usuario');
+      }
+      athleteUserId = body.userId;
+    }
+
+    return this.reservationsService.reconcileReservationsFromRecurringSchedules(
+      user.id,
+      body.companyId,
+      athleteUserId,
+    );
+  }
+
+  // Endpoint para crear reservas - después de rutas estáticas para evitar conflictos de routing
+  @Post(':userId/:timeSlotId')
+  @UseGuards(AuthGuard('jwt'))
+  async createReservation(
+    @Param('userId') userId: string,
+    @Param('timeSlotId') timeSlotId: string,
+    @GetUser() user: User,
+  ) {
+    await this.reservationsService.assertCallerCanCreateReservation(user.id, userId, timeSlotId);
+    return this.reservationsService.createReservation(userId, timeSlotId);
   }
 
   /**

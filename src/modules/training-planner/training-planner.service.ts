@@ -831,6 +831,9 @@ export class TrainingPlannerService {
       groupProgramId: existing?.groupProgramId ?? null,
     });
     const isNew = !existing;
+    // Antes del Object.assign: en un update entity y existing son el mismo objeto.
+    // Si se lee después, el estado ya está pisado y el turno no se sincroniza.
+    const previousCompletion = existing?.athleteCompletionStatus ?? 'pending';
     let entity = existing ?? this.sessionRepo.create({ id: data.id });
     const isStaff = actor ? isStaffUser(actor) : false;
 
@@ -921,7 +924,6 @@ export class TrainingPlannerService {
       }
     }
 
-    const previousCompletion = existing?.athleteCompletionStatus ?? 'pending';
     const nextCompletion = data.athleteCompletionStatus ?? 'pending';
     const completionChanged = previousCompletion !== nextCompletion;
 

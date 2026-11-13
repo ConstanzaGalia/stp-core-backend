@@ -273,7 +273,7 @@ export class PeriodCreditsService {
       `
       SELECT DISTINCT to_char(left(sess.scheduled_date, 10)::date, 'YYYY-MM-DD') AS day
       FROM stp_session_instances sess
-      WHERE sess.athlete_id = $1::text
+      WHERE sess.athlete_id::text = $1::text
         AND sess.deleted_at IS NULL
         AND sess.athlete_completion_status = 'completed'
         AND left(sess.scheduled_date, 10)::date BETWEEN $3::date AND $4::date
@@ -281,8 +281,8 @@ export class PeriodCreditsService {
           SELECT 1
           FROM reservation r2
           JOIN time_slot ts2 ON ts2.id = r2."timeSlotId"
-          WHERE r2."userId" = $1
-            AND ts2."companyId" = $2
+          WHERE r2."userId"::text = $1::text
+            AND ts2."companyId"::text = $2::text
             AND r2.attendance_status IS NOT NULL
             AND ts2.date::date = left(sess.scheduled_date, 10)::date
         )
@@ -311,8 +311,8 @@ export class PeriodCreditsService {
           ts3."endTime" AS "endTime"
         FROM reservation r3
         JOIN time_slot ts3 ON ts3.id = r3."timeSlotId"
-        WHERE r3."userId" = $1
-          AND ts3."companyId" = $2
+        WHERE r3."userId"::text = $1::text
+          AND ts3."companyId"::text = $2::text
           AND r3.attendance_status IS NULL
           AND ts3.date::date BETWEEN $3::date AND $4::date
         ORDER BY ts3.date, ts3."startTime"
@@ -346,8 +346,8 @@ export class PeriodCreditsService {
         r.attendance_status
       FROM reservation r
       JOIN time_slot ts ON ts.id = r."timeSlotId"
-      WHERE r."userId" = $1
-        AND ts."companyId" = $2
+      WHERE r."userId"::text = $1::text
+        AND ts."companyId"::text = $2::text
         AND r.attendance_status IS NOT NULL
         AND ts.date::date BETWEEN $3::date AND $4::date
       ORDER BY ts.date, ts."startTime"
