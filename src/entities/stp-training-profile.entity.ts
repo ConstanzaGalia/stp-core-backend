@@ -37,6 +37,10 @@ export class STPTrainingProfile {
   })
   defaultProgressionConfig: Record<string, unknown> | null;
 
+  /** Notas internas del entrenador (globales al atleta). Un ítem por línea. */
+  @Column({ name: 'internal_notes', type: 'text', nullable: true, default: () => 'null' })
+  internalNotes: string | null;
+
   @CreateDateColumn({ name: 'created_at' })
   createdAt: Date;
 

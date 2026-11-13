@@ -458,6 +458,8 @@ export class TrainingPlannerService {
         data.defaultProgressionConfig !== undefined
           ? data.defaultProgressionConfig
           : entity.defaultProgressionConfig,
+      internalNotes:
+        data.internalNotes !== undefined ? data.internalNotes : entity.internalNotes,
     });
     const saved = await this.profileRepo.save(entity);
     return this.serializeProfile(saved);
@@ -472,6 +474,7 @@ export class TrainingPlannerService {
       trainingMaxScore: e.trainingMaxScore,
       availableEquipment: e.availableEquipment ?? [],
       defaultProgressionConfig: e.defaultProgressionConfig ?? null,
+      internalNotes: e.internalNotes ?? null,
       createdAt: toIso(e.createdAt),
       updatedAt: toIso(e.updatedAt),
     };
