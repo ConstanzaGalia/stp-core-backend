@@ -18,7 +18,9 @@ import { calendarDateInArgentina } from 'src/common/utils/date-only.util';
 import { TrainingPlannerService } from './training-planner.service';
 import { mergeSessionWarnings } from './session-safety.util';
 import {
+  addDaysYmd,
   defaultTrainingDaysForFrequency,
+  mondayOfWeekContaining,
   resolveEnrollmentScheduleAnchor,
   scheduledDateForAthleteSlot,
   weekStartDateForProgram,
@@ -31,6 +33,23 @@ import {
   UpdateGroupProgramDto,
 } from './dto/group-program.dto';
 
+type MacroWeekLike = {
+  id: string;
+  weekIndex: number;
+  startDate: string;
+  endDate: string;
+  phase: string | null;
+  weekType: string;
+  notes?: string;
+  eventGoal?: string;
+  excludedTemplateDayIds?: string[];
+};
+
+type SlotPrescriptionOverrides = {
+  prescribedSets?: number;
+  prescribedReps?: string;
+};
+
 function staffName(user: User): string {
   const parts = [user.name, user.lastName].filter(Boolean);
   return parts.length > 0 ? parts.join(' ') : user.email ?? 'Staff';
@@ -38,6 +57,28 @@ function staffName(user: User): string {
 
 function macroWeekIdFor(programId: string, weekIndex: number): string {
   return `group-program-${programId}-w-${weekIndex}`;
+}
+
+function parseSlotPrescriptionOverrides(
+  raw: Record<string, unknown> | null | undefined,
+): SlotPrescriptionOverrides | null {
+  if (!raw || typeof raw !== 'object') return null;
+  const setsRaw = raw.prescribedSets;
+  const repsRaw = raw.prescribedReps;
+  const prescribedSets =
+    typeof setsRaw === 'number' && Number.isFinite(setsRaw) && setsRaw > 0
+      ? Math.round(setsRaw)
+      : typeof setsRaw === 'string' && Number(setsRaw) > 0
+        ? Math.round(Number(setsRaw))
+        : undefined;
+  const prescribedReps =
+    typeof repsRaw === 'string' && repsRaw.trim()
+      ? repsRaw.trim()
+      : typeof repsRaw === 'number' && Number.isFinite(repsRaw)
+        ? String(repsRaw)
+        : undefined;
+  if (prescribedSets == null && prescribedReps == null) return null;
+  return { prescribedSets, prescribedReps };
 }
 
 function applySuggestedLoads(
@@ -66,6 +107,45 @@ function applySuggestedLoads(
       }),
     };
   });
+}
+
+/** Aplica series/reps del slot grupal sobre ejercicios de bloques MAIN (no EC). */
+function applyPrescriptionOverrides(
+  blocks: unknown[],
+  overrides: Record<string, unknown> | null | undefined,
+): unknown[] {
+  const parsed = parseSlotPrescriptionOverrides(overrides);
+  if (!parsed || !Array.isArray(blocks)) return blocks;
+  return blocks.map((block) => {
+    if (!block || typeof block !== 'object') return block;
+    const b = block as Record<string, unknown>;
+    if (b.isEC === true) return block;
+    const exercises = Array.isArray(b.exercises) ? b.exercises : [];
+    if (exercises.length === 0) return block;
+    return {
+      ...b,
+      exercises: exercises.map((ex) => {
+        if (!ex || typeof ex !== 'object') return ex;
+        const e = ex as Record<string, unknown>;
+        return {
+          ...e,
+          ...(parsed.prescribedSets != null
+            ? { prescribedSets: parsed.prescribedSets }
+            : {}),
+          ...(parsed.prescribedReps != null
+            ? { prescribedReps: parsed.prescribedReps }
+            : {}),
+        };
+      }),
+    };
+  });
+}
+
+function daysBetweenYmd(fromYmd: string, toYmd: string): number {
+  const from = Date.parse(`${fromYmd.slice(0, 10)}T12:00:00.000Z`);
+  const to = Date.parse(`${toYmd.slice(0, 10)}T12:00:00.000Z`);
+  if (!Number.isFinite(from) || !Number.isFinite(to)) return 0;
+  return Math.floor((to - from) / 86_400_000);
 }
 
 @Injectable()
@@ -364,6 +444,7 @@ export class GroupProgramService {
       await this.enrollRepo.save(row);
       await this.materializeSessionsForAthlete(program, athleteId, actor);
       await this.syncLinkedSessionsForAthlete(program, athleteId, actor);
+      await this.syncAthleteMacroFromGroupProgram(program, athleteId, row);
     }
     return this.getProgramDetail(companyId, programId);
   }
@@ -458,6 +539,7 @@ export class GroupProgramService {
     await this.enrollRepo.save(target);
     await this.materializeSessionsForAthlete(targetProgram, athleteId, actor);
     await this.syncLinkedSessionsForAthlete(targetProgram, athleteId, actor);
+    await this.syncAthleteMacroFromGroupProgram(targetProgram, athleteId, target);
 
     return {
       fromProgramId: fromProgram.id,
@@ -529,10 +611,11 @@ export class GroupProgramService {
             : undefined;
           if (template && Array.isArray(template.blocks) && template.blocks.length > 0) {
             const loadMap = await this.buildLoadMapForAthlete(session.athleteId);
-            blocks = applySuggestedLoads(
+            blocks = applyPrescriptionOverrides(
               this.planner.cloneSessionBlocks(template.blocks),
-              loadMap,
+              slot.prescriptionOverrides,
             );
+            blocks = applySuggestedLoads(blocks, loadMap);
             session.blocks = blocks;
             session.sourceWorkoutTemplateId = template.id;
             session.pattern = template.pattern ?? session.pattern ?? 'libre';
@@ -631,6 +714,7 @@ export class GroupProgramService {
     });
     const programMap = new Map(programs.map((p) => [p.id, p]));
 
+    const today = calendarDateInArgentina();
     const out: Array<{
       enrollmentId: string;
       programId: string;
@@ -644,6 +728,8 @@ export class GroupProgramService {
       trainingDays: number[];
       publishedSessions: number;
       draftSessions: number;
+      currentWeekIndex: number;
+      phaseCompleted: boolean;
     }> = [];
 
     for (const enrollment of enrollments) {
@@ -653,6 +739,9 @@ export class GroupProgramService {
         where: { groupProgramId: program.id, athleteId },
         select: ['id', 'coachStatus'],
       });
+      const anchor = this.enrollmentAnchorDate(enrollment, program);
+      const weeksCount = Math.max(1, program.weeksCount || 1);
+      const elapsedWeeks = Math.floor(daysBetweenYmd(anchor, today) / 7) + 1;
       out.push({
         enrollmentId: enrollment.id,
         programId: program.id,
@@ -660,10 +749,12 @@ export class GroupProgramService {
         shortName: program.shortName ?? program.name.slice(0, 24),
         phase: program.phase,
         startDate: this.programStartDate(program),
-        scheduleAnchorDate: this.enrollmentAnchorDate(enrollment, program),
-        weeksCount: program.weeksCount,
+        scheduleAnchorDate: anchor,
+        weeksCount,
         sessionsPerWeek: program.sessionsPerWeek ?? 3,
         trainingDays: enrollment.trainingDays ?? [],
+        currentWeekIndex: Math.min(Math.max(1, elapsedWeeks), weeksCount),
+        phaseCompleted: elapsedWeeks > weeksCount,
         publishedSessions: sessions.filter(
           (s) => (s.coachStatus ?? 'draft') === 'published',
         ).length,
@@ -959,7 +1050,204 @@ export class GroupProgramService {
     for (const e of enrollments) {
       await this.materializeSessionsForAthlete(program, e.athleteId, actor);
       await this.syncLinkedSessionsForAthlete(program, e.athleteId, actor);
+      await this.syncAthleteMacroFromGroupProgram(program, e.athleteId, e);
     }
+  }
+
+  /**
+   * Escribe la fase del programa en las semanas vacías del macro personal del atleta.
+   * No pisa una fase que el entrenador ya haya elegido a mano.
+   */
+  private async syncAthleteMacroFromGroupProgram(
+    program: STPGroupProgram,
+    athleteId: string,
+    enrollment: STPGroupProgramEnrollment,
+  ) {
+    const slots = await this.slotRepo.find({ where: { programId: program.id } });
+    const weekTypeByIndex = new Map<number, string>();
+    for (const slot of slots) {
+      if (!weekTypeByIndex.has(slot.weekIndex)) {
+        weekTypeByIndex.set(slot.weekIndex, slot.weekType || 'carga');
+      }
+    }
+
+    const anchor = this.enrollmentAnchorDate(enrollment, program);
+    const startWeek = Math.max(1, enrollment.startWeekIndex || 1);
+    const endWeek = Math.max(startWeek, program.weeksCount || 1);
+
+    const existingPlan = await this.planner.getMacroPlan(athleteId);
+    let weeks: MacroWeekLike[] = Array.isArray(existingPlan?.weeks)
+      ? (existingPlan!.weeks as MacroWeekLike[]).map((w) => ({
+          ...w,
+          startDate: String(w.startDate ?? '').slice(0, 10),
+          endDate: String(w.endDate ?? '').slice(0, 10),
+          phase: w.phase ?? null,
+          weekType: w.weekType || 'carga',
+        }))
+      : [];
+
+    let changed = false;
+    for (let weekIndex = startWeek; weekIndex <= endWeek; weekIndex++) {
+      const programWeekStart = weekStartDateForProgram(anchor, weekIndex);
+      const monday = mondayOfWeekContaining(programWeekStart);
+      const sunday = addDaysYmd(monday, 6);
+      const existing = weeks.find(
+        (w) => monday >= w.startDate && monday <= w.endDate,
+      );
+      const slotWeekType = weekTypeByIndex.get(weekIndex) || 'carga';
+
+      if (!existing) {
+        weeks.push({
+          id: `macro-week-${randomUUID()}`,
+          weekIndex: 0,
+          startDate: monday,
+          endDate: sunday,
+          phase: program.phase || null,
+          weekType: slotWeekType,
+          notes: '',
+        });
+        changed = true;
+        continue;
+      }
+
+      if (!existing.phase && program.phase) {
+        existing.phase = program.phase;
+        changed = true;
+      }
+      if (!existing.weekType) {
+        existing.weekType = slotWeekType;
+        changed = true;
+      }
+    }
+
+    if (!changed && existingPlan) return;
+
+    weeks = weeks
+      .filter((w) => w.startDate && w.endDate)
+      .sort((a, b) => a.startDate.localeCompare(b.startDate))
+      .map((w, index) => ({ ...w, weekIndex: index + 1 }));
+
+    await this.planner.saveMacroPlan({
+      id: existingPlan?.id ?? `macro-plan-${randomUUID()}`,
+      athleteId,
+      weeks,
+      status: existingPlan?.status ?? 'active',
+      weeklyFrequency:
+        existingPlan?.weeklyFrequency ?? program.sessionsPerWeek ?? 3,
+      goal: existingPlan?.goal,
+      targetDate: existingPlan?.targetDate || undefined,
+      level: existingPlan?.level,
+      planMode: existingPlan?.planMode,
+    });
+  }
+
+  /** Para atletas ya inscriptos: al abrir el planner, rellena fases vacías del macro. */
+  async syncMacroPhasesForAthlete(athleteId: string) {
+    const enrollments = await this.enrollRepo.find({
+      where: { athleteId, status: 'active' },
+    });
+    if (enrollments.length === 0) return { synced: 0 };
+
+    const programIds = [...new Set(enrollments.map((e) => e.programId))];
+    const programs = await this.programRepo.find({
+      where: { id: In(programIds) },
+    });
+    const programMap = new Map(programs.map((p) => [p.id, p]));
+
+    let synced = 0;
+    for (const enrollment of enrollments) {
+      const program = programMap.get(enrollment.programId);
+      if (!program) continue;
+      await this.syncAthleteMacroFromGroupProgram(
+        program,
+        athleteId,
+        enrollment,
+      );
+      synced += 1;
+    }
+    return { synced };
+  }
+
+  /**
+   * Mapa del centro: atletas activos por fase del programa grupal,
+   * microciclo actual y si ya cumplieron la fase.
+   */
+  async getPhaseMap(companyId: string) {
+    const programs = await this.programRepo.find({
+      where: { companyId },
+      order: { phase: 'ASC', name: 'ASC' },
+    });
+    if (programs.length === 0) return { phases: [], athletes: [] };
+
+    const programIds = programs.map((p) => p.id);
+    const enrollments = await this.enrollRepo.find({
+      where: { programId: In(programIds), status: 'active' },
+    });
+    const today = calendarDateInArgentina();
+    const programMap = new Map(programs.map((p) => [p.id, p]));
+
+    const athletes = enrollments.map((enrollment) => {
+      const program = programMap.get(enrollment.programId)!;
+      const anchor = this.enrollmentAnchorDate(enrollment, program);
+      const elapsedWeeks = Math.floor(daysBetweenYmd(anchor, today) / 7) + 1;
+      const weeksCount = Math.max(1, program.weeksCount || 1);
+      const currentWeekIndex = Math.min(
+        Math.max(1, elapsedWeeks),
+        weeksCount,
+      );
+      const phaseCompleted = elapsedWeeks > weeksCount;
+      return {
+        athleteId: enrollment.athleteId,
+        enrollmentId: enrollment.id,
+        programId: program.id,
+        programName: program.name,
+        phase: program.phase,
+        scheduleAnchorDate: anchor,
+        weeksCount,
+        currentWeekIndex,
+        phaseCompleted,
+        sessionsPerWeek: program.sessionsPerWeek ?? 3,
+      };
+    });
+
+    const phaseBuckets = new Map<
+      string,
+      {
+        phase: string;
+        programs: Array<{ id: string; name: string; weeksCount: number }>;
+        athleteCount: number;
+        completedCount: number;
+      }
+    >();
+
+    for (const program of programs) {
+      const key = program.phase || 'sin_fase';
+      const bucket = phaseBuckets.get(key) ?? {
+        phase: key,
+        programs: [],
+        athleteCount: 0,
+        completedCount: 0,
+      };
+      bucket.programs.push({
+        id: program.id,
+        name: program.name,
+        weeksCount: program.weeksCount,
+      });
+      phaseBuckets.set(key, bucket);
+    }
+
+    for (const athlete of athletes) {
+      const key = athlete.phase || 'sin_fase';
+      const bucket = phaseBuckets.get(key);
+      if (!bucket) continue;
+      bucket.athleteCount += 1;
+      if (athlete.phaseCompleted) bucket.completedCount += 1;
+    }
+
+    return {
+      phases: [...phaseBuckets.values()],
+      athletes,
+    };
   }
 
   private async materializeSessionsForAthlete(
@@ -1014,6 +1302,7 @@ export class GroupProgramService {
       let blocks = this.planner.cloneSessionBlocks(
         Array.isArray(template.blocks) ? template.blocks : [],
       );
+      blocks = applyPrescriptionOverrides(blocks, slot.prescriptionOverrides);
       blocks = applySuggestedLoads(blocks, loadMap);
       const safety = await this.planner.evaluateSessionBlocksSafety(
         athleteId,
@@ -1129,6 +1418,7 @@ export class GroupProgramService {
       let blocks = this.planner.cloneSessionBlocks(
         Array.isArray(template.blocks) ? template.blocks : [],
       );
+      blocks = applyPrescriptionOverrides(blocks, slot.prescriptionOverrides);
       blocks = applySuggestedLoads(blocks, loadMap);
       const safety = await this.planner.evaluateSessionBlocksSafety(
         athleteId,

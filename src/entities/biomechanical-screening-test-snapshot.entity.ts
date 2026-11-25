@@ -6,9 +6,11 @@ import {
   JoinColumn,
   ManyToOne,
   PrimaryGeneratedColumn,
+  RelationId,
   UpdateDateColumn,
 } from 'typeorm';
 import { BiomechanicalScreeningTestResult } from './biomechanical-screening-test-result.entity';
+import { BiomechanicalScreeningTestVideo } from './biomechanical-screening-test-video.entity';
 import type {
   ScreeningCameraView,
   ScreeningSide,
@@ -16,6 +18,7 @@ import type {
 import type {
   PoseLandmarkPoint,
   ScreeningSnapshotAngles,
+  ScreeningSnapshotSource,
 } from '../modules/biomechanical-screening/screening.types';
 
 /**
@@ -34,6 +37,22 @@ export class BiomechanicalScreeningTestSnapshot {
   })
   @JoinColumn({ name: 'test_result_id' })
   testResult: BiomechanicalScreeningTestResult;
+
+  @ManyToOne(() => BiomechanicalScreeningTestVideo, (video) => video.snapshots, {
+    onDelete: 'SET NULL',
+    nullable: true,
+  })
+  @JoinColumn({ name: 'video_id' })
+  video: BiomechanicalScreeningTestVideo | null;
+
+  @RelationId((snapshot: BiomechanicalScreeningTestSnapshot) => snapshot.video)
+  videoId: string | null;
+
+  @Column({ type: 'varchar', length: 12, default: 'camera' })
+  source: ScreeningSnapshotSource;
+
+  @Column({ type: 'int', name: 'video_time_ms', nullable: true })
+  videoTimeMs: number | null;
 
   @Column({ type: 'varchar', length: 80, name: 'slot_code' })
   slotCode: string;

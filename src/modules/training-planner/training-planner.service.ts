@@ -702,6 +702,11 @@ export class TrainingPlannerService {
    * Bootstrap del planner: profile + macro activo + sesiones summary en un round-trip.
    */
   async getPlannerBootstrap(athleteId: string, includePrivate = false) {
+    // Rellena fases vacías del macro personal desde programas grupales activos.
+    await this.groupProgramService
+      .syncMacroPhasesForAthlete(athleteId)
+      .catch(() => null);
+
     const [profile, macroPlan, sessions, activeTags] = await Promise.all([
       this.ensureProfile(athleteId),
       this.getMacroPlan(athleteId),

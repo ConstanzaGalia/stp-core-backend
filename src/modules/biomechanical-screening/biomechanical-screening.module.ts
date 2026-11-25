@@ -4,6 +4,7 @@ import { BiomechanicalScreeningProtocol } from 'src/entities/biomechanical-scree
 import { BiomechanicalScreeningSession } from 'src/entities/biomechanical-screening-session.entity';
 import { BiomechanicalScreeningTestResult } from 'src/entities/biomechanical-screening-test-result.entity';
 import { BiomechanicalScreeningTestSnapshot } from 'src/entities/biomechanical-screening-test-snapshot.entity';
+import { BiomechanicalScreeningTestVideo } from 'src/entities/biomechanical-screening-test-video.entity';
 import { PhysicalEvaluationModule } from '../physical-evaluation/physical-evaluation.module';
 import { BiomechanicalScreeningController } from './biomechanical-screening.controller';
 import { BiomechanicalScreeningService } from './biomechanical-screening.service';
@@ -17,6 +18,7 @@ import { ScreeningBiomechanicalProfileService } from './screening-biomechanical-
       BiomechanicalScreeningSession,
       BiomechanicalScreeningTestResult,
       BiomechanicalScreeningTestSnapshot,
+      BiomechanicalScreeningTestVideo,
     ]),
     PhysicalEvaluationModule,
   ],

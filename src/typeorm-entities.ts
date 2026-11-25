@@ -25,6 +25,7 @@ import { BiomechanicalScreeningProtocol } from './entities/biomechanical-screeni
 import { BiomechanicalScreeningSession } from './entities/biomechanical-screening-session.entity';
 import { BiomechanicalScreeningTestResult } from './entities/biomechanical-screening-test-result.entity';
 import { BiomechanicalScreeningTestSnapshot } from './entities/biomechanical-screening-test-snapshot.entity';
+import { BiomechanicalScreeningTestVideo } from './entities/biomechanical-screening-test-video.entity';
 import { Exercise } from './entities/excercise.entity';
 import { Expense } from './entities/expense.entity';
 import { FixedExpenseTemplate } from './entities/fixed-expense-template.entity';
@@ -87,6 +88,7 @@ export const TYPEORM_ENTITIES = [
   BiomechanicalScreeningSession,
   BiomechanicalScreeningTestResult,
   BiomechanicalScreeningTestSnapshot,
+  BiomechanicalScreeningTestVideo,
   AthleteInvitation,
   Branch,
   ProductBranchStock,

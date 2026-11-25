@@ -7,9 +7,11 @@ import {
   CompleteScreeningSessionDto,
   CreateScreeningSessionDto,
   CreateScreeningSnapshotDto,
+  CreateScreeningVideoDto,
   SaveScreeningTestDto,
   UpdateScreeningNotesDto,
   UpdateScreeningSnapshotDto,
+  UpdateScreeningVideoDto,
 } from './dto/screening.dto';
 
 @Controller('biomechanical-screenings')
@@ -106,6 +108,38 @@ export class BiomechanicalScreeningController {
     @Param('snapshotId') snapshotId: string,
   ) {
     return this.service.removeSnapshot(actor, userId, sessionId, snapshotId);
+  }
+
+  @Post(':userId/:sessionId/tests/:testCode/videos')
+  addVideo(
+    @GetUser() actor: User,
+    @Param('userId') userId: string,
+    @Param('sessionId') sessionId: string,
+    @Param('testCode') testCode: string,
+    @Body() dto: CreateScreeningVideoDto,
+  ) {
+    return this.service.addVideo(actor, userId, sessionId, testCode, dto);
+  }
+
+  @Patch(':userId/:sessionId/videos/:videoId')
+  updateVideo(
+    @GetUser() actor: User,
+    @Param('userId') userId: string,
+    @Param('sessionId') sessionId: string,
+    @Param('videoId') videoId: string,
+    @Body() dto: UpdateScreeningVideoDto,
+  ) {
+    return this.service.updateVideo(actor, userId, sessionId, videoId, dto);
+  }
+
+  @Delete(':userId/:sessionId/videos/:videoId')
+  removeVideo(
+    @GetUser() actor: User,
+    @Param('userId') userId: string,
+    @Param('sessionId') sessionId: string,
+    @Param('videoId') videoId: string,
+  ) {
+    return this.service.removeVideo(actor, userId, sessionId, videoId);
   }
 
   @Delete(':userId/:sessionId')

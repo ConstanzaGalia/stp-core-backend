@@ -21,6 +21,25 @@ export interface PoseLandmarkPoint {
 /** Ángulos y ratios derivados de los landmarks. Null cuando la vista no permite calcularlos. */
 export type ScreeningSnapshotAngles = Record<string, number | null>;
 
+export type ScreeningSnapshotSource = 'camera' | 'video';
+
+/** Frame muestreado del video con landmarks redondeados (coordenadas 0–1). */
+export interface PoseTrackFrame {
+  /** Tiempo en milisegundos desde el inicio del video. */
+  t: number;
+  landmarks: PoseLandmarkPoint[];
+}
+
+export interface ScreeningKeyFrame {
+  slotCode: string;
+  side?: ScreeningSide | null;
+  /** Tiempo en milisegundos del frame sugerido. */
+  t: number;
+  metricCode: string;
+  metricValue?: number | null;
+  label: string;
+}
+
 export interface CreateSnapshotPayload {
   slotCode: string;
   label?: string | null;
@@ -37,6 +56,34 @@ export interface CreateSnapshotPayload {
   angles?: ScreeningSnapshotAngles | null;
   notes?: string | null;
   capturedAt?: string;
+  source?: ScreeningSnapshotSource;
+  videoId?: string | null;
+  videoTimeMs?: number | null;
+}
+
+export interface CreateVideoPayload {
+  view: ScreeningCameraView;
+  side?: ScreeningSide | null;
+  storageKey: string;
+  videoUrl?: string | null;
+  durationMs?: number | null;
+  width?: number | null;
+  height?: number | null;
+  fpsSampled?: number | null;
+  poseModel?: string | null;
+  poseTrack?: PoseTrackFrame[];
+  keyFrames?: ScreeningKeyFrame[];
+}
+
+export interface UpdateVideoPayload {
+  durationMs?: number | null;
+  width?: number | null;
+  height?: number | null;
+  fpsSampled?: number | null;
+  poseModel?: string | null;
+  poseTrack?: PoseTrackFrame[];
+  keyFrames?: ScreeningKeyFrame[];
+  videoUrl?: string | null;
 }
 
 export interface UpdateSnapshotPayload {

@@ -12,6 +12,7 @@ import { BiomechanicalScreeningProtocol } from 'src/entities/biomechanical-scree
 import { BiomechanicalScreeningSession } from 'src/entities/biomechanical-screening-session.entity';
 import { BiomechanicalScreeningTestResult } from 'src/entities/biomechanical-screening-test-result.entity';
 import { BiomechanicalScreeningTestSnapshot } from 'src/entities/biomechanical-screening-test-snapshot.entity';
+import { BiomechanicalScreeningTestVideo } from 'src/entities/biomechanical-screening-test-video.entity';
 import { PhysicalEvaluationService } from '../physical-evaluation/physical-evaluation.service';
 import {
   SCREENING_PROTOCOL_CODE,
@@ -23,8 +24,10 @@ import { ScreeningScoringService } from './screening-scoring.service';
 import { ScreeningBiomechanicalProfileService } from './screening-biomechanical-profile.service';
 import type {
   CreateSnapshotPayload,
+  CreateVideoPayload,
   SaveTestPayload,
   UpdateSnapshotPayload,
+  UpdateVideoPayload,
 } from './screening.types';
 import {
   calendarDateInArgentina,
@@ -33,6 +36,8 @@ import {
 } from 'src/common/utils/date-only.util';
 
 const MAX_SNAPSHOTS_PER_TEST = 12;
+const MAX_VIDEOS_PER_TEST = 6;
+const MAX_POSE_TRACK_FRAMES = 1000;
 
 @Injectable()
 export class BiomechanicalScreeningService implements OnModuleInit {
@@ -47,6 +52,8 @@ export class BiomechanicalScreeningService implements OnModuleInit {
     private readonly testRepo: Repository<BiomechanicalScreeningTestResult>,
     @InjectRepository(BiomechanicalScreeningTestSnapshot)
     private readonly snapshotRepo: Repository<BiomechanicalScreeningTestSnapshot>,
+    @InjectRepository(BiomechanicalScreeningTestVideo)
+    private readonly videoRepo: Repository<BiomechanicalScreeningTestVideo>,
     private readonly scoring: ScreeningScoringService,
     private readonly biomechanicalProfile: ScreeningBiomechanicalProfileService,
     private readonly physicalEvaluations: PhysicalEvaluationService,
@@ -216,8 +223,21 @@ export class BiomechanicalScreeningService implements OnModuleInit {
       );
     }
 
+    const source = payload.source === 'video' ? 'video' : 'camera';
+    let video: BiomechanicalScreeningTestVideo | null = null;
+    if (source === 'video') {
+      if (!payload.videoId) {
+        throw new BadRequestException('Las capturas desde video requieren videoId');
+      }
+      video = (test.videos ?? []).find((item) => item.id === payload.videoId) ?? null;
+      if (!video) throw new NotFoundException('Video no encontrado en este test');
+    }
+
     const snapshot = this.snapshotRepo.create({
       testResult: test,
+      video,
+      source,
+      videoTimeMs: source === 'video' ? (payload.videoTimeMs ?? null) : null,
       slotCode: slot.code,
       label: payload.label?.trim() || slot.label,
       view: payload.view,
@@ -238,6 +258,105 @@ export class BiomechanicalScreeningService implements OnModuleInit {
     await this.snapshotRepo.save(snapshot);
 
     return this.getSession(actor, athleteUserId, sessionId);
+  }
+
+  async addVideo(
+    actor: User,
+    athleteUserId: string,
+    sessionId: string,
+    testCode: string,
+    payload: CreateVideoPayload,
+  ) {
+    const session = await this.loadSession(athleteUserId, sessionId);
+    await this.physicalEvaluations.assertCanAccessAthlete(actor, session.user.id, true);
+    if (session.status === 'completed') {
+      throw new BadRequestException('La sesión ya está completada y no admite nuevos videos');
+    }
+
+    const definition = session.protocolSnapshot ?? STP_FUNCTIONAL_SCREENING_V1;
+    const test = session.tests.find((item) => item.testCode === testCode);
+    if (!test) throw new NotFoundException(`Test ${testCode} no pertenece a esta sesión`);
+
+    const testDef = definition.tests.find((item) => item.code === testCode);
+    if (!testDef) throw new NotFoundException(`Test ${testCode} no existe en el protocolo`);
+    if (!testDef.poseCapture) {
+      throw new BadRequestException(`El test ${testDef.name} no admite capturas de pose`);
+    }
+    if (!payload.storageKey?.trim()) {
+      throw new BadRequestException('Falta la clave de storage del video');
+    }
+
+    const existing = test.videos ?? [];
+    if (existing.length >= MAX_VIDEOS_PER_TEST) {
+      throw new BadRequestException(
+        `Máximo ${MAX_VIDEOS_PER_TEST} videos por test. Eliminá alguno antes de agregar otro.`,
+      );
+    }
+
+    const poseTrack = this.sanitizePoseTrack(payload.poseTrack);
+    const keyFrames = payload.keyFrames ?? [];
+
+    const video = this.videoRepo.create({
+      testResult: test,
+      view: payload.view,
+      side: payload.side ?? null,
+      storageKey: payload.storageKey.trim(),
+      videoUrl: payload.videoUrl ?? null,
+      durationMs: payload.durationMs ?? null,
+      width: payload.width ?? null,
+      height: payload.height ?? null,
+      fpsSampled: payload.fpsSampled ?? null,
+      poseModel: payload.poseModel ?? null,
+      poseTrack,
+      keyFrames,
+    });
+    await this.videoRepo.save(video);
+
+    return this.getSession(actor, athleteUserId, sessionId);
+  }
+
+  async updateVideo(
+    actor: User,
+    athleteUserId: string,
+    sessionId: string,
+    videoId: string,
+    payload: UpdateVideoPayload,
+  ) {
+    const session = await this.loadSession(athleteUserId, sessionId);
+    await this.physicalEvaluations.assertCanAccessAthlete(actor, session.user.id, true);
+    if (session.status === 'completed') {
+      throw new BadRequestException('La sesión ya está completada y no se puede modificar');
+    }
+
+    const video = this.findVideo(session, videoId);
+    if (payload.durationMs !== undefined) video.durationMs = payload.durationMs;
+    if (payload.width !== undefined) video.width = payload.width;
+    if (payload.height !== undefined) video.height = payload.height;
+    if (payload.fpsSampled !== undefined) video.fpsSampled = payload.fpsSampled;
+    if (payload.poseModel !== undefined) video.poseModel = payload.poseModel;
+    if (payload.videoUrl !== undefined) video.videoUrl = payload.videoUrl;
+    if (payload.poseTrack !== undefined) video.poseTrack = this.sanitizePoseTrack(payload.poseTrack);
+    if (payload.keyFrames !== undefined) video.keyFrames = payload.keyFrames ?? [];
+    await this.videoRepo.save(video);
+
+    return this.getSession(actor, athleteUserId, sessionId);
+  }
+
+  async removeVideo(
+    actor: User,
+    athleteUserId: string,
+    sessionId: string,
+    videoId: string,
+  ) {
+    const session = await this.loadSession(athleteUserId, sessionId);
+    await this.physicalEvaluations.assertCanAccessAthlete(actor, session.user.id, true);
+    if (session.status === 'completed') {
+      throw new BadRequestException('La sesión ya está completada y no se puede modificar');
+    }
+    const video = this.findVideo(session, videoId);
+    const storageKey = video.storageKey;
+    await this.videoRepo.remove(video);
+    return { deleted: true, storageKey };
   }
 
   async updateSnapshot(
@@ -358,6 +477,33 @@ export class BiomechanicalScreeningService implements OnModuleInit {
     throw new NotFoundException('Captura no encontrada en esta sesión');
   }
 
+  private findVideo(session: BiomechanicalScreeningSession, videoId: string) {
+    for (const test of session.tests ?? []) {
+      const found = (test.videos ?? []).find((item) => item.id === videoId);
+      if (found) return found;
+    }
+    throw new NotFoundException('Video no encontrado en esta sesión');
+  }
+
+  private sanitizePoseTrack(track: CreateVideoPayload['poseTrack']) {
+    if (!track?.length) return [];
+    if (track.length > MAX_POSE_TRACK_FRAMES) {
+      throw new BadRequestException(
+        `El track de pose supera el máximo de ${MAX_POSE_TRACK_FRAMES} frames`,
+      );
+    }
+    return track.map((frame) => ({
+      t: Math.max(0, Math.round(frame.t)),
+      landmarks: (frame.landmarks ?? []).slice(0, 40).map((point) => ({
+        x: roundCoord(point.x),
+        y: roundCoord(point.y),
+        z: roundCoord(point.z),
+        visibility:
+          point.visibility == null ? undefined : Math.round(point.visibility * 1000) / 1000,
+      })),
+    }));
+  }
+
   private assertTestPayload(
     definition: ScreeningProtocolDefinition,
     testCode: string,
@@ -417,7 +563,7 @@ export class BiomechanicalScreeningService implements OnModuleInit {
   private async loadSession(athleteUserId: string, sessionId: string) {
     const session = await this.sessionRepo.findOne({
       where: { id: sessionId, user: { id: athleteUserId } },
-      relations: ['user', 'evaluator', 'protocol', 'tests', 'tests.snapshots'],
+      relations: ['user', 'evaluator', 'protocol', 'tests', 'tests.snapshots', 'tests.videos'],
     });
     if (!session) throw new NotFoundException('Sesión de screening no encontrada');
     session.tests = [...(session.tests ?? [])]
@@ -427,6 +573,9 @@ export class BiomechanicalScreeningService implements OnModuleInit {
           (a, b) =>
             a.sortOrder - b.sortOrder ||
             new Date(a.createdAt).getTime() - new Date(b.createdAt).getTime(),
+        );
+        test.videos = [...(test.videos ?? [])].sort(
+          (a, b) => new Date(a.createdAt).getTime() - new Date(b.createdAt).getTime(),
         );
         return test;
       });
@@ -513,4 +662,8 @@ export class BiomechanicalScreeningService implements OnModuleInit {
       biomechanicalProfile,
     };
   }
+}
+
+function roundCoord(value: number): number {
+  return Math.round(value * 10000) / 10000;
 }

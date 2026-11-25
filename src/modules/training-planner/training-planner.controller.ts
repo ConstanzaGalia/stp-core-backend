@@ -537,6 +537,15 @@ export class TrainingPlannerController {
     return this.groupPrograms.listPrograms(companyId);
   }
 
+  @Get('company/:companyId/group-programs-phase-map')
+  async groupProgramsPhaseMap(
+    @Param('companyId') companyId: string,
+    @GetUser() user: User,
+  ) {
+    await this.service.assertStaffBelongsToCompany(user, companyId);
+    return this.groupPrograms.getPhaseMap(companyId);
+  }
+
   @Get('company/:companyId/group-programs/:programId')
   async getGroupProgram(
     @Param('companyId') companyId: string,

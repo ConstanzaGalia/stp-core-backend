@@ -11,6 +11,7 @@ import {
 } from 'typeorm';
 import { BiomechanicalScreeningSession } from './biomechanical-screening-session.entity';
 import { BiomechanicalScreeningTestSnapshot } from './biomechanical-screening-test-snapshot.entity';
+import { BiomechanicalScreeningTestVideo } from './biomechanical-screening-test-video.entity';
 import type { ScreeningClassification } from '../modules/biomechanical-screening/protocol/stp-functional-screening.v1';
 import type {
   CriterionObservation,
@@ -88,6 +89,11 @@ export class BiomechanicalScreeningTestResult {
     cascade: true,
   })
   snapshots: BiomechanicalScreeningTestSnapshot[];
+
+  @OneToMany(() => BiomechanicalScreeningTestVideo, (video) => video.testResult, {
+    cascade: true,
+  })
+  videos: BiomechanicalScreeningTestVideo[];
 
   @CreateDateColumn({ name: 'created_at' })
   createdAt: Date;
