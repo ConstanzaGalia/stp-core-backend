@@ -1,5 +1,7 @@
 export enum UserRole {
   STP_ADMIN = 'STP_ADMIN',
+  /** Comercial de STP: leads, seguimiento de atletas del centro y estadísticas. */
+  STP_SALES = 'STP_SALES',
   DIRECTOR = 'DIRECTOR',
   TRAINER = 'TRAINER',
   SUB_TRAINER = 'SUB_TRAINER',

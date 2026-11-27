@@ -26,7 +26,14 @@ import { CreateAthleteDto } from './dto/create-athlete.dto';
 import { LinkAthleteByEmailDto } from './dto/link-athlete-by-email.dto';
 import { SkipCompanySubscriptionCheck } from 'src/common/decorators/skip-company-subscription-check.decorator';
 
-const STAFF_ROLES = [UserRole.STP_ADMIN, UserRole.DIRECTOR, UserRole.TRAINER, UserRole.SUB_TRAINER, UserRole.SECRETARIA];
+const STAFF_ROLES = [
+  UserRole.STP_ADMIN,
+  UserRole.STP_SALES,
+  UserRole.DIRECTOR,
+  UserRole.TRAINER,
+  UserRole.SUB_TRAINER,
+  UserRole.SECRETARIA,
+];
 
 @Controller('athletes')
 export class AthletesController {

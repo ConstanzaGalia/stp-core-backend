@@ -2,6 +2,7 @@ import { Transform } from "class-transformer";
 import {
   ArrayMinSize,
   IsArray,
+  IsBoolean,
   IsEnum,
   IsIn,
   IsNotEmpty,
@@ -14,6 +15,9 @@ import {
 } from "class-validator";
 import { CENTER_CURRENCIES } from "src/common/center-currencies";
 import { CompanyAccountType } from "src/common/enums/enums";
+
+export const SIGNUP_PLAN_VALUES = ['STP_PERSONAL', 'STP_CENTER', 'personal', 'center'] as const;
+export type SignupPlanValue = (typeof SIGNUP_PLAN_VALUES)[number];
 
 const emptyToUndefined = ({ value }: { value: unknown }) =>
   value === '' || value === null ? undefined : value;
@@ -68,4 +72,18 @@ export class CreateCompanyDto {
     message: 'La contraseña temporal debe tener al menos 8 caracteres, mayúscula, minúscula, número y símbolo',
   })
   temporaryPassword?: string | null;
+
+  /**
+   * Plan elegido en el alta self-service. Si viene, el centro arranca con prueba gratuita
+   * y suscripción PAID pendiente. Se normaliza con `planIdFromSlug`.
+   */
+  @IsOptional()
+  @Transform(emptyToUndefined)
+  @IsIn(SIGNUP_PLAN_VALUES)
+  signupPlan?: SignupPlanValue;
+
+  /** Solo con signupPlan=STP_CENTER: agrega el cargo pendiente de migración de datos. */
+  @IsOptional()
+  @IsBoolean()
+  includeMigration?: boolean;
 }

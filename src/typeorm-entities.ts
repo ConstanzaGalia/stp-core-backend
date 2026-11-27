@@ -26,6 +26,11 @@ import { BiomechanicalScreeningSession } from './entities/biomechanical-screenin
 import { BiomechanicalScreeningTestResult } from './entities/biomechanical-screening-test-result.entity';
 import { BiomechanicalScreeningTestSnapshot } from './entities/biomechanical-screening-test-snapshot.entity';
 import { BiomechanicalScreeningTestVideo } from './entities/biomechanical-screening-test-video.entity';
+import { DemoLead } from './entities/demo-lead.entity';
+import { DemoLeadEvent } from './entities/demo-lead-event.entity';
+import { DemoLeadAttempt } from './entities/demo-lead-attempt.entity';
+import { AthleteProgramLead } from './entities/athlete-program-lead.entity';
+import { AthleteProgramLeadAttempt } from './entities/athlete-program-lead-attempt.entity';
 import { Exercise } from './entities/excercise.entity';
 import { Expense } from './entities/expense.entity';
 import { FixedExpenseTemplate } from './entities/fixed-expense-template.entity';
@@ -151,4 +156,9 @@ export const TYPEORM_ENTITIES = [
   WaitlistReservation,
   StpPlatformSubscription,
   StpPlatformCharge,
+  DemoLead,
+  DemoLeadEvent,
+  DemoLeadAttempt,
+  AthleteProgramLead,
+  AthleteProgramLeadAttempt,
 ];

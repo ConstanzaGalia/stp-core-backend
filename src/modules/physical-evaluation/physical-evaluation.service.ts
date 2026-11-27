@@ -37,6 +37,7 @@ import {
 
 const STAFF_ROLES: UserRole[] = [
   UserRole.STP_ADMIN,
+  UserRole.STP_SALES,
   UserRole.DIRECTOR,
   UserRole.TRAINER,
   UserRole.SUB_TRAINER,

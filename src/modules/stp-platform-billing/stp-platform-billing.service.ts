@@ -8,7 +8,7 @@ import {
 } from '@nestjs/common';
 import { Cron } from '@nestjs/schedule';
 import { InjectRepository } from '@nestjs/typeorm';
-import { In, IsNull, Repository } from 'typeorm';
+import { EntityManager, In, IsNull, Repository } from 'typeorm';
 import { assertStpPlatformOperator } from 'src/common/helpers/company-access.helper';
 import {
   StpPlatformBillingKind,
@@ -22,8 +22,20 @@ import { Company } from 'src/entities/company.entity';
 import { StpPlatformCharge } from 'src/entities/stp-platform-charge.entity';
 import { StpPlatformSubscription } from 'src/entities/stp-platform-subscription.entity';
 import { User } from 'src/entities/user.entity';
+import { DemoLead } from 'src/entities/demo-lead.entity';
 import { MailingService } from '../mailer/mailing.service';
-import { platformSubscriptionRenewalEmail } from 'src/utils/emailTemplates';
+import {
+  platformReceiptUploadedEmail,
+  platformSubscriptionRenewalEmail,
+} from 'src/utils/emailTemplates';
+import {
+  advanceDemoLeadStatus,
+  DemoLeadStatus,
+} from '../demo-leads/demo-leads.constants';
+import {
+  getPublicPlatformPlan,
+  PublicPlatformPlanId,
+} from './platform-plans.config';
 import {
   AssignPlatformSubscriptionDto,
   AttachPlatformReceiptDto,
@@ -80,6 +92,12 @@ function formatMoneyEs(amount: number, currency: string): string {
   return `${currency} ${formatted}`;
 }
 
+/**
+ * Marca del cargo de migración de datos (STP Center). No hay concepto propio en el enum,
+ * así que se guarda como ONBOARDING con esta nota; su pago NO activa el centro.
+ */
+export const PLATFORM_MIGRATION_CHARGE_NOTE = 'Migración de datos';
+
 const RENEWAL_NOTICE_DAYS = 3;
 const NEXT_CHARGE_LEAD_DAYS = 7;
 
@@ -100,8 +118,139 @@ export class StpPlatformBillingService {
     private readonly chargeRepo: Repository<StpPlatformCharge>,
     @InjectRepository(Company)
     private readonly companyRepo: Repository<Company>,
+    @InjectRepository(DemoLead)
+    private readonly demoLeadRepo: Repository<DemoLead>,
     private readonly mailingService: MailingService,
   ) {}
+
+  /**
+   * Alta self-service: suscripción PAID con los montos públicos del plan, más el cargo
+   * ONBOARDING pendiente (y el de migración si `includeMigration` en STP Center).
+   * Todo vence al terminar la prueba. No exige operador STP porque lo dispara el propio
+   * director al crear su centro; pasá `manager` para correrlo dentro de su transacción.
+   */
+  async createSignupSubscription(
+    input: {
+      companyId: string;
+      plan: PublicPlatformPlanId;
+      trialEndsAt: Date;
+      includeMigration?: boolean;
+      userId?: string | null;
+    },
+    manager?: EntityManager,
+  ) {
+    const subscriptionRepo = manager
+      ? manager.getRepository(StpPlatformSubscription)
+      : this.subscriptionRepo;
+    const chargeRepo = manager
+      ? manager.getRepository(StpPlatformCharge)
+      : this.chargeRepo;
+
+    const plan = getPublicPlatformPlan(input.plan);
+    const periodStart = todayDateOnly();
+    const periodEnd = input.trialEndsAt.toISOString().slice(0, 10);
+
+    const subscription = await subscriptionRepo.save(
+      subscriptionRepo.create({
+        companyId: input.companyId,
+        plan: plan.id,
+        billingKind: StpPlatformBillingKind.PAID,
+        status: StpPlatformSubscriptionStatus.ACTIVE,
+        subscriptionAmount: plan.monthlyAmount,
+        currency: plan.currency,
+        periodStart,
+        periodEnd,
+        notes: 'Alta self-service (prueba gratuita)',
+        assignedByUserId: input.userId ?? null,
+      }),
+    );
+
+    const pendingCharge = (
+      concept: StpPlatformChargeConcept,
+      amount: number,
+      notes: string | null,
+    ) =>
+      chargeRepo.create({
+        companyId: input.companyId,
+        subscriptionId: subscription.id,
+        concept,
+        amount,
+        currency: plan.currency,
+        status: StpPlatformChargeStatus.PENDING,
+        dueDate: periodEnd,
+        paidAt: null,
+        method: null,
+        reference: null,
+        notes,
+        recordedByUserId: input.userId ?? null,
+      });
+
+    const charges = [
+      pendingCharge(StpPlatformChargeConcept.SUBSCRIPTION, plan.monthlyAmount, null),
+      pendingCharge(StpPlatformChargeConcept.ONBOARDING, plan.onboardingAmount, null),
+    ];
+    if (input.includeMigration === true && plan.migrationAmount != null) {
+      charges.push(
+        pendingCharge(
+          StpPlatformChargeConcept.ONBOARDING,
+          plan.migrationAmount,
+          PLATFORM_MIGRATION_CHARGE_NOTE,
+        ),
+      );
+    }
+    const savedCharges = await chargeRepo.save(charges);
+
+    return {
+      subscription: this.serializeSubscription(subscription),
+      charges: savedCharges.map((c) => this.serializeCharge(c)),
+    };
+  }
+
+  /**
+   * Se pagó el onboarding: termina la prueba (trialEndsAt = null), el centro queda activo
+   * y, si el director estaba en el embudo de la demo, su lead pasa a cliente.
+   */
+  private async activateCompanyAfterOnboardingPaid(companyId: string): Promise<void> {
+    const company = await this.companyRepo.findOne({
+      where: { id: companyId },
+      relations: ['users'],
+    });
+    if (!company) return;
+
+    await this.companyRepo.update(
+      { id: companyId },
+      { trialEndsAt: null, subscriptionActive: true },
+    );
+
+    const directorEmails = (company.users ?? [])
+      .filter((u) => u.role === UserRole.DIRECTOR && !!u.email?.trim())
+      .map((u) => u.email.trim().toLowerCase());
+    if (directorEmails.length === 0) return;
+
+    try {
+      const leads = await this.demoLeadRepo.find({ where: { email: In(directorEmails) } });
+      const now = new Date();
+      for (const lead of leads) {
+        const next = advanceDemoLeadStatus(lead.status, DemoLeadStatus.CUSTOMER);
+        if (next === lead.status) continue;
+        lead.status = next;
+        lead.statusChangedAt = now;
+        await this.demoLeadRepo.save(lead);
+      }
+    } catch (error) {
+      this.logger.warn(
+        `No se pudo avanzar el lead a cliente (centro ${companyId}): ${(error as Error)?.message}`,
+      );
+    }
+  }
+
+  private isActivatingOnboardingCharge(charge: StpPlatformCharge): boolean {
+    return (
+      charge.status === StpPlatformChargeStatus.PAID &&
+      charge.concept === StpPlatformChargeConcept.ONBOARDING &&
+      charge.notes?.trim() !== PLATFORM_MIGRATION_CHARGE_NOTE
+    );
+  }
 
   private async assertCompany(companyId: string): Promise<Company> {
     const company = await this.companyRepo.findOne({ where: { id: companyId } });
@@ -425,6 +574,10 @@ export class StpPlatformBillingService {
 
     const saved = await this.chargeRepo.save(charge);
 
+    if (this.isActivatingOnboardingCharge(saved)) {
+      await this.activateCompanyAfterOnboardingPaid(saved.companyId);
+    }
+
     // Cuota de suscripción: actualizar vencimiento/precio del período vigente.
     if (
       dto.concept === StpPlatformChargeConcept.SUBSCRIPTION &&
@@ -453,6 +606,7 @@ export class StpPlatformBillingService {
     await assertStpPlatformOperator(admin, this.companyRepo);
     const charge = await this.chargeRepo.findOne({ where: { id: chargeId } });
     if (!charge) throw new NotFoundException('Cargo no encontrado');
+    const previousStatus = charge.status;
 
     if (dto.concept != null) charge.concept = dto.concept;
     if (dto.amount != null) charge.amount = dto.amount;
@@ -493,7 +647,12 @@ export class StpPlatformBillingService {
       charge.paidAt = dto.paidAt ? new Date(dto.paidAt) : null;
     }
 
+    const wasPaid = previousStatus === StpPlatformChargeStatus.PAID;
     const saved = await this.chargeRepo.save(charge);
+
+    if (!wasPaid && this.isActivatingOnboardingCharge(saved)) {
+      await this.activateCompanyAfterOnboardingPaid(saved.companyId);
+    }
 
     if (
       saved.concept === StpPlatformChargeConcept.SUBSCRIPTION &&
@@ -733,7 +892,7 @@ export class StpPlatformBillingService {
     dto: AttachPlatformReceiptDto,
     user: User,
   ) {
-    await this.assertCanViewCompanySubscription(user, companyId);
+    const company = await this.assertCanViewCompanySubscription(user, companyId);
     const charge = await this.chargeRepo.findOne({
       where: { id: chargeId, companyId },
     });
@@ -754,7 +913,78 @@ export class StpPlatformBillingService {
     charge.receiptMimeType = dto.mimeType?.trim() || null;
     charge.receiptUploadedAt = new Date();
     const saved = await this.chargeRepo.save(charge);
+    void this.notifyReceiptUploaded(company, saved);
     return this.serializeCharge(saved);
+  }
+
+  /** Avisa al equipo STP que un centro subió un comprobante. Nunca rompe la carga. */
+  private async notifyReceiptUploaded(
+    company: Company,
+    charge: StpPlatformCharge,
+  ): Promise<void> {
+    try {
+      const recipients = (process.env.PLATFORM_BILLING_NOTIFY_EMAIL ?? '')
+        .split(',')
+        .map((email) => email.trim())
+        .filter(Boolean);
+      if (recipients.length === 0) {
+        this.logger.warn(
+          'PLATFORM_BILLING_NOTIFY_EMAIL no está configurado: no se avisó del comprobante',
+        );
+        return;
+      }
+
+      const subscription = charge.subscriptionId
+        ? await this.subscriptionRepo.findOne({ where: { id: charge.subscriptionId } })
+        : await this.subscriptionRepo.findOne({
+            where: {
+              companyId: company.id,
+              status: StpPlatformSubscriptionStatus.ACTIVE,
+            },
+            order: { createdAt: 'DESC' },
+          });
+      const planLabel = subscription
+        ? PLAN_LABELS[subscription.plan] ?? subscription.plan
+        : null;
+      const frontendUrl = (process.env.FRONTEND_URL || 'http://localhost:3000').replace(
+        /\/$/,
+        '',
+      );
+      const from = process.env.RESEND_FROM_EMAIL || 'noreply@stp.com';
+      const concept =
+        charge.concept === StpPlatformChargeConcept.ONBOARDING
+          ? charge.notes?.trim() === PLATFORM_MIGRATION_CHARGE_NOTE
+            ? 'Migración de datos'
+            : 'Onboarding'
+          : 'Suscripción';
+
+      for (const to of recipients) {
+        try {
+          await this.mailingService.sendMail(
+            platformReceiptUploadedEmail({
+              to,
+              from,
+              companyName: company.name,
+              planLabel,
+              concept,
+              amountLabel: formatMoneyEs(toNumber(charge.amount), charge.currency || 'ARS'),
+              filename: charge.receiptFilename,
+              adminUrl: `${frontendUrl}/admin/centros`,
+            }),
+          );
+        } catch (error) {
+          this.logger.error(
+            `No se pudo avisar del comprobante a ${to}`,
+            error instanceof Error ? error.stack : undefined,
+          );
+        }
+      }
+    } catch (error) {
+      this.logger.error(
+        'No se pudo procesar el aviso de comprobante',
+        error instanceof Error ? error.stack : undefined,
+      );
+    }
   }
 
   /** Crea el cobro del mes siguiente y después avisa si el período vence en 0–3 días. */

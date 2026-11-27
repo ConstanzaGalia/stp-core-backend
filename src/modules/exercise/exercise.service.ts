@@ -7,6 +7,7 @@ import {
 import { InjectRepository } from '@nestjs/typeorm';
 import { PaginatedListDto } from 'src/common/pagination/DTOs/paginated-list.dto';
 import { Pagination } from 'src/common/pagination/pagination';
+import { getStpOperatingCompanyId } from 'src/common/constants/stp-operating-company';
 import { UserRole } from 'src/common/enums/enums';
 import { Company } from 'src/entities/company.entity';
 import { Exercise } from 'src/entities/excercise.entity';
@@ -152,6 +153,9 @@ export class ExerciseService {
       throw new NotFoundException('Centro no encontrado');
     }
     if (user.role === UserRole.STP_ADMIN) {
+      return company;
+    }
+    if (user.role === UserRole.STP_SALES && company.id === getStpOperatingCompanyId()) {
       return company;
     }
     const isMember = (company.users ?? []).some((u) => u.id === user.id);

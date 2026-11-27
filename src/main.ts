@@ -2,6 +2,7 @@ import { config } from 'dotenv';
 config();
 import { Logger, ValidationPipe } from '@nestjs/common';
 import { NestFactory } from '@nestjs/core';
+import type { NestExpressApplication } from '@nestjs/platform-express';
 import { AppModule } from './app.module';
 
 function getAllowedOrigins(): string[] {
@@ -17,8 +18,25 @@ function getAllowedOrigins(): string[] {
   return [...new Set(origins)];
 }
 
+/**
+ * Saltos de proxy confiables para leer la IP real del visitante (`req.ip`).
+ * `TRUST_PROXY_HOPS` explícito gana; en Railway (un proxy delante) se asume 1.
+ */
+function resolveTrustProxyHops(): number | undefined {
+  const raw = process.env.TRUST_PROXY_HOPS?.trim();
+  if (raw) {
+    const hops = Number(raw);
+    return Number.isInteger(hops) && hops >= 0 ? hops : undefined;
+  }
+  return process.env.RAILWAY_ENVIRONMENT ? 1 : undefined;
+}
+
 async function bootstrap() {
-  const app = await NestFactory.create(AppModule);
+  const app = await NestFactory.create<NestExpressApplication>(AppModule);
+  const trustProxyHops = resolveTrustProxyHops();
+  if (trustProxyHops !== undefined) {
+    app.set('trust proxy', trustProxyHops);
+  }
   app.enableCors({
     origin: getAllowedOrigins(),
     credentials: true,

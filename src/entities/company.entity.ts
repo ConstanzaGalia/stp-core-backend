@@ -54,6 +54,14 @@ export class Company {
   @Column({ type: 'boolean', default: false, name: 'subscription_active' })
   subscriptionActive: boolean;
 
+  /**
+   * Fin de la prueba gratuita (alta self-service). NULL = sin prueba en curso.
+   * Si subscriptionActive y trialEndsAt ya pasó, el acceso se bloquea hasta pagar el onboarding.
+   */
+  @ApiProperty({ required: false, nullable: true })
+  @Column({ type: 'timestamptz', nullable: true, name: 'trial_ends_at' })
+  trialEndsAt?: Date | null;
+
   /** Tipo de cuenta: centro de entrenamiento o club deportivo. */
   @ApiProperty({ enum: CompanyAccountType })
   @Column({

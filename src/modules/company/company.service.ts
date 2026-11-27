@@ -41,6 +41,14 @@ import { UpdateCompanyModulesDto } from './dto/update-company-modules.dto';
 import { UpdateCompanyAccountTypeDto } from './dto/update-company-account-type.dto';
 import { isCenterCurrency, resolveCompanyCurrencies } from 'src/common/center-currencies';
 import { StpPlatformBillingService } from '../stp-platform-billing/stp-platform-billing.service';
+import {
+  getPublicPlatformPlan,
+  planIdFromSlug,
+  PublicPlatformPlanId,
+  resolvePlatformTrialDays,
+} from '../stp-platform-billing/platform-plans.config';
+import { DemoLead } from 'src/entities/demo-lead.entity';
+import { DemoLeadPlan } from '../demo-leads/demo-leads.constants';
 
 const STAFF_ROLES = [
   UserRole.TRAINER,
@@ -100,6 +108,8 @@ export class CompanyService {
     private readonly shiftAssignmentRepository: Repository<StaffShiftAssignment>,
     @InjectRepository(STPSessionInstance)
     private readonly sessionRepository: Repository<STPSessionInstance>,
+    @InjectRepository(DemoLead)
+    private readonly demoLeadRepository: Repository<DemoLead>,
     private pagination: Pagination,
     private readonly mailingService: MailingService,
     private readonly encryptService: EncryptService,
@@ -213,9 +223,19 @@ export class CompanyService {
         defaultCurrency: createCompanyDto.defaultCurrency,
       });
 
+      // Alta self-service: con plan elegido arranca con prueba gratuita.
+      const signupPlan = planIdFromSlug(createCompanyDto.signupPlan);
+      const trialEndsAt = signupPlan
+        ? new Date(
+            Date.now() +
+              resolvePlatformTrialDays(process.env.PLATFORM_TRIAL_DAYS) * 86_400_000,
+          )
+        : null;
+
       const newCompany = this.companyRepository.create({
         ...payload,
-        subscriptionActive: false,
+        subscriptionActive: signupPlan != null,
+        ...(trialEndsAt ? { trialEndsAt } : {}),
         enabledCurrencies: currencies.enabledCurrencies,
         defaultCurrency: currencies.defaultCurrency,
         ...(createCompanyDto.accountType ? { accountType: createCompanyDto.accountType } : {}),
@@ -223,14 +243,65 @@ export class CompanyService {
       const customTemporaryPassword = createCompanyDto.temporaryPassword?.trim();
       newCompany.temporaryPassword = customTemporaryPassword || null;
       newCompany.users = [user];
-      const saved = await this.companyRepository.save(newCompany);
+
+      if (!signupPlan) {
+        const saved = await this.companyRepository.save(newCompany);
+        await this.ensureActiveMembership(saved.id, user, user.id);
+        return saved;
+      }
+
+      // Centro, rol DIRECTOR y suscripción/cargos: todo o nada.
+      const saved = await this.companyRepository.manager.transaction(async (manager) => {
+        const company = await manager.getRepository(Company).save(newCompany);
+
+        if (user.role === UserRole.TRAINER) {
+          await manager.getRepository(User).update({ id: user.id }, { role: UserRole.DIRECTOR });
+          user.role = UserRole.DIRECTOR;
+        }
+
+        await this.platformBillingService.createSignupSubscription(
+          {
+            companyId: company.id,
+            plan: signupPlan,
+            trialEndsAt,
+            includeMigration: createCompanyDto.includeMigration === true,
+            userId: user.id,
+          },
+          manager,
+        );
+        return company;
+      });
+
       await this.ensureActiveMembership(saved.id, user, user.id);
+      await this.markDemoLeadSelectedPlan(user.email, signupPlan);
       return saved;
     } catch (error) {
       if (error.code === '23505') {
         throw new ConflictException('COMPANY_HAS_BEEN_REGISTERED');
       }
+      Logger.error('Error creating company', error?.stack ?? error);
       throw new InternalServerErrorException();
+    }
+  }
+
+  /** Si el director vino de la demo, registra el plan que eligió. No frena el alta. */
+  private async markDemoLeadSelectedPlan(
+    email: string | null | undefined,
+    plan: PublicPlatformPlanId,
+  ): Promise<void> {
+    const normalizedEmail = email?.trim().toLowerCase();
+    if (!normalizedEmail) return;
+    try {
+      const lead = await this.demoLeadRepository.findOne({
+        where: { email: normalizedEmail },
+      });
+      if (!lead) return;
+      lead.selectedPlan = getPublicPlatformPlan(plan).slug as DemoLeadPlan;
+      await this.demoLeadRepository.save(lead);
+    } catch (error) {
+      Logger.warn(
+        `No se pudo actualizar el plan elegido del lead: ${(error as Error)?.message}`,
+      );
     }
   }
 
@@ -263,7 +334,7 @@ export class CompanyService {
         return [];
       }
 
-      if (user.role === UserRole.STP_ADMIN) {
+      if (user.role === UserRole.STP_ADMIN || user.role === UserRole.STP_SALES) {
         const operating = await this.getOperatingCompany();
         return operating ? [operating] : [];
       }
@@ -395,6 +466,7 @@ export class CompanyService {
         id: company.id,
         name: company.name,
         subscriptionActive: company.subscriptionActive,
+        trialEndsAt: company.trialEndsAt ?? null,
         accountType: company.accountType,
         enabledModules: company.enabledModules ?? null,
         multiBranchEnabled: company.multiBranchEnabled === true,

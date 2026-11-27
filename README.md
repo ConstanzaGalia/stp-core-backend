@@ -74,6 +74,27 @@ Copiá [`.env.example`](./.env.example) a `.env` y completá credenciales.
 
 - **`DB_POOL_MAX`**: conexiones máximas del pool **por instancia** del backend. En Postgres detrás de un pooler en modo **Session** (p. ej. Supabase) el cupo global es compartido: si desplegás varias réplicas, `réplicas × DB_POOL_MAX` no debe superar el límite del proveedor. Si aparece el error `MaxClientsInSessionMode`, bajá `DB_POOL_MAX` (p. ej. 3–5) o reducí instancias.
 
+### Demo pública y leads (`/public/demo`, `/admin/demo-leads`)
+
+Tablas: `sql/create-demo-leads.sql` (o la migración `1752600000000-AddDemoLeads`).
+
+- **`DEMO_LEADS_NOTIFY_EMAIL`**: a quién avisar cuando entra un lead nuevo. Admite varios, separados por coma. Sin esta variable no se manda el aviso, pero el lead se guarda igual.
+- **`FRONTEND_URL`** (ya existente): se usa para el link "Ver todos los leads" del aviso.
+- **`TRUST_PROXY_HOPS`**: cantidad de proxies delante del backend, para leer la IP real del visitante en el límite de pedidos. En Railway se asume `1` automáticamente.
+- **`DEMO_LEAD_TOKEN_SECRET`** (opcional): clave del token de la demo. Si falta, se deriva de `SECRET_JWT`.
+- **`META_PIXEL_ID`** y **`META_CAPI_ACCESS_TOKEN`**: Conversions API de Meta. Si falta alguna de las dos, no se envía nada.
+- **`META_CAPI_TEST_EVENT_CODE`** (opcional): código de prueba del Administrador de eventos de Meta, para verificar los envíos sin afectar las métricas.
+- **`META_GRAPH_API_VERSION`** (opcional, default `v22.0`).
+
+### Alta self-service con prueba gratuita (`POST /company` con `signupPlan`)
+
+Columna nueva: `company.trial_ends_at` (`sql/add-company-trial-ends-at.sql` o la migración `1752700000000-AddCompanyTrial`).
+
+- Con `signupPlan` (`STP_PERSONAL` | `STP_CENTER` | `personal` | `center`) el centro nace activo con prueba, el usuario `TRAINER` pasa a `DIRECTOR` y se crea la suscripción PAID del plan con sus cargos pendientes (suscripción + onboarding; migración solo si `includeMigration: true` en Center). Sin `signupPlan` el comportamiento no cambia (centro inactivo, sin prueba).
+- Pasado `trial_ends_at` la API responde `403 COMPANY_TRIAL_EXPIRED` hasta que se marque como pagado el cargo de onboarding (eso limpia `trial_ends_at` y pasa el lead de la demo a `customer`).
+- **`PLATFORM_TRIAL_DAYS`** (opcional, default `14`): duración de la prueba.
+- **`PLATFORM_BILLING_NOTIFY_EMAIL`**: a quién avisar cuando un centro sube un comprobante. Admite varios, separados por coma. Sin esta variable no se manda el aviso.
+
 ## License
 
 Nest is [MIT licensed](LICENSE).

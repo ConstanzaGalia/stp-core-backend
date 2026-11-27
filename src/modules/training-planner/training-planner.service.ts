@@ -328,6 +328,7 @@ export class TrainingPlannerService {
   private isStaffRole(role: UserRole): boolean {
     return [
       UserRole.STP_ADMIN,
+      UserRole.STP_SALES,
       UserRole.DIRECTOR,
       UserRole.TRAINER,
       UserRole.SUB_TRAINER,

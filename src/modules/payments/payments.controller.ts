@@ -4,6 +4,7 @@ import { SkipCompanySubscriptionCheck } from 'src/common/decorators/skip-company
 import { PaymentsService } from './payments.service';
 import { GetUser } from '../auth/get-user.decorator';
 import { User } from '../../entities/user.entity';
+import { UserRole } from '../../common/enums/enums';
 import { hasDirectorPrivileges } from '../../common/helpers/company-access.helper';
 import { CreatePaymentPlanDto } from './dto/create-payment-plan.dto';
 import { CreatePaymentDto } from './dto/create-payment.dto';
@@ -158,9 +159,9 @@ export class PaymentsController {
     @Query('branchId') branchId: string | undefined,
     @GetUser() user: User,
   ) {
-    if (!user || !hasDirectorPrivileges(user.role)) {
+    if (!user || (!hasDirectorPrivileges(user.role) && user.role !== UserRole.STP_SALES)) {
       throw new ForbiddenException(
-        'Only directors or STP administrators can view gym statistics',
+        'Only directors, STP administrators or sales can view gym statistics',
       );
     }
     const yearNum =

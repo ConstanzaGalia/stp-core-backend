@@ -37,7 +37,7 @@ export class CompanySubscriptionGuard implements CanActivate {
       return true;
     }
 
-    if (user.role === UserRole.STP_ADMIN) {
+    if (user.role === UserRole.STP_ADMIN || user.role === UserRole.STP_SALES) {
       return true;
     }
 
@@ -57,7 +57,7 @@ export class CompanySubscriptionGuard implements CanActivate {
 
     const company = await this.companyRepository.findOne({
       where: { id: companyId },
-      select: ['id', 'subscriptionActive', 'isDelete'],
+      select: ['id', 'subscriptionActive', 'isDelete', 'trialEndsAt'],
     });
 
     if (!company) {
@@ -68,6 +68,18 @@ export class CompanySubscriptionGuard implements CanActivate {
       throw new ForbiddenException({
         code: 'COMPANY_SUBSCRIPTION_INACTIVE',
         message: 'El centro no tiene la plataforma activa. Contactá a STP para activar tu suscripción.',
+      });
+    }
+
+    if (
+      company.subscriptionActive &&
+      company.trialEndsAt &&
+      new Date(company.trialEndsAt).getTime() < Date.now()
+    ) {
+      throw new ForbiddenException({
+        code: 'COMPANY_TRIAL_EXPIRED',
+        message:
+          'La prueba gratuita de tu centro terminó. Abonando el onboarding desde Mi suscripción, tu centro vuelve a quedar activo.',
       });
     }
 

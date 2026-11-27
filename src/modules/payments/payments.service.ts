@@ -1579,6 +1579,12 @@ export class PaymentsService {
     if (role === UserRole.STP_ADMIN) {
       return;
     }
+    if (role === UserRole.STP_SALES) {
+      if (companyId !== getStpOperatingCompanyId()) {
+        throw new ForbiddenException('Ventas solo puede ver las estadísticas del centro STP.');
+      }
+      return;
+    }
     const company = await this.companyRepository.findOne({
       where: { id: companyId },
       relations: ['users'],

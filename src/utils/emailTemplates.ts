@@ -426,3 +426,129 @@ export const platformSubscriptionRenewalEmail = (input: {
     }),
   };
 };
+
+/** Aviso interno a STP: un centro subió el comprobante de un pago de plataforma. */
+export const platformReceiptUploadedEmail = (input: {
+  to: string;
+  from: string;
+  companyName: string;
+  planLabel: string | null;
+  concept: string;
+  amountLabel: string;
+  filename: string | null;
+  adminUrl: string;
+}) => {
+  const row = (label: string, value: string | null) =>
+    value
+      ? `<p style="margin: 0 0 6px; color: ${STP_EMAIL_COLORS.text}; font-size: 14px; text-align: left;"><strong>${label}:</strong> ${escapeHtml(value)}</p>`
+      : '';
+
+  return {
+    to: input.to,
+    subject: `Comprobante de pago: ${input.companyName}`,
+    from: input.from,
+    html: renderStpEmailLayout({
+      title: 'Comprobante de pago recibido',
+      preheader: `${input.companyName} subió un comprobante (${input.amountLabel})`,
+      bodyHtml: `
+        ${stpHeading('Llegó un comprobante de pago')}
+        ${stpParagraph('Un centro adjuntó el comprobante de un cargo pendiente. Revisalo y registrá el pago para activarlo.')}
+        ${stpInfoBox(`
+          ${row('Centro', input.companyName)}
+          ${row('Plan', input.planLabel)}
+          ${row('Concepto', input.concept)}
+          ${row('Monto', input.amountLabel)}
+          ${row('Archivo', input.filename)}
+        `)}
+        ${stpButton(input.adminUrl, 'Ir a centros')}
+      `,
+    }),
+  };
+};
+
+export const demoLeadNotificationEmail = (input: {
+  to: string;
+  from: string;
+  email: string;
+  phoneE164: string;
+  whatsappUrl: string;
+  name: string | null;
+  gymName: string | null;
+  planLabel: string | null;
+  sourceLabel: string | null;
+  adminUrl: string;
+}) => {
+  const row = (label: string, value: string | null) =>
+    value
+      ? `<p style="margin: 0 0 6px; color: ${STP_EMAIL_COLORS.text}; font-size: 14px; text-align: left;"><strong>${label}:</strong> ${escapeHtml(value)}</p>`
+      : '';
+  const who = input.name || input.gymName || input.email;
+
+  return {
+    to: input.to,
+    subject: `Nuevo lead de la demo: ${who}`,
+    from: input.from,
+    html: renderStpEmailLayout({
+      title: 'Nuevo lead de la demo',
+      preheader: `${who} completó el formulario de la demo`,
+      bodyHtml: `
+        ${stpHeading('Entró un lead nuevo')}
+        ${stpParagraph('Alguien completó el formulario de la demo pública y aceptó que lo contactemos por email y WhatsApp.')}
+        ${stpInfoBox(`
+          ${row('Nombre', input.name)}
+          ${row('Gimnasio', input.gymName)}
+          ${row('Email', input.email)}
+          ${row('Teléfono', input.phoneE164)}
+          ${row('Plan de interés', input.planLabel)}
+          ${row('Origen', input.sourceLabel)}
+        `)}
+        ${stpButton(input.whatsappUrl, 'Escribirle por WhatsApp')}
+        ${stpParagraph(stpLink(input.adminUrl, 'Ver todos los leads'), { muted: true, marginBottom: '0' })}
+      `,
+    }),
+  };
+};
+
+export const athleteProgramLeadNotificationEmail = (input: {
+  to: string;
+  from: string;
+  email: string;
+  phoneE164: string;
+  whatsappUrl: string;
+  name: string;
+  modalityLabel: string;
+  programInterest: string | null;
+  message: string | null;
+  sourceLabel: string | null;
+  adminUrl: string;
+}) => {
+  const row = (label: string, value: string | null) =>
+    value
+      ? `<p style="margin: 0 0 6px; color: ${STP_EMAIL_COLORS.text}; font-size: 14px; text-align: left;"><strong>${label}:</strong> ${escapeHtml(value)}</p>`
+      : '';
+
+  return {
+    to: input.to,
+    subject: `Quiere entrenar (${input.modalityLabel}): ${input.name}`,
+    from: input.from,
+    html: renderStpEmailLayout({
+      title: 'Nuevo interesado en entrenar',
+      preheader: `${input.name} quiere ${input.modalityLabel}`,
+      bodyHtml: `
+        ${stpHeading('Alguien quiere empezar a entrenar')}
+        ${stpParagraph('Dejó sus datos en la página Soy atleta y aceptó que lo contactemos por email y WhatsApp.')}
+        ${stpInfoBox(`
+          ${row('Nombre', input.name)}
+          ${row('Modalidad', input.modalityLabel)}
+          ${row('Programa', input.programInterest)}
+          ${row('Email', input.email)}
+          ${row('Teléfono', input.phoneE164)}
+          ${row('Mensaje', input.message)}
+          ${row('Origen', input.sourceLabel)}
+        `)}
+        ${stpButton(input.whatsappUrl, 'Escribirle por WhatsApp')}
+        ${stpParagraph(stpLink(input.adminUrl, 'Ver el pipeline de atletas'), { muted: true, marginBottom: '0' })}
+      `,
+    }),
+  };
+};

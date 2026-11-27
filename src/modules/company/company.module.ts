@@ -12,6 +12,7 @@ import { StaffAssociationRequest } from 'src/entities/staff-association-request.
 import { StaffShiftAssignment } from 'src/entities/staff-shift-assignment.entity';
 import { STPSessionInstance } from 'src/entities/stp-session-instance.entity';
 import { User } from 'src/entities/user.entity';
+import { DemoLead } from 'src/entities/demo-lead.entity';
 import { TypeOrmModule } from '@nestjs/typeorm';
 import { AuthModule } from '../auth/auth.module';
 import { MailingModule } from '../mailer/mailing.module';
@@ -30,6 +31,7 @@ import { StpPlatformBillingModule } from '../stp-platform-billing/stp-platform-b
       CompanyStaffMembership,
       StaffShiftAssignment,
       STPSessionInstance,
+      DemoLead,
     ]),
     AuthModule,
     MailingModule,
