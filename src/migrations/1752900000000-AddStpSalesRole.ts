@@ -1,12 +1,8 @@
 import { MigrationInterface, QueryRunner } from 'typeorm';
 
-/**
- * Rol comercial de STP. ADD VALUE no puede ir dentro de una transacción
- * en algunas versiones de Postgres, por eso esta migración corre sola.
- */
+/** Rol comercial de STP. Postgres 12+ acepta ADD VALUE dentro de la transacción. */
 export class AddStpSalesRole1752900000000 implements MigrationInterface {
   name = 'AddStpSalesRole1752900000000';
-  transaction = false;
 
   public async up(queryRunner: QueryRunner): Promise<void> {
     await queryRunner.query(`
